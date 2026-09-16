@@ -42,6 +42,25 @@ class Engine(abc.ABC):
         progress lines; they are streamed to the UI over WebSocket."""
 
 
+class InstallableEngine(Engine):
+    """An engine whose environment/weights must be installed before use.
+
+    Implement this (in addition to Engine) for engines backed by a bundled
+    runtime: the sidecar exposes GET /engines/{id}/status and
+    POST /engines/{id}/install from exactly this surface.
+    """
+
+    @abc.abstractmethod
+    def is_installed(self) -> bool: ...
+
+    @abc.abstractmethod
+    def install_state(self) -> dict:
+        """{"installed": bool, "steps": {step_id: {status, error, ...}}}"""
+
+    @abc.abstractmethod
+    def install(self, log, progress=None) -> dict: ...
+
+
 class Registry:
     """Real engine registry. Engines register here; nothing else knows them."""
 

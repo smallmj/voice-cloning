@@ -1,6 +1,6 @@
 # 本地推理走内嵌运行时，而不是打包单文件或依赖用户环境
 
-本地模型一律跑在应用自带的运行时里：随包分发 `uv` 二进制 + 由它托管的 Python（python-build-standalone）+ 每个引擎实例独立的 venv + 运行时安装依赖 + 一个独立的推理服务进程。用户不需要预先安装 Python、conda，也不需要自己搭服务。
+本地模型一律跑在应用自带的运行时里：`uv` 二进制（优先随包分发；尚未打进安装包前，运行时管理器按「显式配置 > 应用目录内已下载副本 > PATH > 首次运行自行下载」的顺序自行取得，无需用户安装）+ 由它托管的 Python（python-build-standalone）+ 每个引擎实例独立的 venv + 运行时安装依赖 + 一个独立的推理服务进程。用户不需要预先安装 Python、conda，也不需要自己搭服务。
 
 **为什么不是显而易见的做法**：任何打包器都无法把 PyTorch 干净地冻成单文件——PyInstaller 打 torch 约 4GB 且跨机器报 DLL 错误，pex 实测失败，Nuitka 报错。所以「分发运行时」不是偷懒，是唯一可行路线。黄金参考实现是 ComfyUI Desktop 的 `src/virtualEnvironment.ts`。
 

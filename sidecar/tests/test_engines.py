@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from voiceclone_sidecar import main as sidecar_main
 from voiceclone_sidecar.capabilities import Capabilities
 from voiceclone_sidecar.engines import qwen3_tts
-from voiceclone_sidecar.registry import Engine, GenerationRequest, GenerationResult, Registry
+from voiceclone_sidecar.registry import Engine, GenerationRequest, GenerationResult, InstallableEngine, Registry
 from voiceclone_sidecar.runtime import installer
 
 
@@ -34,7 +34,7 @@ class StubEngine(Engine):
         return GenerationResult(audio_path="x.wav", sample_rate=16000)
 
 
-class StubInstallable(StubEngine):
+class StubInstallable(StubEngine, InstallableEngine):
     engine_id = "stub-installable"
     display_name = "Stub Installable"
 
@@ -108,8 +108,9 @@ def test_install_of_plain_engine_reports_installed(client):
     assert r.json()["status"] == "installed"
 
 
-def test_double_install_is_409(client):
-    c, _ = client
+def test_double_install_is_409(tmp_path):
+    from voiceclone_sidecar import main as sidecar_main
+    from voiceclone_sidecar.registry import Registry
 
     class Slow(StubInstallable):
         engine_id = "slow"
@@ -117,23 +118,24 @@ def test_double_install_is_409(client):
         def install(self, log, progress=None):
             import time
 
-            time.sleep(0.5)
+            time.sleep(0.4)
             self._installed = True
 
-    # registered inside the same app? registry is built in fixture; use a
-    # second call race instead: fire two requests immediately.
-    r1 = c.post("/engines/stub-installable/install")
-    r2 = c.post("/engines/stub-installable/install")
-    assert r1.status_code == 200
-    if r2.status_code != 200:
+    registry = Registry()
+    registry.register(Slow())
+    app = sidecar_main.create_app(registry, token="t", audio_dir=tmp_path)
+    with TestClient(app, headers={"Authorization": "Bearer t"}) as c:
+        r1 = c.post("/engines/slow/install")
+        r2 = c.post("/engines/slow/install")
+        assert r1.status_code == 200
         assert r2.status_code == 409
-    # wait for completion
-    for _ in range(100):
-        if c.get("/engines/stub-installable/status").json()["installed"]:
-            break
-        import time
+        for _ in range(100):
+            if c.get("/engines/slow/status").json()["installed"]:
+                break
+            import time
 
-        time.sleep(0.05)
+            time.sleep(0.05)
+        assert c.get("/engines/slow/status").json()["installed"] is True
 
 
 # --- qwen3 engine wiring (stubbed runtime) ---------------------------------

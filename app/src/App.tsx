@@ -33,7 +33,7 @@ const STEP_LABELS: Record<string, string> = {
   python: "Python 运行时",
   venv: "引擎独立环境",
   packages: "依赖安装",
-  weights: "模型权重下载",
+  weights: "引擎权重下载",
 };
 
 function EngineCard({
@@ -158,23 +158,11 @@ export default function App() {
         method: "POST",
         headers: { Authorization: `Bearer ${info.token}` },
       });
-      // Completion is observed via the status poll + log stream.
-    } finally {
-      // Keep the "installing" flag until the poll reports a terminal state.
-      const started = Date.now();
-      const check = setInterval(async () => {
-        const r = await fetch(`${info.baseUrl}/engines/${id}/status`, {
-          headers: { Authorization: `Bearer ${info.token}` },
-        });
-        if (!r.ok) return;
-        const s: EngineInstallStatus = await r.json();
-        setInstallStatus((p) => ({ ...p, [id]: s }));
-        if (!s.installing || Date.now() - started > 3600_000) {
-          clearInterval(check);
-          setInstalling((p) => ({ ...p, [id]: false }));
-          installingRef.current[id] = false;
-        }
-      }, 1000);
+      // Completion is observed by the shared status poller: fetchStatus
+      // clears the installing flag once the engine reports a settled state.
+    } catch {
+      setInstalling((p) => ({ ...p, [id]: false }));
+      installingRef.current[id] = false;
     }
   }
 
@@ -206,6 +194,10 @@ export default function App() {
         if (!r.ok) return;
         const status = (await r.json()) as EngineInstallStatus;
         setInstallStatus((prev) => ({ ...prev, [id]: status }));
+        if (!status.installing && installingRef.current[id]) {
+          installingRef.current[id] = false;
+          setInstalling((p) => ({ ...p, [id]: false }));
+        }
       };
       for (const e of data.engines) await fetchStatus(e.id);
       // Poll only engines that are mid-install.

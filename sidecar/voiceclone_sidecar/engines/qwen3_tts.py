@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from ..capabilities import Capabilities
-from ..registry import GenerationRequest, GenerationResult
+from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
 
 REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
@@ -48,7 +48,7 @@ PACKAGES = ["mlx-audio>=0.5.4"]
 PYTHON_SPEC = "3.12"
 
 
-class Qwen3TtsMlxEngine:
+class Qwen3TtsMlxEngine(InstallableEngine):
     """Local engine. Also carries the InstallableEngine surface."""
 
     engine_id = "qwen3-tts-mlx"
@@ -91,17 +91,18 @@ class Qwen3TtsMlxEngine:
         weights_dir = paths.engine_weights_dir(self.root, self.engine_id)
         ctx = self._ctx()
 
+        def find_uv(log):
+            return uvman.find_uv(self.root, env=self.env, log=log)
+
         def step_python(log, progress):
-            uv = uvman.find_uv(self.root, env=self.env, log=log)
+            uv = find_uv(log)
             uvman.ensure_python(uv, PYTHON_SPEC, env=self.env, log=log)
-            ctx.dir.joinpath("uv-path").write_text(str(uv))
 
         def step_venv(log, progress):
-            uv = Path(ctx.dir.joinpath("uv-path").read_text())
-            uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
+            uvman.create_venv(find_uv(log), self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
 
         def step_packages(log, progress):
-            uv = Path(ctx.dir.joinpath("uv-path").read_text())
+            uv = find_uv(log)
             venv = uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
             uvman.pip_install(uv, venv, PACKAGES, env=self.env, log=log)
 
@@ -125,7 +126,7 @@ class Qwen3TtsMlxEngine:
             installer.InstallStep("python", f"安装 uv 托管的 Python {PYTHON_SPEC}", step_python),
             installer.InstallStep("venv", "创建引擎独立 venv", step_venv, artifact=uvman.engine_venv_dir(self.root, self.engine_id)),
             installer.InstallStep("packages", f"安装 {', '.join(PACKAGES)}", step_packages, artifact=uvman.engine_venv_dir(self.root, self.engine_id)),
-            installer.InstallStep("weights", f"下载 {REPO} 权重", step_weights, artifact=weights_dir),
+            installer.InstallStep("weights", f"下载引擎权重 {REPO}", step_weights, artifact=weights_dir),
         ]
 
     def install(self, log, progress=None) -> dict:

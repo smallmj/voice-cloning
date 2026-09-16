@@ -24,7 +24,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from .registry import Registry, default_registry
+from .registry import InstallableEngine, Registry, default_registry
 
 SIDECAR_VERSION = "0.1.0"
 
@@ -114,8 +114,8 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
                     "id": e.engine_id,
                     "display_name": e.display_name,
                     "capabilities": e.capabilities().to_dict(),
-                    "installed": e.install_state()["installed"]
-                    if hasattr(e, "install_state")
+                    "installed": e.is_installed()
+                    if isinstance(e, InstallableEngine)
                     else True,
                 }
                 for e in registry.list()
@@ -127,7 +127,7 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         engine = registry.get(engine_id)
         if engine is None:
             raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
-        if not hasattr(engine, "install_state"):
+        if not isinstance(engine, InstallableEngine):
             return {"id": engine.engine_id, "installed": True, "installing": False, "steps": {}}
         state = engine.install_state()
         return {
@@ -142,7 +142,7 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         engine = registry.get(engine_id)
         if engine is None:
             raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
-        if not hasattr(engine, "install"):
+        if not isinstance(engine, InstallableEngine):
             return {"id": engine.engine_id, "status": "installed"}
         if engine_id in install_jobs:
             raise HTTPException(status_code=409, detail="install already running for this engine")

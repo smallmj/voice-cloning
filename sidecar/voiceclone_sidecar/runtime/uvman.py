@@ -14,9 +14,9 @@ import sys
 import tarfile
 from pathlib import Path
 
+from . import downloader
 from .downloader import download_file
 from .paths import engine_venv_dir
-
 DEFAULT_PYTHON = "3.12"
 
 
@@ -84,9 +84,7 @@ def find_uv(root: Path, env: dict | None = None, log=None) -> Path:
     # Source templates may omit {path} entirely: a full URL passes through
     # str.format(path="") unchanged.
     archive = download_file(
-        __import__("voiceclone_sidecar.runtime.downloader", fromlist=["DownloadSpec"]).DownloadSpec(
-            path="", dest_name=archive_name
-        ),
+        downloader.DownloadSpec(path="", dest_name=archive_name),
         root / "tmp",
         sources=[url],
         log=log,

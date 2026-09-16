@@ -19,7 +19,10 @@ import os
 import sys
 import time
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# Force, not setdefault: a pre-set HF_HUB_OFFLINE=0 in the environment must
+# not silently break the offline guarantee. The model loads from a LOCAL
+# directory, so once weights are on disk, generation never touches the network.
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 
 def log(message: str) -> None:

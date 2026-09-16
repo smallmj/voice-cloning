@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
-import type { Capabilities, EngineInfo, GenerationRecord, LogEvent, SidecarInfo } from "./api";
+import type {
+  Capabilities,
+  EngineInfo,
+  EngineInstallStatus,
+  GenerationRecord,
+  LogEvent,
+  SidecarInfo,
+} from "./api";
 
 const CAP_LABELS: Record<keyof Capabilities, string> = {
   languages: "语种",
@@ -22,16 +29,30 @@ function CapBadge({ label, on }: { label: string; on: boolean }) {
   );
 }
 
+const STEP_LABELS: Record<string, string> = {
+  python: "Python 运行时",
+  venv: "引擎独立环境",
+  packages: "依赖安装",
+  weights: "模型权重下载",
+};
+
 function EngineCard({
   engine,
   selected,
+  installStatus,
+  installing,
+  onInstall,
   onSelect,
 }: {
   engine: EngineInfo;
   selected: boolean;
+  installStatus: EngineInstallStatus | null;
+  installing: boolean;
+  onInstall: () => void;
   onSelect: () => void;
 }) {
   const c = engine.capabilities;
+  const installed = installStatus ? installStatus.installed : (engine.installed ?? true);
   return (
     <div
       className={`engine-card ${selected ? "selected" : ""}`}
@@ -39,7 +60,31 @@ function EngineCard({
       role="button"
       aria-pressed={selected}
     >
-      <strong>{engine.display_name}</strong>
+      <strong>{engine.display_name}</strong>{" "}
+      {installed ? (
+        <span className="badge badge-on">已就绪</span>
+      ) : (
+        <button
+          className="install-btn"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onInstall();
+          }}
+          disabled={installing}
+        >
+          {installing ? "安装中…" : "安装引擎"}
+        </button>
+      )}
+      {!installed && installStatus && Object.keys(installStatus.steps).length > 0 && (
+        <div className="install-steps">
+          {Object.entries(installStatus.steps).map(([id, s]) => (
+            <div key={id} className={`install-step step-${s.status}`}>
+              {STEP_LABELS[id] ?? id}：{s.status}
+              {s.status === "failed" && s.error ? `（${s.error}）` : ""}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="badges">
         <CapBadge label={`${CAP_LABELS.languages}:${c.languages.join("/") || "—"}`} on={c.languages.length > 0} />
         <CapBadge label={CAP_LABELS.voice_cloning} on={c.voice_cloning} />
@@ -91,6 +136,8 @@ export default function App() {
   const [info, setInfo] = useState<SidecarInfo | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [engines, setEngines] = useState<EngineInfo[]>([]);
+  const [installStatus, setInstallStatus] = useState<Record<string, EngineInstallStatus>>({});
+  const [installing, setInstalling] = useState<Record<string, boolean>>({});
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);
   const [text, setText] = useState("你好，世界。这是一次端到端生成测试。Hello, world!");
   const [record, setRecord] = useState<GenerationRecord | null>(null);
@@ -99,6 +146,37 @@ export default function App() {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const installingRef = useRef<Record<string, boolean>>({});
+
+  async function installEngine(id: string) {
+    if (!info || installing[id]) return;
+    setInstalling((p) => ({ ...p, [id]: true }));
+    installingRef.current[id] = true;
+    setLogsOpen(true);
+    try {
+      await fetch(`${info.baseUrl}/engines/${id}/install`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
+      // Completion is observed via the status poll + log stream.
+    } finally {
+      // Keep the "installing" flag until the poll reports a terminal state.
+      const started = Date.now();
+      const check = setInterval(async () => {
+        const r = await fetch(`${info.baseUrl}/engines/${id}/status`, {
+          headers: { Authorization: `Bearer ${info.token}` },
+        });
+        if (!r.ok) return;
+        const s: EngineInstallStatus = await r.json();
+        setInstallStatus((p) => ({ ...p, [id]: s }));
+        if (!s.installing || Date.now() - started > 3600_000) {
+          clearInterval(check);
+          setInstalling((p) => ({ ...p, [id]: false }));
+          installingRef.current[id] = false;
+        }
+      }, 1000);
+    }
+  }
 
   useEffect(() => {
     window.voiceclone.onSidecarError((message) => setConnectionError(message));
@@ -106,6 +184,7 @@ export default function App() {
 
   useEffect(() => {
     let ws: WebSocket | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     (async () => {
       const sidecarInfo = await window.voiceclone.getSidecarInfo();
       if (!sidecarInfo) return;
@@ -121,6 +200,21 @@ export default function App() {
       setEngines(data.engines);
       if (data.engines.length > 0) setSelectedEngine(data.engines[0].id);
 
+      // Fetch per-engine install status; poll only engines that are mid-install.
+      const fetchStatus = async (id: string) => {
+        const r = await fetch(`${sidecarInfo.baseUrl}/engines/${id}/status`, { headers });
+        if (!r.ok) return;
+        const status = (await r.json()) as EngineInstallStatus;
+        setInstallStatus((prev) => ({ ...prev, [id]: status }));
+      };
+      for (const e of data.engines) await fetchStatus(e.id);
+      // Poll only engines that are mid-install.
+      interval = setInterval(() => {
+        for (const e of data.engines) {
+          if (installingRef.current[e.id]) void fetchStatus(e.id);
+        }
+      }, 1000);
+
       ws = new WebSocket(
         `${sidecarInfo.baseUrl.replace("http", "ws")}/ws/logs?token=${sidecarInfo.token}`,
       );
@@ -133,6 +227,7 @@ export default function App() {
     // StrictMode double-mounts effects in dev — close the socket this
     // mount created, otherwise the first connection leaks.
     return () => {
+      if (interval) clearInterval(interval);
       ws?.close();
       if (ws && wsRef.current === ws) wsRef.current = null;
     };
@@ -186,6 +281,9 @@ export default function App() {
               key={e.id}
               engine={e}
               selected={e.id === selectedEngine}
+              installStatus={installStatus[e.id] ?? null}
+              installing={!!installing[e.id]}
+              onInstall={() => void installEngine(e.id)}
               onSelect={() => setSelectedEngine(e.id)}
             />
           ))}
@@ -195,9 +293,24 @@ export default function App() {
       <section>
         <h2>生成</h2>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} />
-        <button className="primary" onClick={generate} disabled={generating || !selectedEngine}>
+        <button
+          className="primary"
+          onClick={generate}
+          disabled={
+            generating ||
+            !selectedEngine ||
+            (installStatus[selectedEngine]
+              ? !installStatus[selectedEngine].installed
+              : false)
+          }
+        >
           {generating ? "生成中…" : "生成"}
         </button>
+        {selectedEngine &&
+          installStatus[selectedEngine] &&
+          !installStatus[selectedEngine].installed && (
+            <div className="hint">该引擎尚未安装，请先在上方点击「安装引擎」。</div>
+          )}
 
         {record && record.status === "succeeded" && record.audio_url && info && (
           <div className="result">

@@ -66,9 +66,20 @@ def default_registry(output_dir=None) -> Registry:
     The fake engine is a built-in: it runs the exact same code path as real
     engines, keeps the app usable without models/keys, and is the only
     backend the contract tests exercise.
+
+    Real local engines register only where they can run (platform +
+    architecture); a cloud-API engine would always be registered.
     """
     from .engines.fake import FakeEngine
 
     registry = Registry()
     registry.register(FakeEngine(output_dir=output_dir))
+
+    import os
+    import sys
+
+    if sys.platform == "darwin" and os.uname().machine == "arm64":
+        from .engines.qwen3_tts import Qwen3TtsMlxEngine
+
+        registry.register(Qwen3TtsMlxEngine(output_dir=output_dir))
     return registry

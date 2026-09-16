@@ -28,6 +28,19 @@ export interface EngineInfo {
   id: string;
   display_name: string;
   capabilities: Capabilities;
+  installed?: boolean;
+}
+
+export interface InstallStepState {
+  status: "pending" | "running" | "completed" | "failed";
+  error?: string | null;
+}
+
+export interface EngineInstallStatus {
+  id: string;
+  installed: boolean;
+  installing: boolean;
+  steps: Record<string, InstallStepState>;
 }
 
 export interface GenerationRecord {

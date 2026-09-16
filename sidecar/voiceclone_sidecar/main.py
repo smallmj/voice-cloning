@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -97,6 +98,9 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
     require_auth = verify_token(token)
     require_auth_ws = verify_token_ws(token)
     generations: dict[str, dict] = {}
+    # Engine installs run in background threads; one at a time, keyed by id.
+    install_lock = threading.Lock()
+    install_jobs: dict[str, dict] = {}
 
     @app.get("/health", dependencies=[Depends(require_auth)])
     async def health() -> dict:
@@ -110,10 +114,71 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
                     "id": e.engine_id,
                     "display_name": e.display_name,
                     "capabilities": e.capabilities().to_dict(),
+                    "installed": e.install_state()["installed"]
+                    if hasattr(e, "install_state")
+                    else True,
                 }
                 for e in registry.list()
             ]
         }
+
+    @app.get("/engines/{engine_id}/status", dependencies=[Depends(require_auth)])
+    async def engine_status(engine_id: str) -> dict:
+        engine = registry.get(engine_id)
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        if not hasattr(engine, "install_state"):
+            return {"id": engine.engine_id, "installed": True, "installing": False, "steps": {}}
+        state = engine.install_state()
+        return {
+            "id": engine.engine_id,
+            "installed": state["installed"],
+            "installing": engine_id in install_jobs,
+            "steps": state["steps"],
+        }
+
+    @app.post("/engines/{engine_id}/install", dependencies=[Depends(require_auth)])
+    async def install_engine(engine_id: str) -> dict:
+        engine = registry.get(engine_id)
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        if not hasattr(engine, "install"):
+            return {"id": engine.engine_id, "status": "installed"}
+        if engine_id in install_jobs:
+            raise HTTPException(status_code=409, detail="install already running for this engine")
+        with install_lock:
+            if engine_id in install_jobs:
+                raise HTTPException(status_code=409, detail="install already running for this engine")
+
+            job_id = f"install:{engine_id}"
+            job = {"id": job_id, "status": "running", "error": None}
+            install_jobs[engine_id] = job
+            loop = asyncio.get_running_loop()
+
+            def log(message: str) -> None:
+                loop.call_soon_threadsafe(log_bus.publish, job_id, message)
+
+            def progress(name: str, done: int, total: int | None) -> None:
+                if total:
+                    pct = int(done * 100 / total)
+                    log(f"{name}: {done}/{total} bytes ({pct}%)")
+                else:
+                    log(f"{name}: {done} bytes")
+
+            def run():
+                try:
+                    engine.install(log, progress)
+                    job["status"] = "succeeded"
+                except Exception as exc:  # noqa: BLE001 - recorded in the job + logs
+                    job["status"] = "failed"
+                    job["error"] = str(exc)
+                    log(f"install failed: {exc}")
+                finally:
+                    install_jobs.pop(engine_id, None)
+
+            threading.Thread(target=run, daemon=True).start()
+            return {"id": job_id, "status": "running"}
+
 
     @app.post("/generations", dependencies=[Depends(require_auth)])
     async def create_generation(body: dict) -> dict:

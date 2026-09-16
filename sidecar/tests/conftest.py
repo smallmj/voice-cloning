@@ -1,0 +1,92 @@
+"""Spawn a REAL sidecar process per session and hand the contract to tests.
+
+This is the spec's single seam: tests run against a real process bound to
+127.0.0.1 on a dynamic port, with the fake engine registered through the
+real default registry.
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import httpx
+
+SIDECAR_DIR = Path(__file__).resolve().parent.parent
+
+
+def _wait_for_port(port: int, process: subprocess.Popen, timeout: float = 30.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            if process.poll() is not None:
+                raise RuntimeError(f"sidecar exited early: {process.stderr.read()!r}")
+            time.sleep(0.1)
+    raise TimeoutError("sidecar did not start listening in time")
+
+
+@pytest.fixture(scope="session")
+def sidecar(tmp_path_factory):
+    token = secrets.token_urlsafe(16)
+    audio_dir = tmp_path_factory.mktemp("audio")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "voiceclone_sidecar",
+            "--port",
+            "0",
+            "--token",
+            token,
+            "--audio-dir",
+            str(audio_dir),
+        ],
+        cwd=SIDECAR_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        line = process.stdout.readline()
+        handshake = json.loads(line)
+        assert handshake["event"] == "ready", line
+        port = handshake["port"]
+        _wait_for_port(port, process)
+        yield {
+            "base_url": f"http://127.0.0.1:{port}",
+            "token": token,
+            "process": process,
+            "audio_dir": audio_dir,
+        }
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+@pytest.fixture()
+def client(sidecar) -> httpx.Client:
+    with httpx.Client(
+        base_url=sidecar["base_url"],
+        headers={"Authorization": f"Bearer {sidecar['token']}"},
+        timeout=30.0,
+    ) as c:
+        yield c
+
+
+@pytest.fixture()
+def ws_url(sidecar) -> str:
+    return f"ws://127.0.0.1:{sidecar['base_url'].rsplit(':', 1)[1]}/ws/logs"

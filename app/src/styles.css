@@ -1,0 +1,67 @@
+:root {
+  color-scheme: dark;
+  --bg: #12141a;
+  --panel: #1b1e27;
+  --border: #2a2f3d;
+  --text: #e6e8ee;
+  --muted: #8b93a7;
+  --accent: #82b1ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app { max-width: 860px; margin: 0 auto; padding: 24px; }
+
+header {
+  display: flex; align-items: center; gap: 16px;
+  border-bottom: 1px solid var(--border); padding-bottom: 12px;
+}
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 14px; color: var(--muted); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.status { font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+.status.ok { background: #12351f; color: #7ce38b; }
+.status.down { background: #3a1a1a; color: #ff8a80; }
+
+.engine-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.engine-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  cursor: pointer; background: var(--panel); min-width: 220px;
+}
+.engine-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; }
+.badge-on { background: #16324a; color: #9ecbff; }
+.badge-off { background: #22252e; color: #5a6070; }
+
+textarea {
+  width: 100%; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  font-size: 14px; resize: vertical;
+}
+
+button.primary {
+  margin-top: 10px; padding: 8px 22px; border: none; border-radius: 8px;
+  background: var(--accent); color: #0b1220; font-weight: 600; cursor: pointer;
+}
+button.primary:disabled { opacity: 0.5; cursor: default; }
+
+.result { margin-top: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.waveform { display: flex; align-items: center; gap: 12px; }
+.waveform > div:first-child { flex: 1; }
+
+.error { margin-top: 12px; color: #ff8a80; }
+
+.log-drawer { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 8px; }
+.log-toggle { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+.logs {
+  max-height: 220px; overflow: auto; background: #0d0f14; padding: 10px;
+  border-radius: 8px; font-size: 12px; color: #9aa3b8; margin: 8px 0 0;
+}

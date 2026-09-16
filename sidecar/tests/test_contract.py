@@ -51,9 +51,15 @@ def test_websocket_without_token_is_rejected(sidecar, ws_url):
     import websockets
 
     async def run():
-        with pytest.raises(Exception):
-            async with websockets.connect(ws_url):
-                pass
+        # Rejected connections are accepted then closed with 4401.
+        ws = await websockets.connect(ws_url)
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=10)
+            raise AssertionError("expected the connection to be closed")
+        except websockets.ConnectionClosed as exc:
+            assert exc.rcvd is not None and exc.rcvd.code == 4401
+        finally:
+            await ws.close()
 
     asyncio.run(asyncio.wait_for(run(), timeout=10))
 

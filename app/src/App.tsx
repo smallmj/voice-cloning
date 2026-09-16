@@ -71,7 +71,7 @@ function Waveform({ url, headers }: { url: string; headers: Record<string, strin
       ws.destroy();
       wsRef.current = null;
     };
-  }, [url]);
+  }, [url, headers]);
 
   return (
     <div className="waveform">
@@ -89,6 +89,7 @@ function Waveform({ url, headers }: { url: string; headers: Record<string, strin
 
 export default function App() {
   const [info, setInfo] = useState<SidecarInfo | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);
   const [text, setText] = useState("你好，世界。这是一次端到端生成测试。Hello, world!");
@@ -96,9 +97,15 @@ export default function App() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [logsOpen, setLogsOpen] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    window.voiceclone.onSidecarError((message) => setConnectionError(message));
+  }, []);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
     (async () => {
       const sidecarInfo = await window.voiceclone.getSidecarInfo();
       if (!sidecarInfo) return;
@@ -106,33 +113,51 @@ export default function App() {
 
       const headers = { Authorization: `Bearer ${sidecarInfo.token}` };
       const res = await fetch(`${sidecarInfo.baseUrl}/engines`, { headers });
+      if (!res.ok) {
+        setConnectionError(`加载引擎列表失败（HTTP ${res.status}）`);
+        return;
+      }
       const data = await res.json();
       setEngines(data.engines);
       if (data.engines.length > 0) setSelectedEngine(data.engines[0].id);
 
-      const ws = new WebSocket(`${sidecarInfo.baseUrl.replace("http", "ws")}/ws/logs?token=${sidecarInfo.token}`);
+      ws = new WebSocket(
+        `${sidecarInfo.baseUrl.replace("http", "ws")}/ws/logs?token=${sidecarInfo.token}`,
+      );
       ws.onmessage = (ev) => {
         const event = JSON.parse(ev.data) as LogEvent;
         setLogs((prev) => [...prev.slice(-499), event]);
       };
       wsRef.current = ws;
     })();
-    return () => wsRef.current?.close();
+    // StrictMode double-mounts effects in dev — close the socket this
+    // mount created, otherwise the first connection leaks.
+    return () => {
+      ws?.close();
+      if (ws && wsRef.current === ws) wsRef.current = null;
+    };
   }, []);
 
   async function generate() {
     if (!info || !selectedEngine || generating) return;
     setGenerating(true);
     setRecord(null);
+    setGenerateError(null);
     try {
       const res = await fetch(`${info.baseUrl}/generations`, {
         method: "POST",
         headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ engine_id: selectedEngine, text }),
       });
-      const data = await res.json();
+      if (!res.ok) {
+        setGenerateError(`生成请求失败（HTTP ${res.status}）`);
+        return;
+      }
+      const data: GenerationRecord = await res.json();
       setRecord(data);
       setLogsOpen(true);
+    } catch (err) {
+      setGenerateError(`生成请求失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerating(false);
     }
@@ -144,7 +169,13 @@ export default function App() {
     <div className="app">
       <header>
         <h1>声音复刻工作台</h1>
-        <span className={`status ${info ? "ok" : "down"}`}>{info ? "sidecar 已连接" : "sidecar 连接中…"}</span>
+        {connectionError ? (
+          <span className="status down">{connectionError}</span>
+        ) : (
+          <span className={`status ${info ? "ok" : "down"}`}>
+            {info ? "sidecar 已连接" : "sidecar 连接中…"}
+          </span>
+        )}
       </header>
 
       <section>
@@ -176,6 +207,7 @@ export default function App() {
         {record && record.status === "failed" && (
           <div className="error">生成失败：{record.error}</div>
         )}
+        {generateError && <div className="error">{generateError}</div>}
       </section>
 
       <section className={`log-drawer ${logsOpen ? "open" : ""}`}>

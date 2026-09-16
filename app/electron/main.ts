@@ -39,14 +39,16 @@ function startSidecar(): void {
     "voiceclone_sidecar",
     "--port",
     "0",
-    "--token",
-    token,
     "--audio-dir",
     dataDir(),
   ];
 
   console.log("[main] starting sidecar: uv", args.join(" "));
-  sidecar = spawn("uv", args, { stdio: ["ignore", "pipe", "pipe"] });
+  // Token goes through the environment, not argv (argv is readable via ps).
+  sidecar = spawn("uv", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, SIDECAR_TOKEN: token },
+  });
 
   let buffer = "";
   sidecar.stdout!.on("data", (chunk: Buffer) => {
@@ -71,10 +73,25 @@ function startSidecar(): void {
     }
   });
   sidecar.stderr!.on("data", (chunk: Buffer) => console.error("[sidecar stderr]", chunk.toString()));
+  sidecar.on("error", (err) => {
+    // e.g. `uv` not found — must not crash the main process.
+    console.error("[main] failed to start sidecar:", err.message);
+    const waiters = pendingWaiters;
+    pendingWaiters = [];
+    waiters.forEach((w) => w(null));
+    notifyRenderer("sidecar-error", `sidecar 启动失败：${err.message}`);
+  });
   sidecar.on("exit", (code) => {
     console.log(`[main] sidecar exited with code ${code}`);
     sidecarInfo = null;
+    notifyRenderer("sidecar-error", `sidecar 已退出（code ${code}）`);
   });
+}
+
+function notifyRenderer(channel: string, message: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(channel, message);
+  }
 }
 
 function waitForSidecar(timeoutMs = 30000): Promise<SidecarInfo | null> {

@@ -5,7 +5,10 @@ export interface SidecarInfo {
 
 declare global {
   interface Window {
-    voiceclone: { getSidecarInfo: () => Promise<SidecarInfo | null> };
+    voiceclone: {
+      getSidecarInfo: () => Promise<SidecarInfo | null>;
+      onSidecarError: (cb: (message: string) => void) => void;
+    };
   }
 }
 

@@ -318,7 +318,6 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "uvicorn" },
-    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -332,7 +331,6 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "uvicorn", specifier = ">=0.34" },
-    { name = "websockets", specifier = ">=13" },
 ]
 
 [package.metadata.requires-dev]

@@ -16,7 +16,6 @@ import asyncio
 import json
 import os
 import secrets
-import socket
 import sys
 import uuid
 from pathlib import Path
@@ -55,9 +54,11 @@ class LogBus:
 
 
 def verify_token(expected: str):
+    compare = secrets.compare_digest
+
     async def _verify(request: Request) -> None:
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {expected}":
+        if not compare(auth, f"Bearer {expected}"):
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
     return _verify
@@ -69,7 +70,11 @@ def verify_token_ws(expected: str):
         # as a query parameter. Header form stays the primary contract.
         auth = websocket.headers.get("Authorization", "")
         query_token = websocket.query_params.get("token", "")
-        if auth != f"Bearer {expected}" and query_token != expected:
+        if not (
+            secrets.compare_digest(auth, f"Bearer {expected}")
+            or secrets.compare_digest(query_token, expected)
+        ):
+            await websocket.accept()
             await websocket.close(code=4401, reason="invalid or missing bearer token")
             raise WebSocketDisconnect(code=4401)
 
@@ -130,16 +135,24 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         }
         generations[generation_id] = record
 
+        # Synthesis runs in a worker thread: it can take seconds and must not
+        # block the event loop (WS log streaming + other requests keep working).
+        loop = asyncio.get_running_loop()
+
         def log(message: str) -> None:
-            log_bus.publish(generation_id, message)
+            # Called from the worker thread — hop back onto the loop.
+            loop.call_soon_threadsafe(log_bus.publish, generation_id, message)
 
         from .registry import GenerationRequest
 
-        try:
-            result = engine.synthesize(
+        def run_synthesis():
+            return engine.synthesize(
                 GenerationRequest(generation_id=generation_id, text=text, params=record["params"]),
                 log,
             )
+
+        try:
+            result = await loop.run_in_executor(None, run_synthesis)
         except Exception as exc:  # noqa: BLE001 - surfaced on the contract, not swallowed
             record["status"] = "failed"
             record["error"] = str(exc)
@@ -184,12 +197,6 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
     return app
 
 
-def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="voiceclone-sidecar")
     parser.add_argument("--host", default="127.0.0.1")
@@ -203,13 +210,28 @@ def main(argv: list[str] | None = None) -> None:
 
     app = create_app(default_registry(output_dir=audio_dir), token=args.token, audio_dir=audio_dir)
 
-    # Choose a dynamic port ourselves so we can report it before uvicorn starts.
-    port = args.port if args.port != 0 else free_port()
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(config)
 
-    print(json.dumps({"event": "ready", "port": port, "pid": os.getpid()}), flush=True)
-    sys.stdout.flush()
+    async def serve_and_announce() -> None:
+        serve_task = asyncio.create_task(server.serve())
+        # Announce only once the socket is actually listening — the shell
+        # connects right after reading this line.
+        while not server.started:
+            if serve_task.done():
+                break
+            await asyncio.sleep(0.01)
+        if server.started:
+            port = None
+            for s in server.servers:
+                if s.sockets:
+                    port = s.sockets[0].getsockname()[1]
+                    break
+            print(json.dumps({"event": "ready", "port": port, "pid": os.getpid()}), flush=True)
+            sys.stdout.flush()
+        await serve_task
 
-    uvicorn.run(app, host=args.host, port=port, log_level="warning")
+    asyncio.run(serve_and_announce())
 
 
 if __name__ == "__main__":

@@ -95,8 +95,15 @@ def download_file(
     last_error: Exception | None = None
     for source in sources:
         url = source.format(path=spec.path)
+        # Idempotent installs: a file already on disk at its full size is not
+        # re-downloaded (pre-seeded media, retried installs).
+        total = remote_size(url)
+        if total is not None and dest.exists() and dest.stat().st_size == total:
+            if log:
+                log(f"{spec.dest_name}: already complete ({total} bytes), skipping")
+            return dest
         try:
-            _download_from(url, part, spec.dest_name, progress, log)
+            _download_from(url, part, spec.dest_name, progress, log, total=total)
             part.replace(dest)
             return dest
         except Exception as exc:  # noqa: BLE001 - try the next source
@@ -106,8 +113,9 @@ def download_file(
     raise RuntimeError(f"all sources failed for {spec.dest_name}") from last_error
 
 
-def _download_from(url: str, part: Path, name: str, progress, log) -> None:
-    total = remote_size(url)
+def _download_from(url: str, part: Path, name: str, progress, log, total: int | None = None) -> None:
+    if total is None:
+        total = remote_size(url)
     stop = threading.Event()
 
     def poll_progress() -> None:
@@ -126,6 +134,10 @@ def _download_from(url: str, part: Path, name: str, progress, log) -> None:
             "-L", "--fail", "-sS",
             "--max-time", str(CURL_TIMEOUT),
             "--retry", "5", "--retry-all-errors", "--retry-delay", "2",
+            # Abort a stalled transfer (hung TCP, zero bytes) instead of
+            # blocking until the full CURL_TIMEOUT: treat <10 KB/s over 30s
+            # as dead and let the retry/fallback machinery take over.
+            "--speed-time", "30", "--speed-limit", "10240",
             "-o", str(part),
             "-w", "\nDSCODE:%{http_code}",  # final status after the body
             url,

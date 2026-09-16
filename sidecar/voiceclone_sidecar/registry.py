@@ -101,4 +101,9 @@ def default_registry(output_dir=None) -> Registry:
         from .engines.qwen3_tts import Qwen3TtsMlxEngine
 
         registry.register(Qwen3TtsMlxEngine(output_dir=output_dir))
+
+    if sys.platform == "win32":
+        from .engines.indextts25 import IndexTts25CudaEngine
+
+        registry.register(IndexTts25CudaEngine(output_dir=output_dir))
     return registry

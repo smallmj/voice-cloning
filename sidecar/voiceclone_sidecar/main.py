@@ -98,6 +98,10 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
     require_auth = verify_token(token)
     require_auth_ws = verify_token_ws(token)
     generations: dict[str, dict] = {}
+    # One generation at a time per engine: concurrent requests queue on this
+    # lock instead of racing the worker, and a crashed worker restarts under
+    # the lock — the queued requests behind it are never lost.
+    generation_locks: dict[str, threading.Lock] = {}
     # Engine installs run in background threads; one at a time, keyed by id.
     install_lock = threading.Lock()
     install_jobs: dict[str, dict] = {}
@@ -211,10 +215,11 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         from .registry import GenerationRequest
 
         def run_synthesis():
-            return engine.synthesize(
-                GenerationRequest(generation_id=generation_id, text=text, params=record["params"]),
-                log,
-            )
+            with generation_locks.setdefault(engine.engine_id, threading.Lock()):
+                return engine.synthesize(
+                    GenerationRequest(generation_id=generation_id, text=text, params=record["params"]),
+                    log,
+                )
 
         try:
             result = await loop.run_in_executor(None, run_synthesis)

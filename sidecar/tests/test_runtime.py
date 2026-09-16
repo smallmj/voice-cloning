@@ -168,3 +168,25 @@ def test_installer_state_survives_reload(tmp_path):
     )
     assert reloaded["installed"] is True
     assert json.loads((tmp_path / "engines" / "e" / "install_state.json").read_text())["installed"]
+
+
+def test_download_file_skips_already_complete_file(tmp_path, monkeypatch):
+    """A pre-seeded file at its full size is not re-downloaded."""
+    from voiceclone_sidecar.runtime import downloader
+
+    dest_dir = tmp_path / "w"
+    dest = dest_dir / "f.bin"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"x" * 100)
+
+    calls = []
+    monkeypatch.setattr(downloader, "remote_size", lambda url: 100)
+    monkeypatch.setattr(downloader, "_download_from", lambda *a, **k: calls.append(a))
+
+    result = downloader.download_file(
+        downloader.DownloadSpec(path="f.bin", dest_name="f.bin"),
+        dest_dir,
+        ["https://example.com/{path}"],
+    )
+    assert result == dest
+    assert calls == []  # no transfer happened

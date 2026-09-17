@@ -43,15 +43,35 @@ export interface EngineInstallStatus {
   steps: Record<string, InstallStepState>;
 }
 
+export interface GenerationLogLine {
+  ts: string;
+  message: string;
+}
+
 export interface GenerationRecord {
   id: string;
   engine_id: string;
+  model_version?: string | null;
   text: string;
   normalized_text?: string;
+  params?: Record<string, unknown>;
+  voice_id?: string | null;
+  voice_name?: string | null;
   status: "running" | "succeeded" | "failed";
-  audio_url?: string;
-  sample_rate?: number;
-  error?: string;
+  audio_url?: string | null;
+  audio_file?: string | null;
+  sample_rate?: number | null;
+  error?: string | null;
+  logs: GenerationLogLine[];
+  duration_seconds?: number | null;
+  cost?: number | null;
+  created_at: string;
+  finished_at?: string | null;
+}
+
+export interface GenerationListResult {
+  records: GenerationRecord[];
+  total: number;
 }
 
 export interface NormalizeResult {

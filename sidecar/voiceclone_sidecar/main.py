@@ -18,12 +18,14 @@ import os
 import secrets
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from .generations import GenerationStore, now_iso
 from .normalization import normalize_text, normalize_with_flag
 from .registry import InstallableEngine, Registry, default_registry
 from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
@@ -106,7 +108,11 @@ def create_app(
     log_bus = LogBus()
     require_auth = verify_token(token)
     require_auth_ws = verify_token_ws(token)
-    generations: dict[str, dict] = {}
+    # Generation records are durable history (search/filter/paginate/rerun);
+    # each one snapshots enough lineage to reproduce its run.
+    generation_store = GenerationStore(
+        data_dir if data_dir is not None else audio_dir.parent, audio_dir
+    )
     # One generation at a time per engine: concurrent requests queue on this
     # lock instead of racing the worker, and a crashed worker restarts under
     # the lock — the queued requests behind it are never lost.
@@ -364,23 +370,36 @@ def create_app(
         normalized_text = normalize_text(text)
 
         generation_id = uuid.uuid4().hex
+        started_monotonic = time.monotonic()
         record = {
             "id": generation_id,
             "engine_id": engine.engine_id,
+            "model_version": None,
             "text": text,
             "normalized_text": normalized_text,
             "params": params,
             "voice_id": voice["id"] if voice else None,
+            "voice_name": voice["name"] if voice else None,
             "status": "running",
+            "error": None,
+            "logs": [],
+            "duration_seconds": None,
+            "cost": None,
+            "audio_url": None,
+            "audio_file": None,
+            "sample_rate": None,
+            "created_at": now_iso(),
+            "finished_at": None,
         }
-        generations[generation_id] = record
 
         # Synthesis runs in a worker thread: it can take seconds and must not
         # block the event loop (WS log streaming + other requests keep working).
         loop = asyncio.get_running_loop()
 
         def log(message: str) -> None:
-            # Called from the worker thread — hop back onto the loop.
+            # Called from the worker thread — hop back onto the loop, and keep
+            # the line in the record so history can replay it later.
+            record["logs"].append({"ts": now_iso(), "message": message})
             loop.call_soon_threadsafe(log_bus.publish, generation_id, message)
 
         from .registry import GenerationRequest
@@ -396,30 +415,67 @@ def create_app(
 
         try:
             result = await loop.run_in_executor(None, run_synthesis)
-        except Exception as exc:  # noqa: BLE001 - surfaced on the contract, not swallowed
-            record["status"] = "failed"
-            record["error"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - recorded in history, surfaced on the contract
+            record.update(
+                status="failed",
+                error=str(exc),
+                finished_at=now_iso(),
+                duration_seconds=round(time.monotonic() - started_monotonic, 3),
+            )
             log_bus.publish(generation_id, f"generation failed: {exc}")
+            generation_store.persist(record)
             raise HTTPException(status_code=500, detail=f"generation failed: {exc}") from exc
 
+        audio_name = Path(result.audio_path).name
         record.update(
             status="succeeded",
-            audio_url=f"/audio/{Path(result.audio_path).name}",
+            audio_url=f"/audio/{audio_name}",
+            audio_file=audio_name,
             sample_rate=result.sample_rate,
+            model_version=result.model_version,
+            cost=result.cost,
+            finished_at=now_iso(),
+            duration_seconds=round(time.monotonic() - started_monotonic, 3),
         )
         if voice is not None:
             # Persist the binding only after a real synthesis succeeded —
             # the binding claims the reference works on this engine.
             voice_store.bind(voice["id"], engine.engine_id, status="ready")
             record["binding"] = voice_store.get(voice["id"])["bindings"].get(engine.engine_id)
-        return record
+        return generation_store.persist(record)
+
+    @app.get("/generations", dependencies=[Depends(require_auth)])
+    async def list_generations(
+        q: str = "",
+        engine_id: str | None = None,
+        voice_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        if offset < 0:
+            raise HTTPException(status_code=422, detail="offset must be non-negative")
+        return generation_store.list(
+            q=q, engine_id=engine_id, voice_id=voice_id, status=status,
+            limit=limit, offset=offset,
+        )
 
     @app.get("/generations/{generation_id}", dependencies=[Depends(require_auth)])
     async def get_generation(generation_id: str) -> dict:
-        record = generations.get(generation_id)
+        record = generation_store.get(generation_id)
         if record is None:
             raise HTTPException(status_code=404, detail="generation not found")
         return record
+
+    @app.delete("/generations/{generation_id}", dependencies=[Depends(require_auth)])
+    async def delete_generation(generation_id: str) -> dict:
+        # Removing a record also removes its audio artifact from disk.
+        if generation_store.get(generation_id) is None:
+            raise HTTPException(status_code=404, detail="generation not found")
+        generation_store.delete(generation_id)
+        return {"deleted": generation_id}
 
     @app.get("/audio/{filename}", dependencies=[Depends(require_auth)])
     async def audio(filename: str) -> FileResponse:

@@ -21,10 +21,17 @@ class GenerationRequest:
 
 @dataclass(frozen=True)
 class GenerationResult:
-    """Path is the engine-written audio file; the sidecar serves it."""
+    """Path is the engine-written audio file; the sidecar serves it.
+
+    ``model_version`` and ``cost`` are lineage facts the engine itself knows
+    best; engines that cannot report them leave the defaults and the record
+    stores null (the contract keeps the keys present either way).
+    """
 
     audio_path: str
     sample_rate: int
+    model_version: str | None = None
+    cost: float | None = None
 
 
 class Engine(abc.ABC):

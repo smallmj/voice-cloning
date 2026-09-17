@@ -64,4 +64,9 @@ class FakeEngine(Engine):
 
         elapsed = time.monotonic() - started
         log(f"fake: wrote {out_path.name} in {elapsed:.3f}s")
-        return GenerationResult(audio_path=str(out_path), sample_rate=SAMPLE_RATE)
+        return GenerationResult(
+            audio_path=str(out_path),
+            sample_rate=SAMPLE_RATE,
+            model_version="fake-1.0",
+            cost=0.0,  # local synthesis has no per-run cost
+        )

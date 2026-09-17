@@ -9,7 +9,8 @@ node_modules/
 app/dist/
 app/dist-electron/
 
-# Local data
-data/
+# Local data (the packaged capability-matrix JSON is source data, not local state)
+/data/
+/sidecar/data/
 *.log
 .DS_Store

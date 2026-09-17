@@ -214,3 +214,105 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* --- blind comparison + preference profile (issue #10) --- */
+
+.compare-engine-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.compare-session {
+  margin-top: 16px;
+}
+
+.compare-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.compare-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compare-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compare-card audio {
+  width: 100%;
+}
+
+.score-row {
+  display: flex;
+  gap: 2px;
+}
+
+.score-star {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: #ccc;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.score-star.on {
+  color: #f5a623;
+}
+
+.pref-block {
+  margin-top: 20px;
+}
+
+.pref-cell {
+  margin-top: 10px;
+}
+
+.pref-cell-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.pref-table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.pref-table th,
+.pref-table td {
+  border: 1px solid #ddd;
+  padding: 4px 10px;
+  text-align: left;
+}
+
+.pref-table th {
+  background: #f5f5f5;
+}
+
+.compare-mode {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px dashed #ccc;
+}

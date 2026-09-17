@@ -159,4 +159,11 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
         from .engines.fake import FakeKeyEngine
 
         registry.register(FakeKeyEngine(output_dir=output_dir))
+
+        # Contract-test seams (issue #10): two output-level extremes. The
+        # comparison feature must bring both to the same LUFS.
+        from .engines.fake import FakeLoudEngine, FakeQuietEngine
+
+        registry.register(FakeLoudEngine(output_dir=output_dir))
+        registry.register(FakeQuietEngine(output_dir=output_dir))
     return registry

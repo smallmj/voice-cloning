@@ -25,8 +25,12 @@ class FakeEngine(Engine):
     engine_id = "fake"
     display_name = "Fake Engine (built-in)"
 
-    def __init__(self, output_dir: Path | None = None) -> None:
+    def __init__(self, output_dir: Path | None = None, amplitude: float = 0.35) -> None:
         self.output_dir = output_dir
+        # Output-level knob. Real engines disagree wildly on loudness; the
+        # level-skewed test seams below set this to verify the comparison
+        # feature's LUFS normalization end to end (issue #10).
+        self.amplitude = amplitude
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
@@ -51,7 +55,7 @@ class FakeEngine(Engine):
         for i in range(int(duration * SAMPLE_RATE)):
             t = i / SAMPLE_RATE
             envelope = min(1.0, t * 8.0, max(0.0, duration - t) * 8.0)
-            sample = 0.35 * envelope * math.sin(2 * math.pi * BASE_FREQ * t)
+            sample = self.amplitude * envelope * math.sin(2 * math.pi * BASE_FREQ * t)
             frames += struct.pack("<h", int(sample * 32767))
 
         out_dir = self.output_dir or Path.cwd() / "data" / "audio"
@@ -147,3 +151,28 @@ class FakeKeyEngine(FakeEngine):
             model_version=voice_id,
             cost=round(billed_chars(request.text) / 10000 * 0.8, 4),
         )
+
+
+class FakeLoudEngine(FakeEngine):
+    """Test seam (issue #10): emits a HOT master (near full scale)."""
+
+    engine_id = "fake-loud"
+    display_name = "Fake Engine (loud)"
+
+    def __init__(self, output_dir: Path | None = None) -> None:
+        super().__init__(output_dir, amplitude=0.95)
+
+
+class FakeQuietEngine(FakeEngine):
+    """Test seam (issue #10): emits a very quiet master.
+
+    Together with FakeLoudEngine the pair differs by roughly 30 dB of output
+    level — exactly the "electric level differs greatly" engines the issue
+    requires for proving the LUFS normalization actually equalizes.
+    """
+
+    engine_id = "fake-quiet"
+    display_name = "Fake Engine (quiet)"
+
+    def __init__(self, output_dir: Path | None = None) -> None:
+        super().__init__(output_dir, amplitude=0.02)

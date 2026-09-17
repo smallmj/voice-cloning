@@ -173,3 +173,55 @@ export interface TranscriptionProviders {
   };
   engines: { id: string; display_name: string }[];
 }
+
+// --- blind comparison + preference profile (issue #10) ---
+
+export interface CompareEntry {
+  label: string;
+  // Engine identity only appears once the session is revealed (or scored).
+  engine_id?: string;
+  generation_id?: string;
+  normalized_audio_url: string;
+  normalized_file?: string;
+  original_lufs?: number | null;
+  gain_db?: number;
+  achieved_lufs?: number | null;
+  peak_limited?: boolean;
+  score?: number;
+}
+
+export interface CompareFailedLeg {
+  engine_id: string;
+  error: string;
+}
+
+export interface CompareSession {
+  id: string;
+  created_at: string;
+  voice_id: string;
+  text: string;
+  text_type: string;
+  language: string;
+  target_lufs: number;
+  entries: CompareEntry[];
+  failed: CompareFailedLeg[];
+  failed_count?: number;
+  scored: boolean;
+}
+
+export interface PreferenceEngineRow {
+  engine_id: string;
+  average_score: number;
+  score_count: number;
+  wins: number;
+}
+
+export interface PreferenceCell {
+  language: string;
+  text_type: string;
+  engines: PreferenceEngineRow[];
+}
+
+export interface PreferenceProfile {
+  cells: PreferenceCell[];
+}

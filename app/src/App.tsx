@@ -3,6 +3,7 @@ import WaveSurfer from "wavesurfer.js";
 import type {
   Capabilities,
   CompareSession,
+  ConsentInfo,
   PreferenceProfile,
   ReferenceAnalysis,
   TranscriptionProviders,
@@ -1038,6 +1039,11 @@ export default function App() {
   // server-side paths the sidecar re-injects itself (ref_audio). They ride
   // along on the next generate call unless the user clears them.
   const [rerunParams, setRerunParams] = useState<Record<string, unknown> | null>(null);
+  // Issue #15: first-use voice consent. Fetched once the sidecar is up;
+  // a modal gate blocks the workspace until the user acknowledges.
+  const [consent, setConsent] = useState<ConsentInfo | null>(null);
+  const [consentAck, setConsentAck] = useState(false);
+  const [consentBusy, setConsentBusy] = useState(false);
   const generateRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const installingRef = useRef<Record<string, boolean>>({});
@@ -1114,6 +1120,21 @@ export default function App() {
     }
   }
 
+  async function acknowledgeConsent() {
+    if (!info || !consentAck || consentBusy) return;
+    setConsentBusy(true);
+    try {
+      const res = await fetch(`${info.baseUrl}/consent`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ acknowledged: true }),
+      });
+      if (res.ok) setConsent((await res.json()) as ConsentInfo);
+    } finally {
+      setConsentBusy(false);
+    }
+  }
+
   async function installEngine(id: string) {
     if (!info || installing[id]) return;
     setInstalling((p) => ({ ...p, [id]: true }));
@@ -1153,6 +1174,16 @@ export default function App() {
       const data = await res.json();
       setEngines(data.engines);
       if (data.engines.length > 0) setSelectedEngine(data.engines[0].id);
+
+      // Issue #15: first-use voice consent gate state. A failed read must
+      // not break startup (the sidecar may be mid-upgrade); the gate stays
+      // open only when the sidecar positively reports an acknowledged state.
+      try {
+        const consentRes = await fetch(`${sidecarInfo.baseUrl}/consent`, { headers });
+        if (consentRes.ok) setConsent((await consentRes.json()) as ConsentInfo);
+      } catch {
+        /* keep consent null; the workspace opens but consent stays unset */
+      }
 
       // Fetch per-engine install status; poll only engines that are mid-install.
       const fetchStatus = async (id: string) => {
@@ -1553,6 +1584,36 @@ export default function App() {
 
   return (
     <div className="app">
+      {consent && !consent.acknowledged && (
+        <div className="consent-overlay" role="dialog" aria-modal="true" aria-label="声音授权确认">
+          <div className="consent-modal">
+            <h2>声音授权确认</h2>
+            <p>
+              在使用声音复刻功能之前，请确认以下事项：
+            </p>
+            <ul>
+              <li>你上传的参考音频中的声音，是你本人的声音，或你已获得该声音权利人的明确授权；</li>
+              <li>生成的语音由人工智能合成，产物文件会带有 AI 生成内容的元数据标记，你应在传播时如实告知听众；</li>
+              <li>你不会使用本工具伪造他人声音进行欺骗、冒充或侵犯他人权益的行为。</li>
+            </ul>
+            <label className="consent-check">
+              <input
+                type="checkbox"
+                checked={consentAck}
+                onChange={(e) => setConsentAck(e.target.checked)}
+              />
+              我已阅读并理解以上内容，确认拥有相关声音的使用授权
+            </label>
+            <button
+              className="primary"
+              disabled={!consentAck || consentBusy}
+              onClick={() => void acknowledgeConsent()}
+            >
+              {consentBusy ? "提交中…" : "确认并开始使用"}
+            </button>
+          </div>
+        </div>
+      )}
       <header>
         <h1>声音复刻工作台</h1>
         {connectionError ? (
@@ -1615,6 +1676,9 @@ export default function App() {
             />
           </div>
           <div className="voice-create-row">
+            <span className="hint">
+              上传参考音频前请确认你拥有该声音的使用授权（首次使用时已确认）。
+            </span>
             <label>
               参考音频（WAV/MP3/FLAC/M4A/OGG，3–120s，≤20MB）：
               <input
@@ -1814,6 +1878,17 @@ export default function App() {
                   该引擎需要参考文本：将自动转写所选音色的参考音频，无需手动输入。
                 </span>
               )}
+            {selectedEngineInfo && (
+              <span className="hint training-note">
+                上传内容是否用于训练：
+                {selectedEngineInfo.capabilities.upload_used_for_training
+                  ? "是（该引擎厂商声明会上传内容用于训练）"
+                  : "否（该引擎厂商声明不上传内容用于训练）"}
+                {selectedEngineInfo.data_usage_note
+                  ? `　—　${selectedEngineInfo.data_usage_note}`
+                  : ""}
+              </span>
+            )}
         </div>
         {(selectedEngineInfo?.params ?? []).map((p) => (
           <div className="param-row" key={p.name}>

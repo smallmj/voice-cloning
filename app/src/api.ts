@@ -244,6 +244,14 @@ export interface PreferenceProfile {
   cells: PreferenceCell[];
 }
 
+// --- compliance guardrails: first-use voice consent (issue #15) ---
+
+export interface ConsentInfo {
+  acknowledged: boolean;
+  confirmed_at: string | null;
+  version: string;
+}
+
 // --- long-text jobs: queue / segmentation / cancel (issue #13) ---
 
 export interface JobSegment {

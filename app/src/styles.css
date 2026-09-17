@@ -342,3 +342,38 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .job-segment-skipped .job-segment-status,
 .job-segment-pending .job-segment-status { color: var(--muted, #777); }
 .job-audio { max-width: 560px; }
+
+
+/* Issue #15: first-use voice consent gate */
+.consent-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.consent-modal {
+  background: var(--bg, #fff);
+  color: inherit;
+  border-radius: 10px;
+  padding: 20px 24px;
+  max-width: 560px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
+}
+.consent-modal ul {
+  padding-left: 20px;
+  line-height: 1.6;
+}
+.consent-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 14px 0;
+  cursor: pointer;
+}
+.training-note {
+  display: block;
+  margin-top: 4px;
+}

@@ -38,6 +38,8 @@ from .compare import (
     TEXT_TYPES,
     detect_language,
 )
+from .aigc import embed_aigc_marker
+from .storage import write_json_atomic
 from .loudness import TARGET_LUFS, LoudnessError, normalize_wav_lufs
 from .portability import (
     PortabilityError,
@@ -64,7 +66,7 @@ from .runtime import paths
 from .secrets import KeyStore, KeyStoreError
 from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
 
-SIDECAR_VERSION = "0.1.0"
+from ._version import SIDECAR_VERSION
 
 
 class LogBus:
@@ -163,6 +165,31 @@ def create_app(
     # Blind-comparison sessions + the preference profile (issue #10): a
     # separate durable index next to the generation history.
     compare_store = CompareStore(data_root)
+    # Issue #15: first-use voice consent. Durable in the portable data root
+    # (issue #14's layout), so a library backup/restore carries it along.
+    consent_version = "voice-consent-v1"
+    consent_path = data_root / "app_state.json"
+    # read-modify-write on app_state.json is guarded like every other
+    # mutable store: request handlers can PUT concurrently.
+    consent_lock = threading.Lock()
+
+    def _read_consent() -> dict:
+        try:
+            raw = json.loads(consent_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        state = raw.get("voice_consent")
+        return state if isinstance(state, dict) else {}
+
+    def _write_consent(state: dict) -> None:
+        with consent_lock:
+            try:
+                raw = json.loads(consent_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                raw = {}
+            raw["voice_consent"] = state
+            write_json_atomic(consent_path, raw)
+
     # One generation at a time per engine: concurrent requests queue on this
     # lock instead of racing the worker, and a crashed worker restarts under
     # the lock — the queued requests behind it are never lost.
@@ -244,6 +271,35 @@ def create_app(
     @app.get("/health", dependencies=[Depends(require_auth)])
     async def health() -> dict:
         return {"status": "ok", "version": SIDECAR_VERSION}
+
+    def _mark_artifact(target: dict, path: Path, fields: dict[str, str]) -> None:
+        """Stamp an artifact with the AIGC marker (issue #15).
+
+        Records the outcome on ``target`` ("aigc_marked") instead of failing
+        the generation: a marker write must never turn a finished synthesis
+        into an error, but a silent skip would hide a compliance gap.
+        """
+        try:
+            target["aigc_marked"] = embed_aigc_marker(path, fields)
+        except OSError:
+            target["aigc_marked"] = False
+
+    @app.get("/consent", dependencies=[Depends(require_auth)])
+    async def get_consent() -> dict:
+        state = _read_consent()
+        return {
+            "acknowledged": state.get("version") == consent_version,
+            "confirmed_at": state.get("confirmed_at"),
+            "version": consent_version,
+        }
+
+    @app.put("/consent", dependencies=[Depends(require_auth)])
+    async def put_consent(body: dict) -> dict:
+        if body.get("acknowledged") is not True:
+            raise HTTPException(status_code=422, detail="acknowledged 必须为 true")
+        state = {"version": consent_version, "confirmed_at": now_iso()}
+        _write_consent(state)
+        return {"acknowledged": True, "confirmed_at": state["confirmed_at"], "version": consent_version}
 
     @app.get("/engines", dependencies=[Depends(require_auth)])
     async def engines() -> dict:
@@ -1086,6 +1142,19 @@ def create_app(
             raise HTTPException(status_code=500, detail=f"generation failed: {exc}") from exc
 
         audio_name = Path(result.audio_path).name
+        # Issue #15: stamp the artifact itself with the AI-generated-content
+        # marker so the disclosure travels with the file, not just the record.
+        _mark_artifact(
+            record,
+            audio_dir / audio_name,
+            {
+                "generation": generation_id,
+                "voice": (voice or {}).get("name", ""),
+                "engine": engine.engine_id,
+                "model": result.model_version or "",
+                "date": record.get("created_at", ""),
+            },
+        )
         record.update(
             status="succeeded",
             audio_url=f"/audio/{audio_name}",
@@ -1197,6 +1266,9 @@ def create_app(
                 job["audio_file"] = out_name
                 job["audio_url"] = f"/audio/{out_name}"
                 job["sample_rate"] = rate
+                # Issue #15: the concatenated artifact is as much an
+                # AI-generated file as its segments — mark it too.
+                _mark_artifact(job, audio_dir / out_name, {"job": job["id"], "date": now_iso()})
             except Exception as exc:  # noqa: BLE001 - concat is the last step
                 if failure is None and not cancelled:
                     failure = f"分段音频拼接失败：{exc}"

@@ -27,6 +27,8 @@ import struct
 import wave
 from pathlib import Path
 
+from .aigc import copy_info_chunks
+
 FULL_SCALE = 32767.0
 TARGET_LUFS = -16.0  # streaming/podcast convention; comparison target
 GATE_ABSOLUTE_LUFS = -70.0
@@ -209,6 +211,7 @@ def normalize_wav_lufs(
         # Digital silence: there is nothing to normalize — copy through and
         # report the measurement as unachievable rather than +inf gain.
         write_wav_mono(dst, samples, rate)
+        copy_info_chunks(src, dst)  # issue #15: keep the AIGC disclosure
         return {
             "original_lufs": None,
             "gain_db": 0.0,
@@ -222,6 +225,7 @@ def normalize_wav_lufs(
         gain = 1.0 / peak  # never introduce clipping
     gained = [s * gain for s in samples]
     write_wav_mono(dst, gained, rate)
+    copy_info_chunks(src, dst)  # issue #15: keep the AIGC disclosure
     achieved = integrated_lufs(gained, rate)
     return {
         "original_lufs": round(current, 2),

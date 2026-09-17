@@ -122,6 +122,28 @@ const DIAG_LABELS: Record<string, string> = {
   silence: "静音段",
 };
 
+// Issue #14: download a sidecar file (voice package / library backup) with
+// bearer auth, then hand it to the browser's normal save flow.
+async function downloadWithAuth(url: string, token: string, filename: string): Promise<void> {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(await errorDetail(res, `下载失败（HTTP ${res.status}）`));
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function errorDetail(res: Response, fallback: string): Promise<string> {
+  try {
+    const j = (await res.json()) as { detail?: string };
+    return j.detail ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function VoiceCard({
   voice,
   baseUrl,
@@ -144,7 +166,25 @@ function VoiceCard({
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
+
+  async function exportPackage() {
+    setExporting(true);
+    setCardError(null);
+    try {
+      const safeName = (voice.name || voice.id).replace(/[\\/:*?"<>|\s]+/g, "_");
+      await downloadWithAuth(
+        `${baseUrl}/voices/${voice.id}/export`,
+        token,
+        `${safeName}.voice.zip`,
+      );
+    } catch (e) {
+      setCardError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function diagnose() {
     setAnalyzing(true);
@@ -250,6 +290,9 @@ function VoiceCard({
             </button>
             <button onClick={() => void transcribe()} disabled={transcribing}>
               {transcribing ? "转写中…" : ref.transcript ? "重新转写" : "转写"}
+            </button>
+            <button onClick={() => void exportPackage()} disabled={exporting} title="导出为音色包（.zip），可分享给他人">
+              {exporting ? "导出中…" : "导出"}
             </button>
           </>
         ) : (
@@ -966,6 +1009,11 @@ export default function App() {
   const [newVoiceAvatar, setNewVoiceAvatar] = useState<File | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [creatingVoice, setCreatingVoice] = useState(false);
+  // Issue #14: voice-package import + whole-library backup/restore.
+  const [importingVoice, setImportingVoice] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
   // Voice design (issue #11): create a voice from a text description.
   const [designEngineId, setDesignEngineId] = useState("");
   const [designName, setDesignName] = useState("");
@@ -1323,6 +1371,87 @@ export default function App() {
     }
   }
 
+  // Issue #14: import a shared voice package. Bindings are dropped; the
+  // user rebinds the imported voice on demand against their own engines.
+  async function importVoicePackage(file: File) {
+    if (!info || importingVoice) return;
+    setImportingVoice(true);
+    setVoiceError(null);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await fetch(`${info.baseUrl}/voices/import`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}` },
+        body,
+      });
+      if (!res.ok) {
+        setVoiceError(await errorDetail(res, `导入音色包失败（HTTP ${res.status}）`));
+        return;
+      }
+      const { voice } = (await res.json()) as { voice: Voice };
+      await refreshVoices();
+      setSelectedVoice(voice.id);
+    } catch (err) {
+      setVoiceError(`导入音色包失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImportingVoice(false);
+    }
+  }
+
+  async function backupLibrary() {
+    if (!info || backupBusy) return;
+    setBackupBusy(true);
+    setBackupMessage(null);
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadWithAuth(
+        `${info.baseUrl}/backup`,
+        info.token,
+        `voice-library-backup-${stamp}.zip`,
+      );
+      setBackupMessage("备份已下载。请妥善保存备份文件。");
+    } catch (err) {
+      setBackupMessage(`备份失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function restoreLibrary(file: File) {
+    if (!info || restoreBusy) return;
+    if (
+      !window.confirm(
+        "恢复备份会覆盖当前全部数据（音色、历史、设置）。\n确定继续吗？",
+      )
+    )
+      return;
+    setRestoreBusy(true);
+    setBackupMessage(null);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await fetch(`${info.baseUrl}/restore`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}` },
+        body,
+      });
+      if (!res.ok) {
+        setBackupMessage(await errorDetail(res, `恢复失败（HTTP ${res.status}）`));
+        return;
+      }
+      const j = (await res.json()) as { voices: number; generations: number };
+      setBackupMessage(
+        `恢复完成：${j.voices} 个音色、${j.generations} 条历史记录。API Key 不在备份内，仍在系统钥匙串中。`,
+      );
+      await Promise.all([refreshVoices(), refreshEngines()]);
+    } catch (err) {
+      setBackupMessage(`恢复失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
   async function deleteVoice(id: string) {
     if (!info) return;
     if (!window.confirm("删除该音色？其全部引擎绑定与本地参考音频文件都会被删除。")) return;
@@ -1454,6 +1583,24 @@ export default function App() {
 
       <section>
         <h2>音色库</h2>
+        <div className="voice-create-row">
+          <label>
+            导入音色包（.zip）：
+            <input
+              type="file"
+              accept=".zip"
+              disabled={importingVoice}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void importVoicePackage(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          <span className="hint">
+            导入后引擎绑定不会带来——需要时对导入的音色重新绑定引擎。
+          </span>
+        </div>
         <div className="voice-create">
           <div className="voice-create-row">
             <input
@@ -1772,6 +1919,34 @@ export default function App() {
         <div className="hint">
           云端引擎一律 BYOK（Bring Your Own Key）：API Key 只保存在本机系统钥匙串中，
           不落明文文件，也不经过任何第三方服务器。
+        </div>
+        <div className="settings-engine">
+          <div className="settings-engine-head">
+            <strong>备份与恢复</strong>
+          </div>
+          <div className="hint">
+            整库备份把全部数据（音色、参考音频、历史记录、设置）打包成一个 .zip，
+            可拷贝到其他机器后恢复。API Key 不包含在备份中。不会自动云同步。
+          </div>
+          <div className="key-row">
+            <button disabled={backupBusy} onClick={() => void backupLibrary()}>
+              {backupBusy ? "备份中…" : "备份整库"}
+            </button>
+            <label>
+              恢复备份（.zip）：
+              <input
+                type="file"
+                accept=".zip"
+                disabled={restoreBusy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void restoreLibrary(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          {backupMessage && <div className="hint">{backupMessage}</div>}
         </div>
         <div className="settings-list">
           {engines.map((e) => (

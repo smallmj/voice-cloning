@@ -80,6 +80,12 @@ class CompareStore:
             if isinstance(session, dict) and session.get("id"):
                 self._sessions[session["id"]] = session
 
+    def reload(self) -> None:
+        """Re-read the index from disk (used by library restore, issue #14)."""
+        with self._lock:
+            self._sessions = {}
+            self._load()
+
     def _save(self) -> None:
         ordered = sorted(
             self._sessions.values(), key=lambda s: s.get("created_at", ""), reverse=True

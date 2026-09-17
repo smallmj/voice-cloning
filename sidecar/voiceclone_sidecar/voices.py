@@ -131,6 +131,12 @@ class VoiceStore:
                 record.setdefault("design", None)
                 self._voices[record["id"]] = record
 
+    def reload(self) -> None:
+        """Re-read the index from disk (used by library restore, issue #14)."""
+        with self._lock:
+            self._voices = {}
+            self._load()
+
     def _save(self) -> None:
         write_json_atomic(self.index_path, {"voices": list(self._voices.values())})
 
@@ -365,6 +371,90 @@ class VoiceStore:
             del self._voices[voice_id]
             self._save()
         shutil.rmtree(self.root / voice_id, ignore_errors=True)
+
+    # -- import (issue #14) ----------------------------------------------------
+
+    def import_record(self, record: dict, files_dir: Path) -> dict:
+        """Import an exported voice package record.
+
+        The imported voice always gets a fresh id and empty bindings — a
+        binding minted on another machine is meaningless here, and the user
+        rebuilds engine bindings on demand (issue #14). The reference
+        sample's checksum is verified against the package metadata before
+        the voice is accepted.
+        """
+        if not isinstance(record, dict):
+            raise VoiceValidationError("音色包数据无效")
+        name, description = self._validate_name_description(
+            record.get("name") or "", record.get("description") or ""
+        )
+        if not name:
+            raise VoiceValidationError("音色包缺少音色名称")
+
+        reference = record.get("reference") or {}
+        avatar = record.get("avatar") or {}
+
+        voice_id = uuid.uuid4().hex
+        voice_dir = self.root / voice_id
+
+        def fail(message: str) -> VoiceValidationError:
+            shutil.rmtree(voice_dir, ignore_errors=True)
+            return VoiceValidationError(message)
+
+        voice_dir.mkdir(parents=True, exist_ok=True)
+
+        imported: dict = {
+            "id": voice_id,
+            "name": name,
+            "description": description or "",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "origin": record.get("origin", "cloned"),
+            "design": record.get("design"),
+            "reference": None,
+            "avatar": None,
+            "bindings": {},
+        }
+
+        if reference.get("filename"):
+            src = files_dir / reference["filename"]
+            if not src.is_file():
+                raise fail("音色包缺少参考音频文件")
+            actual_sha = _file_sha256(src)
+            expected = reference.get("sha256")
+            if expected and actual_sha != expected:
+                raise fail("参考音频校验失败：文件与导出时不一致")
+            ext = src.suffix.lower()
+            if ext not in AUDIO_EXTENSIONS:
+                raise fail(f"音色包内参考音频格式不受支持：{ext or '(无后缀)'}")
+            ref_meta = {
+                "filename": f"ref{ext}",
+                "format": ext[1:],
+                "duration_seconds": reference.get("duration_seconds"),
+                "size_bytes": src.stat().st_size,
+                "sha256": actual_sha,
+            }
+            if reference.get("transcript") is not None:
+                ref_meta["transcript"] = reference["transcript"]
+            shutil.copyfile(src, voice_dir / ref_meta["filename"])
+            imported["reference"] = ref_meta
+
+        if avatar.get("filename"):
+            src = files_dir / avatar["filename"]
+            if src.is_file():
+                ext = src.suffix.lower()
+                if ext in AVATAR_EXTENSIONS:
+                    filename = f"avatar{ext}"
+                    shutil.copyfile(src, voice_dir / filename)
+                    imported["avatar"] = {
+                        "filename": filename,
+                        "format": ext[1:],
+                        "size_bytes": src.stat().st_size,
+                    }
+
+        with self._lock:
+            self._voices[voice_id] = imported
+            self._save()
+        return dict(imported)
 
     # -- engine bindings -------------------------------------------------------
 

@@ -52,6 +52,12 @@ class GenerationStore:
             if isinstance(record, dict) and record.get("id"):
                 self._records[record["id"]] = record
 
+    def reload(self) -> None:
+        """Re-read the index from disk (used by library restore, issue #14)."""
+        with self._lock:
+            self._records = {}
+            self._load()
+
     def _save(self) -> None:
         # Newest first, so a restarted sidecar reads history in display order.
         ordered = sorted(

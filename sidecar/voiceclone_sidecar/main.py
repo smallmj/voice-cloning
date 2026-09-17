@@ -16,8 +16,10 @@ import asyncio
 import json
 import os
 import random
+import re
 import secrets
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -25,6 +27,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from .diagnostics import DiagnosticError, analyze_audio
 from .compare import (
@@ -36,6 +39,13 @@ from .compare import (
     detect_language,
 )
 from .loudness import TARGET_LUFS, LoudnessError, normalize_wav_lufs
+from .portability import (
+    PortabilityError,
+    create_library_backup,
+    export_voice_package,
+    import_voice_package,
+    restore_library_backup,
+)
 from .generations import GenerationStore, now_iso
 from .jobs import JobStore, is_cancel_requested, new_job, public_view
 from .segmentation import concat_wav_files, split_text
@@ -142,14 +152,17 @@ def create_app(
     # BYOK API keys (ADR-0003): the sidecar reads them from the OS key store
     # on demand and keeps nothing on disk. Tests inject an in-memory backend.
     keys = key_store if key_store is not None else KeyStore()
+    # The data root is the portable library directory (issue #14): every
+    # index and audio artifact lives under it, so it can be backed up,
+    # restored and copied as one unit. BYOK keys are the exception — they
+    # stay in the OS key store (ADR-0003).
+    data_root = data_dir if data_dir is not None else audio_dir.parent
     # Generation records are durable history (search/filter/paginate/rerun);
     # each one snapshots enough lineage to reproduce its run.
-    generation_store = GenerationStore(
-        data_dir if data_dir is not None else audio_dir.parent, audio_dir
-    )
+    generation_store = GenerationStore(data_root, audio_dir)
     # Blind-comparison sessions + the preference profile (issue #10): a
     # separate durable index next to the generation history.
-    compare_store = CompareStore(data_dir if data_dir is not None else audio_dir.parent)
+    compare_store = CompareStore(data_root)
     # One generation at a time per engine: concurrent requests queue on this
     # lock instead of racing the worker, and a crashed worker restarts under
     # the lock — the queued requests behind it are never lost.
@@ -159,12 +172,10 @@ def create_app(
     install_jobs: dict[str, dict] = {}
     # Voices live next to the audio dir (data root). Reference samples are the
     # source of truth; engine bindings derived from them are a cache.
-    voice_store = VoiceStore(data_dir if data_dir is not None else audio_dir.parent)
+    voice_store = VoiceStore(data_root)
     # Transcription (issue #8): provider choice is durable; the local tool
     # is built lazily so unsupported platforms degrade to cloud-only.
-    transcription_settings = TranscriptionSettings(
-        data_dir if data_dir is not None else audio_dir.parent
-    )
+    transcription_settings = TranscriptionSettings(data_root)
     _transcriber: LocalTranscriber | None = None
 
     def _local_transcriber() -> LocalTranscriber:
@@ -445,6 +456,113 @@ def create_app(
             raise HTTPException(status_code=404, detail="voice has no avatar")
         media = AVATAR_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return FileResponse(path, media_type=media)
+
+    # -- portability: voice packages + library backup/restore (issue #14) ------
+
+    def _portability_error(exc: PortabilityError) -> HTTPException:
+        return HTTPException(status_code=422, detail=str(exc))
+
+    def _new_temp_zip() -> Path:
+        # mkstemp hands back an open fd; close it (the file is unlinked and
+        # recreated atomically by the export/backup writer).
+        fd, name = tempfile.mkstemp(suffix=".zip", prefix="voice-")
+        os.close(fd)
+        return Path(name)
+
+    @app.get("/voices/{voice_id}/export", dependencies=[Depends(require_auth)])
+    async def export_voice(voice_id: str) -> FileResponse:
+        """Download one voice as a shareable .zip package."""
+        record = _require_voice(voice_id)
+        out = _new_temp_zip()
+        try:
+            export_voice_package(record, voice_store.root / voice_id, out)
+        except PortabilityError as exc:
+            raise _portability_error(exc) from exc
+        filename = re.sub(r'[\\/:*?"<>|\s]+', "_", record.get("name") or voice_id)
+        return FileResponse(
+            out,
+            media_type="application/zip",
+            filename=f"{filename}.voice.zip",
+            background=BackgroundTask(lambda: out.unlink(missing_ok=True)),
+        )
+
+    @app.post("/voices/import", dependencies=[Depends(require_auth)])
+    async def import_voice(file: UploadFile) -> dict:
+        """Import a voice package. Bindings are dropped; the user rebinds on
+        demand against their own engines."""
+        tmp = None
+        try:
+            tmp = await _read_upload(file)
+            if tmp is None:
+                raise PortabilityError("音色包不能为空")
+            record = import_voice_package(tmp, voice_store)
+            return {"voice": record}
+        except (PortabilityError, VoiceValidationError) as exc:
+            raise _portability_error(exc) from exc
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+    @app.post("/backup", dependencies=[Depends(require_auth)])
+    async def backup_library() -> FileResponse:
+        """Create and download a whole-library backup zip."""
+        out = _new_temp_zip()
+        try:
+            create_library_backup(data_root, out)
+        except PortabilityError as exc:
+            raise _portability_error(exc) from exc
+        stamp = time.strftime("%Y%m%d", time.gmtime())
+        return FileResponse(
+            out,
+            media_type="application/zip",
+            filename=f"voice-library-backup-{stamp}.zip",
+            background=BackgroundTask(lambda: out.unlink(missing_ok=True)),
+        )
+
+    @app.post("/restore", dependencies=[Depends(require_auth)])
+    async def restore_library(file: UploadFile) -> dict:
+        """Restore the whole library from a backup zip.
+
+        Replaces the data directory with the archive's contents and reloads
+        every durable store in place. Refused while a queued/running job is
+        in flight: the swap would delete the directory its artifacts are
+        written into. A synchronous generation mid-request is not detected
+        and remains the user's responsibility.
+        """
+        running = [
+            j["id"]
+            for j in job_store.list(limit=100)
+            if j["status"] in ("queued", "running")
+        ]
+        if running:
+            raise HTTPException(
+                status_code=409,
+                detail="有正在进行的分段任务，请等待完成或取消后再恢复备份",
+            )
+        tmp = None
+        try:
+            tmp = await _read_upload(file)
+            if tmp is None:
+                raise PortabilityError("备份包不能为空")
+            restored = restore_library_backup(tmp, data_root)
+            voice_store.reload()
+            generation_store.reload()
+            compare_store.reload()
+            # TranscriptionSettings re-reads settings.json on every access,
+            # so a restored provider choice takes effect immediately.
+            restored["restored"] = True
+            return restored
+        except PortabilityError as exc:
+            raise _portability_error(exc) from exc
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
     # -- diagnostics + transcription (issue #8) -------------------------------
 

@@ -436,6 +436,10 @@ export default function App() {
   const [creatingVoice, setCreatingVoice] = useState(false);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [rerunHint, setRerunHint] = useState<string | null>(null);
+  // Parameters carried back from a rerun: everything the record stored except
+  // server-side paths the sidecar re-injects itself (ref_audio). They ride
+  // along on the next generate call unless the user clears them.
+  const [rerunParams, setRerunParams] = useState<Record<string, unknown> | null>(null);
   const generateRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const installingRef = useRef<Record<string, boolean>>({});
@@ -615,6 +619,7 @@ export default function App() {
           engine_id: selectedEngine,
           text,
           ...(selectedVoice ? { voice_id: selectedVoice } : {}),
+          ...(rerunParams ? { params: rerunParams } : {}),
         }),
       });
       if (!res.ok) {
@@ -623,6 +628,7 @@ export default function App() {
       }
       const data: GenerationRecord = await res.json();
       setRecord(data);
+      setRerunParams(null);
       setLogsOpen(true);
       setHistoryRefreshKey((k) => k + 1);
     } catch (err) {
@@ -633,10 +639,14 @@ export default function App() {
   }
 
   function rerun(record: GenerationRecord) {
-    // Rerun = load the record's inputs back into the generate panel, all
-    // parameters included; the user adjusts and generates again (never an
-    // automatic re-execution).
+    // Rerun = load the record's inputs back into the generate panel: engine,
+    // text, voice, and every stored parameter (minus server-side paths the
+    // sidecar re-injects from the voice). The user adjusts and regenerates —
+    // never an automatic re-execution.
     setRerunHint(null);
+    const params = { ...(record.params ?? {}) };
+    delete params.ref_audio;
+    setRerunParams(Object.keys(params).length > 0 ? params : null);
     setSelectedEngine(record.engine_id);
     setText(record.text);
     if (record.voice_id && voices.some((v) => v.id === record.voice_id)) {
@@ -803,6 +813,13 @@ export default function App() {
         )}
         {generateError && <div className="error">{generateError}</div>}
         {rerunHint && <div className="hint">{rerunHint}</div>}
+        {rerunParams && (
+          <div className="rerun-params">
+            重跑参数已载入：
+            <code>{Object.keys(rerunParams).join("、")}</code>
+            <button onClick={() => setRerunParams(null)}>清除</button>
+          </div>
+        )}
       </section>
 
       {info && (

@@ -191,7 +191,12 @@ class Qwen3TtsMlxEngine(InstallableEngine):
         reader.join(timeout=5)
         if code != 0 or "audio_path" not in result:
             raise RuntimeError(f"qwen3-tts-mlx worker exited with code {code}")
-        return GenerationResult(audio_path=result["audio_path"], sample_rate=result["sample_rate"])
+        return GenerationResult(
+            audio_path=result["audio_path"],
+            sample_rate=result["sample_rate"],
+            model_version=REPO,
+            cost=0.0,  # local synthesis has no per-run cost
+        )
 
 
 def _runtime_env() -> dict:

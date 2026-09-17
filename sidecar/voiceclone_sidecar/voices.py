@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import threading
@@ -25,6 +24,8 @@ import time
 import uuid
 import wave
 from pathlib import Path
+
+from .storage import write_json_atomic
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -127,13 +128,7 @@ class VoiceStore:
                 self._voices[record["id"]] = record
 
     def _save(self) -> None:
-        # Atomic write: a crash mid-write must not lose the whole library.
-        tmp = self.index_path.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps({"voices": list(self._voices.values())}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, self.index_path)
+        write_json_atomic(self.index_path, {"voices": list(self._voices.values())})
 
     # -- CRUD ----------------------------------------------------------------
 

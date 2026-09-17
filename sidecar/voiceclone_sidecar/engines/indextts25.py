@@ -296,7 +296,12 @@ class IndexTts25CudaEngine(InstallableEngine):
             raise RuntimeError(f"CUDA gate refused to start the engine: {exc}") from exc
         if result.get("clipping"):
             log("indextts-2.5: output hit full scale — consider lowering gain on the reference audio")
-        return GenerationResult(audio_path=result["audio_path"], sample_rate=result["sample_rate"])
+        return GenerationResult(
+            audio_path=result["audio_path"],
+            sample_rate=result["sample_rate"],
+            model_version=REPO,
+            cost=0.0,  # local synthesis has no per-run cost
+        )
 
 
 def _runtime_env() -> dict:

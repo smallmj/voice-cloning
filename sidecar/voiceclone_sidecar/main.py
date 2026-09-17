@@ -391,6 +391,11 @@ def create_app(
             "created_at": now_iso(),
             "finished_at": None,
         }
+        # Persist BEFORE synthesis starts: even a sidecar crash mid-run leaves
+        # a record (status "running") instead of vanishing from history.
+        # (The log callback below only appends while the worker thread runs,
+        # strictly before any later persist call — no concurrent mutation.)
+        generation_store.persist(record)
 
         # Synthesis runs in a worker thread: it can take seconds and must not
         # block the event loop (WS log streaming + other requests keep working).
@@ -472,9 +477,10 @@ def create_app(
     @app.delete("/generations/{generation_id}", dependencies=[Depends(require_auth)])
     async def delete_generation(generation_id: str) -> dict:
         # Removing a record also removes its audio artifact from disk.
-        if generation_store.get(generation_id) is None:
-            raise HTTPException(status_code=404, detail="generation not found")
-        generation_store.delete(generation_id)
+        try:
+            generation_store.delete(generation_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="generation not found") from None
         return {"deleted": generation_id}
 
     @app.get("/audio/{filename}", dependencies=[Depends(require_auth)])

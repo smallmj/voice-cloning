@@ -19,10 +19,11 @@ renamed or deleted.
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from pathlib import Path
+
+from .storage import write_json_atomic
 
 
 class GenerationStore:
@@ -56,12 +57,7 @@ class GenerationStore:
         ordered = sorted(
             self._records.values(), key=lambda r: r.get("created_at", ""), reverse=True
         )
-        tmp = self.index_path.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps({"generations": ordered}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, self.index_path)
+        write_json_atomic(self.index_path, {"generations": ordered})
 
     # -- CRUD ----------------------------------------------------------------
 

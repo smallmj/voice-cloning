@@ -47,7 +47,7 @@ from .transcription import (
 )
 from .normalization import normalize_text, normalize_with_flag
 from .engines.dashscope_base import CloudEngineError
-from .registry import InstallableEngine, Registry, default_registry
+from .registry import Engine, InstallableEngine, Registry, default_registry
 from .runtime import paths
 from .secrets import KeyStore, KeyStoreError
 from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
@@ -788,6 +788,41 @@ def create_app(
                     "（复刻模型需要一个已绑定的云端音色）",
                 )
             cloud_voice_id = (voice["bindings"].get(engine.engine_id) or {}).get("voice_id")
+
+            # Issue #12: cloud vendors silently recycle enrolled voices. A
+            # binding that says "ready" is only a cache — probe the vendor
+            # BEFORE relying on it, and rebuild from the local reference the
+            # moment the voice is gone. The probe only runs on engines that
+            # actually implement a health check.
+            rebuilding = cloud_voice_id is not None and (
+                type(engine).check_voice is not Engine.check_voice
+            )
+            if rebuilding:
+                health_loop = asyncio.get_running_loop()
+
+                def _health_log(message: str) -> None:
+                    # Runs in the executor thread — hop back onto the loop.
+                    health_loop.call_soon_threadsafe(
+                        log_bus.publish, generation_id, message
+                    )
+
+                try:
+                    alive = await health_loop.run_in_executor(
+                        None, lambda: engine.check_voice(cloud_voice_id, _health_log)
+                    )
+                except CloudEngineError as exc:
+                    # Not a verdict about the voice (bad key, outage) — the
+                    # existing binding stays untouched and the run fails.
+                    raise HTTPException(
+                        status_code=502, detail=f"云端音色健康检查失败：{exc}"
+                    ) from exc
+                if not alive:
+                    log_bus.publish(
+                        generation_id,
+                        f"云端音色已失效（{engine.engine_id}），正在用本地参考音频自动重建绑定…",
+                    )
+                    cloud_voice_id = None  # fall through to re-enrollment
+
             if not cloud_voice_id:
                 ref_path = voice_store.reference_path(voice["id"])
                 transcript = params.get("ref_text") or (voice.get("reference") or {}).get("transcript")
@@ -804,6 +839,21 @@ def create_app(
                         lambda: engine.bind_reference(ref_path, transcript, _log),
                     )
                 except CloudEngineError as exc:
+                    if rebuilding:
+                        # The dead binding could not be rebuilt: mark THIS
+                        # binding unavailable with the vendor's reason. Other
+                        # engines' bindings are separate records and stay
+                        # ready (issue #12).
+                        voice_store.bind(
+                            voice["id"],
+                            engine.engine_id,
+                            status="unavailable",
+                            extra={"error": str(exc)},
+                        )
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"云端音色重建失败（绑定已标记不可用）：{exc}",
+                        ) from exc
                     raise HTTPException(
                         status_code=502, detail=f"云端音色创建失败：{exc}"
                     ) from exc
@@ -891,8 +941,23 @@ def create_app(
             # Persist the binding only after a real synthesis succeeded —
             # the binding claims the reference works on this engine. A cloud
             # engine's voice_id (minted during this run or an earlier one)
-            # rides along as binding extras.
-            voice_store.bind(voice["id"], engine.engine_id, status="ready", extra=binding_extra)
+            # rides along as binding extras. Extras minted by EARLIER runs
+            # must survive: re-binding with extra=None would silently drop
+            # the cloud voice_id and force a re-enroll (an orphaned cloud
+            # voice) on every subsequent run. Only status/created_at are
+            # refreshed; a stale "error" from a marked-unavailable binding
+            # is cleared now that the run succeeded.
+            previous = voice["bindings"].get(engine.engine_id) or {}
+            carried = {
+                k: v for k, v in previous.items()
+                if k not in {"status", "created_at", "reference_sha256", "error"}
+            }
+            voice_store.bind(
+                voice["id"],
+                engine.engine_id,
+                status="ready",
+                extra={**carried, **(binding_extra or {})},
+            )
             record["binding"] = voice_store.get(voice["id"])["bindings"].get(engine.engine_id)
         return generation_store.persist(record)
 

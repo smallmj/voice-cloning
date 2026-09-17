@@ -150,3 +150,33 @@ def test_synthesis_uses_vd_model_and_designed_voice(tmp_path):
     assert body["input"]["voice"] == "vd-voice-1"
     assert result.audio_path.endswith("g1.wav")
     assert result.model_version == TARGET_MODEL
+
+
+# --- voice health check (issue #12) -----------------------------------------
+
+
+def test_check_voice_alive_and_missing():
+    harness = Harness(
+        [httpx.Response(200, json={"output": {"audio": {"url": "https://cdn.example/a.wav"}}})]
+    )
+    assert harness.engine.check_voice("vd-abc", lambda m: None) is True
+    body = json.loads(harness.requests[0].content)
+    assert body["model"] == TARGET_MODEL
+    assert body["input"]["voice"] == "vd-abc"
+
+    harness2 = Harness(
+        [
+            httpx.Response(
+                400, json={"code": "InvalidParameter", "message": "音色不存在或已被删除"}
+            )
+        ]
+    )
+    assert harness2.engine.check_voice("vd-dead", lambda m: None) is False
+
+
+def test_check_voice_unrelated_failure_raises():
+    harness = Harness(
+        [httpx.Response(401, json={"code": "InvalidApiKey", "message": "无效 API Key"})]
+    )
+    with pytest.raises(CloudEngineError, match="健康检查"):
+        harness.engine.check_voice("vd-abc", lambda m: None)

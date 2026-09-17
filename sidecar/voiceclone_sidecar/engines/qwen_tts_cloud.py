@@ -55,6 +55,35 @@ LANGUAGE_CHOICES = (
 )
 
 
+# Vendor error shapes that mean "this enrolled voice no longer exists"
+# (verified against DashScope error bodies: code/message mention the voice
+# and that it is missing, deleted or expired). Matched on the lowercased
+# code+message blob; anything else must NOT be read as a dead voice.
+VOICE_MISSING_MARKERS = (
+    "不存在",
+    "not exist",
+    "not found",
+    "已删除",
+    "已被删除",
+    "已过期",
+    "expired",
+    "deleted",
+)
+
+
+def _voice_missing_error(resp: httpx.Response) -> bool:
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 - no parseable body: no verdict
+        return False
+    code = str(body.get("code") or "")
+    message = str(body.get("message") or body.get("msg") or "")
+    blob = f"{code} {message}".lower()
+    if "voice" not in blob and "音色" not in blob:
+        return False
+    return any(marker in blob for marker in VOICE_MISSING_MARKERS)
+
+
 def billed_chars(text: str) -> int:
     """Aliyun's char-counting rule: one CJK/full-width char = 2 chars."""
     return sum(2 if ord(c) > 127 else 1 for c in text)
@@ -147,6 +176,34 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._key()}"}
+
+    # -- voice health (issue #12) ------------------------------------------------
+
+    def check_voice(self, voice_id: str, log) -> bool:
+        """Probe whether the bound cloud voice still exists on 百炼.
+
+        Vendors silently recycle enrolled voices; the cheapest documented
+        way to ask "is this voice alive" is a minimal one-character synthesis
+        against the target model. 200 = alive; a vendor error that clearly
+        names the voice as missing/gone = dead; anything else (bad key,
+        quota, outage) is NOT a verdict about the voice and raises instead —
+        the caller must not rebuild a binding on an unrelated failure.
+        Cost trade-off (deliberate): the probe bills the minimum 2 chars
+        (≈ ¥0.00016) per generation — negligible next to the correctness
+        guarantee that a recycled voice never fails a real run.
+        """
+        log(f"cloud: 健康检查云端音色 {voice_id} …")
+        resp = self._http().post(
+            f"{BASE_URL}{SYNTH_PATH}",
+            headers=self._headers(),
+            json={"model": TARGET_MODEL, "input": {"text": "好", "voice": voice_id}},
+        )
+        if resp.status_code == 200:
+            return True
+        if _voice_missing_error(resp):
+            log(f"cloud: 云端音色 {voice_id} 已被厂商删除或失效")
+            return False
+        raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")
 
     # -- synthesis ---------------------------------------------------------------
 

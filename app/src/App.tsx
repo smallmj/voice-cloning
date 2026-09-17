@@ -226,7 +226,10 @@ function VoiceCard({
         <div className="voice-bindings">
           绑定：
           {Object.entries(voice.bindings)
-            .map(([engineId, b]) => `${engineId}（${b.status}）`)
+            .map(
+              ([engineId, b]) =>
+                `${engineId}（${b.status}${b.error ? `：${b.error}` : ""}）`,
+            )
             .join("、")}
         </div>
       )}

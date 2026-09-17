@@ -160,6 +160,10 @@ class FakeKeyEngine(FakeEngine):
         log("fake-key: enrolling reference")
         return {"voice_id": f"fake-voice-{uuid.uuid4().hex[:8]}"}
 
+    def check_voice(self, voice_id: str, log) -> bool:
+        log(f"fake-key: probing voice {voice_id}")
+        return True
+
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
         voice_id = request.params.get("voice_id")
         if not voice_id:
@@ -209,3 +213,60 @@ class FakeFailingDesignEngine(FakeEngine):
     def design_voice(self, description: str, preview_text: str, log) -> dict:
         log("fake-failing-design: about to fail")
         raise OSError("disk exploded")
+
+
+class FakeVanishingVoiceEngine(FakeKeyEngine):
+    """Test seam (issue #12): the vendor silently deletes each enrolled
+    voice after its first successful synthesis — exactly the "回收音色"
+    behavior the health check must survive. Generation N+1 must therefore
+    rebuild the binding from the local reference without user intervention."""
+
+    engine_id = "fake-vanishing-voice"
+    display_name = "Fake Engine (cloud voice silently recycled)"
+
+    def __init__(self, output_dir: Path | None = None) -> None:
+        super().__init__(output_dir)
+        self.deleted: set[str] = set()
+
+    def check_voice(self, voice_id: str, log) -> bool:
+        log(f"fake-vanishing-voice: probing voice {voice_id}")
+        return voice_id not in self.deleted
+
+    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
+        voice_id = request.params.get("voice_id")
+        result = super().synthesize(request, log)
+        # Simulate the vendor's GC: the voice existed for this run, then it
+        # is silently gone.
+        self.deleted.add(voice_id)
+        return result
+
+
+class FakeBrokenRebuildEngine(FakeKeyEngine):
+    """Test seam (issue #12): every bound voice probes as dead and the
+    re-enrollment itself fails — the sidecar must mark THIS binding
+    unavailable with a clear reason while leaving every other binding
+    of the same voice untouched."""
+
+    engine_id = "fake-broken-rebuild"
+    display_name = "Fake Engine (rebuild always fails)"
+
+    def __init__(self, output_dir: Path | None = None) -> None:
+        super().__init__(output_dir)
+        # The first enrollment succeeds (so a binding exists at all, like it
+        # would for a user whose voice worked once); every rebuild after that
+        # fails at the vendor.
+        self.rebuild_attempted = False
+
+    def check_voice(self, voice_id: str, log) -> bool:
+        log(f"fake-broken-rebuild: probing voice {voice_id}")
+        return not self.rebuild_attempted
+
+    def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
+        if self.rebuild_attempted:
+            log("fake-broken-rebuild: rebuild attempted")
+            from .dashscope_base import CloudEngineError
+
+            raise CloudEngineError("模拟厂商拒绝重建：参考音频校验未通过（HTTP 400）")
+        self.rebuild_attempted = True
+        log("fake-broken-rebuild: enrolling reference")
+        return {"voice_id": f"fake-voice-{uuid.uuid4().hex[:8]}"}

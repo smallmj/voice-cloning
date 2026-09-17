@@ -207,3 +207,53 @@ def test_param_specs_drive_the_ui_contract():
     specs = Qwen3TtsVcCloudEngine().param_specs()
     assert [s.to_dict()["name"] for s in specs] == ["language_type"]
     assert specs[0].to_dict()["choices"][0] == "auto"
+
+
+# --- voice health check (issue #12) -----------------------------------------
+
+
+def test_check_voice_alive_returns_true():
+    harness = Harness(
+        [httpx.Response(200, json={"output": {"audio": {"url": "https://cdn.example/a.wav"}}})]
+    )
+    assert harness.engine.check_voice("vc-abc", lambda m: None) is True
+    body = json.loads(harness.requests[0].content)
+    # The probe is a minimal synthesis against the target model with the
+    # bound voice — the cheapest documented "is this voice alive" call.
+    assert body["model"] == TARGET_MODEL
+    assert body["input"]["voice"] == "vc-abc"
+    assert body["input"]["text"] == "好"
+
+
+def test_check_voice_missing_returns_false():
+    harness = Harness(
+        [
+            httpx.Response(
+                400,
+                json={"code": "InvalidParameter", "message": "voice 不存在或已被删除"},
+            )
+        ]
+    )
+    assert harness.engine.check_voice("vc-dead", lambda m: None) is False
+
+
+def test_check_voice_unrelated_failure_raises():
+    harness = Harness(
+        [httpx.Response(401, json={"code": "InvalidApiKey", "message": "无效 API Key"})]
+    )
+    with pytest.raises(CloudEngineError, match="健康检查"):
+        harness.engine.check_voice("vc-abc", lambda m: None)
+
+
+def test_voice_missing_error_never_fires_without_voice_mention():
+    # A generic vendor error (e.g. text too long) must NOT be read as a
+    # dead voice — the health check raises instead of rebuilding.
+    from voiceclone_sidecar.engines.qwen_tts_cloud import _voice_missing_error
+
+    assert _voice_missing_error(
+        httpx.Response(400, json={"code": "InvalidParameter", "message": "voice xxx 已删除"})
+    )
+    assert not _voice_missing_error(
+        httpx.Response(400, json={"code": "InvalidParameter", "message": "文本过长"})
+    )
+    assert not _voice_missing_error(httpx.Response(500, content=b"boom"))

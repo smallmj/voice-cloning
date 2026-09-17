@@ -36,6 +36,7 @@ import httpx
 from ..capabilities import Capabilities
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .dashscope_base import BASE_URL, CloudEngineError, DashScopeEngine
+from .qwen_tts_cloud import _voice_missing_error
 
 ENROLL_PATH = "/services/audio/tts/customization"
 SYNTH_PATH = "/services/aigc/multimodal-generation/generation"
@@ -135,6 +136,29 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
             "sample_rate": sample_rate,
             "transcript": preview_text or None,
         }
+
+    # -- voice health (issue #12) ------------------------------------------------
+
+    def check_voice(self, voice_id: str, log) -> bool:
+        """Probe whether the designed cloud voice still exists on 百炼.
+
+        Same minimal-synthesis probe as the cloning engine (issue #12). A
+        designed voice can never be rebuilt from a reference — the rebuild
+        path fails with the explicit design-again reason, and the sidecar
+        marks the binding unavailable instead of failing mid-run.
+        """
+        log(f"cloud-design: 健康检查云端音色 {voice_id} …")
+        resp = self._http().post(
+            f"{BASE_URL}{SYNTH_PATH}",
+            headers=self._headers(),
+            json={"model": TARGET_MODEL, "input": {"text": "好", "voice": voice_id}},
+        )
+        if resp.status_code == 200:
+            return True
+        if _voice_missing_error(resp):
+            log(f"cloud-design: 云端音色 {voice_id} 已被厂商删除或失效")
+            return False
+        raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")
 
     # -- binding ---------------------------------------------------------------
 

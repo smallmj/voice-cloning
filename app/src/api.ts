@@ -121,6 +121,11 @@ export interface VoiceBinding {
   status: string;
   reference_sha256: string;
   created_at: string;
+  // Issue #12: when the vendor recycled the cloud voice and the automatic
+  // rebuild failed, the binding is marked "unavailable" and `error` holds
+  // the user-facing reason.
+  voice_id?: string;
+  error?: string | null;
 }
 
 export interface VoiceAvatar {

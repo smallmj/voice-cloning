@@ -71,6 +71,22 @@ class Engine(abc.ABC):
             f"engine {self.engine_id} does not support explicit reference binding"
         )
 
+    def check_voice(self, voice_id: str, log) -> bool:
+        """Probe whether a previously minted binding voice_id still exists.
+
+        Cloud vendors silently recycle enrolled voices (some after 7 days
+        idle, some after a year); issue #12 asks the engine BEFORE every
+        generation so a dead binding is rebuilt from the local reference
+        instead of failing mid-run. Engines that mint no vendor-side voice
+        (local engines) don't need this; the sidecar never calls it on an
+        engine that does not implement it. Returns True when the voice is
+        alive, False when it is definitively gone; any other failure (bad
+        key, vendor outage) raises.
+        """
+        raise NotImplementedError(
+            f"engine {self.engine_id} does not support cloud voice health checks"
+        )
+
     def design_voice(self, description: str, preview_text: str, log) -> dict:
         """Create a voice from a text description (issue #11) and return
         ``{"voice_id", "sample_audio_path", "transcript"}``.
@@ -190,4 +206,13 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
         from .engines.fake import FakeFailingDesignEngine
 
         registry.register(FakeFailingDesignEngine(output_dir=output_dir))
+
+        # Contract-test seams (issue #12): one whose cloud voice is silently
+        # recycled after each synthesis (health check must rebuild the
+        # binding), and one whose rebuild itself always fails (the binding
+        # must be marked unavailable with a clear reason, others untouched).
+        from .engines.fake import FakeBrokenRebuildEngine, FakeVanishingVoiceEngine
+
+        registry.register(FakeVanishingVoiceEngine(output_dir=output_dir))
+        registry.register(FakeBrokenRebuildEngine(output_dir=output_dir))
     return registry

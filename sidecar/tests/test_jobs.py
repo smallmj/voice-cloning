@@ -32,10 +32,12 @@ def _wait_terminal(client: httpx.Client, job_id: str, timeout: float = 60.0) -> 
     raise AssertionError(f"job {job_id} did not finish within {timeout}s")
 
 
-def _create_job(client: httpx.Client, engine_id: str, text: str, voice_id=None) -> dict:
+def _create_job(client: httpx.Client, engine_id: str, text: str, voice_id=None, params=None) -> dict:
     body = {"engine_id": engine_id, "text": text}
     if voice_id:
         body["voice_id"] = voice_id
+    if params:
+        body["params"] = params
     r = client.post("/generations/jobs", json=body)
     assert r.status_code == 200, r.text
     return r.json()
@@ -126,6 +128,19 @@ def test_job_splits_long_text_and_concatenates_audio(client):
     with wave.open(io.BytesIO(audio.content), "rb") as w:
         assert w.getnframes() > 0
         assert w.getframerate() == job["sample_rate"]
+
+
+def test_job_applies_engine_params_to_every_segment(client):
+    """Queueing must not alter single-segment behavior: user-facing engine
+    parameters ride along on EVERY segment, exactly as one plain generation
+    would receive them."""
+    job = _create_job(client, "fake", "第一句话。" * 30, params={"fake_mode": "fast"})
+    assert job["params"] == {"fake_mode": "fast"}
+    job = _wait_terminal(client, job["id"])
+    assert job["status"] == "succeeded", job
+    for seg in job["segments"]:
+        record = client.get(f"/generations/{seg['generation_id']}").json()
+        assert record["params"]["fake_mode"] == "fast"
 
 
 def test_single_segment_text_via_plain_generations_is_unchanged(client):

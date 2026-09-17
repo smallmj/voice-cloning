@@ -831,6 +831,7 @@ function JobsSection({
 }) {
   const [jobs, setJobs] = useState<GenerationJob[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   // Latest callback without re-subscribing the poller on every render.
   const settledRef = useRef(onSettled);
   settledRef.current = onSettled;
@@ -866,10 +867,16 @@ function JobsSection({
   }, [baseUrl, token]);
 
   async function cancel(id: string) {
-    await fetch(`${baseUrl}/jobs/${id}/cancel`, {
+    const res = await fetch(`${baseUrl}/jobs/${id}/cancel`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+      setCancelError(detail?.detail ?? `取消失败（HTTP ${res.status}）`);
+    } else {
+      setCancelError(null);
+    }
   }
 
   function progress(j: GenerationJob): string {
@@ -883,6 +890,7 @@ function JobsSection({
       <p className="section-hint">
         超长稿件会按引擎单次字符上限自动分段排队生成，完成后拼接为一条完整音频。
       </p>
+      {cancelError && <div className="error">{cancelError}</div>}
       {jobs && jobs.length === 0 && <div className="history-empty">暂无分段任务。</div>}
       <div className="jobs-list">
         {(jobs ?? []).map((j) => (

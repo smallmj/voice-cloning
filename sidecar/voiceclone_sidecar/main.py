@@ -909,6 +909,10 @@ def create_app(
         from .registry import GenerationRequest
 
         def _looks_like_rate_limit(exc: Exception) -> bool:
+            # Only vendor (cloud) errors count — a local crash that happens
+            # to mention "429" must not be retried (issue #13 review).
+            if not isinstance(exc, CloudEngineError):
+                return False
             msg = str(exc).lower()
             return any(
                 marker in msg
@@ -1033,7 +1037,10 @@ def create_app(
             seg["status"] = "running"
             try:
                 record = await run_generation(
-                    job["engine_id"], seg["text"], job["voice_id"] or None, None
+                    job["engine_id"],
+                    seg["text"],
+                    job["voice_id"] or None,
+                    job["params"] or None,
                 )
             except Exception as exc:  # noqa: BLE001 - recorded on the job
                 seg["status"] = "failed"
@@ -1120,7 +1127,14 @@ def create_app(
         if job_worker_task is None or job_worker_task.done():
             job_worker_task = asyncio.create_task(job_worker())
 
-    def _segment_plan(engine_id: str, text: str, voice_id: str | None) -> tuple[object, list[str]]:
+    def _segment_plan(
+        engine_id: str, text: str, voice_id: str | None
+    ) -> tuple[Engine, dict | None, list[str]]:
+        """Validate the job inputs up front and cut the segment plan.
+
+        The voice checks mirror the ones run_generation enforces anyway —
+        here they fail fast BEFORE anything is queued, instead of failing
+        the first segment minutes later."""
         engine = registry.get(engine_id)
         if engine is None:
             raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
@@ -1139,27 +1153,31 @@ def create_app(
                 )
         max_chars = engine.capabilities().max_chars_per_request
         segments = split_text(text, max_chars) if max_chars else [text]
-        return voice, segments
+        return engine, voice, segments
 
     @app.post("/generations/jobs", dependencies=[Depends(require_auth)])
     async def create_generation_job(body: dict) -> dict:
         text = body.get("text")
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(status_code=422, detail="text is required")
-        voice, segments = _segment_plan(
+        params = body.get("params")
+        if params is not None and not isinstance(params, dict):
+            raise HTTPException(status_code=422, detail="params must be an object")
+        engine, voice, segments = _segment_plan(
             body.get("engine_id") or "", text, body.get("voice_id")
         )
         job = new_job(
-            body.get("engine_id") or "",
+            engine.engine_id,
             body.get("voice_id"),
             voice["name"] if voice else None,
             text,
             segments,
+            params,
         )
         job["created_at"] = now_iso()
         job_store.add(job)
         _ensure_worker()
-        max_chars = registry.get(body.get("engine_id") or "").capabilities().max_chars_per_request
+        max_chars = engine.capabilities().max_chars_per_request
         log_bus.publish(
             job["id"],
             f"任务已入队：{len(segments)} 个分段（每段 ≤ {max_chars or len(text)} 字符）",

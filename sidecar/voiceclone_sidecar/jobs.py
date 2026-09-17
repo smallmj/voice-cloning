@@ -22,6 +22,7 @@ def new_job(
     voice_name: str | None,
     text: str,
     segments: list[str],
+    params: dict | None = None,
 ) -> dict:
     """Build one queued job. Private keys (``_``-prefixed) never leave the
     sidecar — ``public_view`` strips them from every HTTP response."""
@@ -31,6 +32,10 @@ def new_job(
         "voice_id": voice_id,
         "voice_name": voice_name,
         "text": text,
+        # Every segment runs through the SAME pipeline as a plain generation,
+        # so user-facing engine parameters apply per segment unchanged
+        # (issue #13: queueing must not alter single-segment behavior).
+        "params": dict(params or {}),
         "status": "queued",
         "segment_count": len(segments),
         "segments": [

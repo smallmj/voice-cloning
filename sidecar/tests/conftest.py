@@ -8,6 +8,7 @@ real default registry.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -51,10 +52,7 @@ def sidecar(tmp_path_factory):
             "--audio-dir",
             str(audio_dir),
         ],
-        env={
-            **__import__("os").environ,
-            "VOICECLONE_TEST_ENGINES": "1",
-        },
+        env={**os.environ, "VOICECLONE_TEST_ENGINES": "1"},
         cwd=SIDECAR_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

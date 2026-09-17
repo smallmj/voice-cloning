@@ -415,7 +415,9 @@ def create_app(
     @app.put("/transcription/provider", dependencies=[Depends(require_auth)])
     async def set_transcription_provider(body: dict) -> dict:
         provider = body.get("provider")
-        if provider not in {"local"} | {e["id"] for e in _transcription_providers()["engines"]}:
+        # Validate against the cheap engine-id set — no install-state disk
+        # reads just to check a name.
+        if provider not in {"local"} | {e.engine_id for e in engine_transcribers(registry)}:
             raise HTTPException(
                 status_code=422,
                 detail=f"未知转写提供方：{provider!r}；可选 local 或已注册的转写引擎",
@@ -485,7 +487,9 @@ def create_app(
             text = await asyncio.get_running_loop().run_in_executor(
                 None, _transcribe_voice_sync, voice_id, provider
             )
-        except (TranscriptionError, KeyError) as exc:
+        except KeyError:
+            raise HTTPException(status_code=404, detail="voice not found") from None
+        except TranscriptionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return voice_store.set_transcript(voice_id, text)
 

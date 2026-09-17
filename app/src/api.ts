@@ -122,10 +122,6 @@ export interface Voice {
 
 // --- diagnostics + transcription (issue #8) ---
 
-export interface CapabilitiesRequiresRefText {
-  requires_reference_text?: boolean;
-}
-
 export interface DiagnosticItem {
   id: "snr" | "speaker" | "clipping" | "silence" | string;
   status: "good" | "warn" | "bad";

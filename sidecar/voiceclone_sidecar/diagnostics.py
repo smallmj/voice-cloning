@@ -29,9 +29,7 @@ import tempfile
 import wave
 from pathlib import Path
 
-TARGET_RATE = 16000
-FRAME_WIN = int(0.04 * TARGET_RATE)  # 40ms analysis window
-FRAME_HOP = int(0.02 * TARGET_RATE)  # 20ms hop
+TARGET_RATE = 16000  # analysis rate: everything above is box-average decimated
 MIN_SILENCE_SECONDS = 0.5
 FULL_SCALE = 32767.0
 CLIP_WARN_RATIO = 1e-4
@@ -46,7 +44,7 @@ class DiagnosticError(ValueError):
     """Raised when the audio cannot be analyzed; message is user-facing."""
 
 
-def _decode_wav_stdlib(path: Path) -> tuple[list[float], int]:
+def _decode_wav_stdlib(path: Path, max_seconds: float | None = None) -> tuple[list[float], int]:
     try:
         with wave.open(str(path), "rb") as w:
             rate = w.getframerate()
@@ -57,7 +55,12 @@ def _decode_wav_stdlib(path: Path) -> tuple[list[float], int]:
                     f"诊断只支持 16-bit PCM WAV（该文件是 {sampwidth * 8}-bit）；"
                     "请先用录音软件另存为 16-bit WAV"
                 )
-            raw = w.readframes(w.getnframes())
+            # Cap the decode: diagnostics never need more than the analysis
+            # limit, and a long recording must not be read into memory whole.
+            nframes = w.getnframes()
+            if max_seconds is not None:
+                nframes = min(nframes, int(max_seconds * rate) + 1)
+            raw = w.readframes(nframes)
     except (wave.Error, EOFError) as exc:
         raise DiagnosticError(f"WAV 文件无法解析：{exc}") from exc
     n = len(raw) // (2 * n_channels)
@@ -73,24 +76,25 @@ def _decode_wav_stdlib(path: Path) -> tuple[list[float], int]:
     return samples, rate
 
 
-def _resample(samples: list[float], rate: int) -> list[float]:
-    if rate == TARGET_RATE:
-        return samples
-    if rate < TARGET_RATE:
-        return samples  # already below target: analyze at native rate
-    factor = rate // TARGET_RATE or 1
-    if factor <= 1:
-        return samples
+def _resample(samples: list[float], rate: int) -> tuple[list[float], int]:
+    """Box-average decimate toward TARGET_RATE; returns (samples, new_rate).
+
+    All downstream window/hop sizes are derived from the RETURNED rate, so a
+    44.1/48 kHz file is analyzed with the same 40ms/20ms frames as 16 kHz.
+    """
+    factor = max(1, round(rate / TARGET_RATE))
+    if factor == 1:
+        return samples, rate
     out: list[float] = []
     for i in range(0, len(samples) - factor + 1, factor):
         out.append(sum(samples[i:i + factor]) / factor)  # box-average = cheap anti-alias
-    return out
+    return out, rate // factor
 
 
-def _decode_any(path: Path) -> tuple[list[float], int]:
+def _decode_any(path: Path, max_seconds: float | None = None) -> tuple[list[float], int]:
     """WAV through the stdlib; everything else via ffmpeg into a temp file."""
     if path.suffix.lower() == ".wav":
-        return _decode_wav_stdlib(path)
+        return _decode_wav_stdlib(path, max_seconds)
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise DiagnosticError(
@@ -100,9 +104,12 @@ def _decode_any(path: Path) -> tuple[list[float], int]:
     with tempfile.TemporaryDirectory(prefix="vc-diag-") as td:
         tmp = Path(td) / "decode.wav"
         try:
+            cmd = [ffmpeg, "-y", "-v", "error", "-i", str(path)]
+            if max_seconds is not None:
+                cmd += ["-t", str(max_seconds)]
+            cmd += ["-ac", "1", "-ar", str(TARGET_RATE), "-c:a", "pcm_s16le", str(tmp)]
             subprocess.run(
-                [ffmpeg, "-y", "-v", "error", "-i", str(path),
-                 "-ac", "1", "-ar", str(TARGET_RATE), "-c:a", "pcm_s16le", str(tmp)],
+                cmd,
                 capture_output=True, timeout=120, check=True,
             )
         except (subprocess.SubprocessError, OSError) as exc:
@@ -110,15 +117,16 @@ def _decode_any(path: Path) -> tuple[list[float], int]:
         return _decode_wav_stdlib(tmp)
 
 
-def _frame_db(samples: list[float]) -> list[float]:
-    """RMS in dBFS per analysis frame."""
+def _frame_db(samples: list[float], rate: int) -> list[float]:
+    """RMS in dBFS per analysis frame (40ms window, 20ms hop at `rate`)."""
+    win = int(0.04 * rate)
+    hop = int(0.02 * rate)
     out = []
-    peak = 10.0 ** (-100 / 20)
-    for start in range(0, len(samples) - FRAME_WIN + 1, FRAME_HOP):
+    for start in range(0, len(samples) - win + 1, hop):
         acc = 0.0
-        for v in samples[start:start + FRAME_WIN]:
+        for v in samples[start:start + win]:
             acc += v * v
-        rms = math.sqrt(acc / FRAME_WIN)
+        rms = math.sqrt(acc / win)
         out.append(max(20 * math.log10(max(rms, 1e-9)), -100.0))
     return out
 
@@ -130,12 +138,16 @@ def _percentile(sorted_vals: list[float], p: float) -> float:
     return sorted_vals[idx]
 
 
-def _f0_of_frame(frame: list[float], rate: int) -> float | None:
-    """Autocorrelation pitch of one frame; None when unvoiced/uncertain."""
+def _f0_and_harmonicity(frame: list[float], rate: int) -> tuple[float | None, float]:
+    """Autocorrelation pitch + normalized peak of one frame.
+
+    Returns (f0_hz, harmonicity) where harmonicity = best_r / r0 (0..1).
+    (None, 0.0) means unvoiced/uncertain.
+    """
     n = len(frame)
     r0 = sum(v * v for v in frame)
     if r0 <= 0:
-        return None
+        return None, 0.0
     lag_min = max(2, int(rate / PITCH_MAX_HZ))
     lag_max = min(n - 1, int(rate / PITCH_MIN_HZ))
     best_lag, best = 0, 0.0
@@ -145,9 +157,10 @@ def _f0_of_frame(frame: list[float], rate: int) -> float | None:
             acc += frame[i] * frame[i + lag]
         if acc > best:
             best, best_lag = acc, lag
-    if best_lag == 0 or best / r0 < 0.5:
-        return None
-    return rate / best_lag
+    h = best / r0
+    if best_lag == 0 or h < 0.5:
+        return None, max(0.0, h)
+    return rate / best_lag, min(1.0, h)
 
 
 def _bimodal_split(f0s: list[float]) -> list[list[float]] | None:
@@ -171,20 +184,23 @@ def _bimodal_split(f0s: list[float]) -> list[list[float]] | None:
 
 def analyze_audio(path: Path, analysis_limit_seconds: float = 120.0) -> dict:
     """Analyze one audio file. Purely read-only; returns facts + diagnostics."""
-    samples, rate = _decode_any(path)
+    samples, raw_rate = _decode_any(path, analysis_limit_seconds)
     # Cap the analysis window: diagnostics must stay fast on long files, and
     # the cap only trims the *analysis*, never the file itself.
-    limit = int(analysis_limit_seconds * rate)
+    limit = int(analysis_limit_seconds * raw_rate)
     if len(samples) > limit:
         samples = samples[:limit]
+    samples, rate = _resample(samples, raw_rate)
     duration = len(samples) / rate
-    frames = _frame_db(samples)
+    win = int(0.04 * rate)
+    hop = int(0.02 * rate)
+    frames = _frame_db(samples, rate)
     if not frames:
         raise DiagnosticError("音频过短，无法诊断")
     ordered = sorted(frames)
     noise_db = _percentile(ordered, 0.10)
     speech_db = _percentile(ordered, 0.90)
-    snr_db = round(speech_db - noise_db, 1)
+    snr_db = speech_db - noise_db
 
     # -- silence -------------------------------------------------------------
     silence_threshold = max(noise_db + 10.0, speech_db - 40.0)
@@ -195,16 +211,16 @@ def analyze_audio(path: Path, analysis_limit_seconds: float = 120.0) -> dict:
             if run_start is None:
                 run_start = i
         elif run_start is not None:
-            length = (i - run_start) * FRAME_HOP / rate
+            length = (i - run_start) * hop / rate
             if length >= MIN_SILENCE_SECONDS:
-                segments.append((run_start * FRAME_HOP / rate,
-                                 run_start * FRAME_HOP / rate + length))
+                segments.append((run_start * hop / rate,
+                                 run_start * hop / rate + length))
             run_start = None
     if run_start is not None:
-        length = (len(frames) - run_start) * FRAME_HOP / rate
+        length = (len(frames) - run_start) * hop / rate
         if length >= MIN_SILENCE_SECONDS:
-            segments.append((run_start * FRAME_HOP / rate,
-                             run_start * FRAME_HOP / rate + length))
+            segments.append((run_start * hop / rate,
+                             run_start * hop / rate + length))
     silence_total = sum(e - s for s, e in segments)
     edge_silence = 0.0
     if segments:
@@ -233,17 +249,29 @@ def analyze_audio(path: Path, analysis_limit_seconds: float = 120.0) -> dict:
             prev_extreme, clip_run = False, 0
     clip_ratio = clip_count / max(1, len(samples))
 
-    # -- speaker count (heuristic) --------------------------------------------
+    # -- speaker count (heuristic) + harmonicity SNR ---------------------------
+    # One pitch frame per 100ms of audio; the normalized autocorrelation peak
+    # doubles as a harmonicity estimate, which gives an SNR reading even when
+    # the recording has no pauses to compare speech against (a percentile
+    # spread alone collapses to ~0 dB for a constant-level signal).
     f0s: list[float] = []
-    pitch_hop = FRAME_HOP * 5  # one pitch frame per 100ms
-    for start in range(0, len(samples) - FRAME_WIN + 1, pitch_hop):
-        db = frames[min(len(frames) - 1, start // FRAME_HOP)]
-        if db < speech_db - 15:
+    harmonicity: list[float] = []
+    pitch_hop = hop * 5
+    for start in range(0, len(samples) - win + 1, pitch_hop):
+        fi = min(len(frames) - 1, start // hop)
+        if frames[fi] < speech_db - 15:
             continue
-        f0 = _f0_of_frame(samples[start:start + FRAME_WIN], rate)
+        f0, h = _f0_and_harmonicity(samples[start:start + win], rate)
         if f0 is not None:
             f0s.append(f0)
+            harmonicity.append(h)
     clusters = _bimodal_split(f0s) if len(f0s) >= 10 else None
+
+    if len(harmonicity) >= 10:
+        h = sum(harmonicity) / len(harmonicity)
+        if 0.05 < h < 0.995:
+            snr_db = max(snr_db, 10 * math.log10(h / (1 - h)))
+    snr_db = round(min(snr_db, 60.0), 1)
 
     diagnostics: list[dict] = []
 

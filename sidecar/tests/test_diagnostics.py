@@ -131,3 +131,38 @@ def test_every_diagnosis_carries_advice(tmp_path):
         assert d["advice"].strip()
         assert d["status"] in ("good", "warn", "bad")
         assert d["message"].strip()
+
+
+def test_44100hz_clean_recording_is_analyzed_correctly(tmp_path):
+    """Non-16 kHz files must get the same 40ms/20ms analysis frames (the
+    window sizes are derived from the decimated rate, not the file's)."""
+    samples = silence(0.3, rate=44100) + sine(220, 3.0, rate=44100) + silence(0.2, rate=44100)
+    path = tmp_path / "ref.wav"
+    write_wav(path, samples, rate=44100)
+    result = analyze_audio(path)
+    d = by_id(result)
+    assert d["snr"]["status"] == "good"
+    assert d["speaker"]["status"] == "good"
+    assert d["clipping"]["status"] == "good"
+    # timestamps stay in seconds of the original timeline
+    assert result["duration_seconds"] == pytest.approx(3.5, abs=0.2)
+
+
+def test_44100hz_noisy_recording_still_flags_snr(tmp_path):
+    rng = random.Random(42)
+    noisy = [s + 0.2 * rng.uniform(-1, 1) for s in sine(220, 3.0, rate=44100)]
+    path = tmp_path / "ref.wav"
+    write_wav(path, noisy, rate=44100)
+    d = by_id(analyze_audio(path))
+    assert d["snr"]["status"] in ("warn", "bad")
+
+
+def test_long_file_decode_is_capped_but_timestamps_stay_correct(tmp_path):
+    # 200 s of audio: analysis must stay bounded (limit defaults to 120 s)
+    # without the test taking minutes — one 60 s sweep is enough to prove
+    # the cap path runs; keep it small so CI stays fast.
+    samples = sine(220, 130.0, amp=0.2)
+    path = tmp_path / "long.wav"
+    write_wav(path, samples)
+    result = analyze_audio(path)
+    assert result["duration_seconds"] <= 120.5

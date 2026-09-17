@@ -165,3 +165,29 @@ def test_engines_expose_requires_reference_text(client):
     engines = {e["id"]: e for e in client.get("/engines").json()["engines"]}
     assert engines["fake"]["capabilities"]["requires_reference_text"] is False
     assert engines["fake-ref-text"]["capabilities"]["requires_reference_text"] is True
+
+
+def test_generation_reuses_stored_transcript_without_retranscribing(client):
+    """A stored transcript is reused even when the current provider is
+    unavailable — the auto-fill never re-transcribes behind the user's back."""
+    voice = create_voice(client, seconds=4.0)
+    # First: transcribe via the fake engine provider (transcript gets stored).
+    client.put("/transcription/provider", json={"provider": "fake"})
+    client.post(f"/voices/{voice['id']}/transcribe", json={})
+    stored = client.get(f"/voices/{voice['id']}").json()["reference"]["transcript"]
+    # Then: switch to the (uninstalled) local provider and generate — the
+    # stored transcript must be used as-is, no new transcription, no 409.
+    client.put("/transcription/provider", json={"provider": "local"})
+    r = client.post(
+        "/generations",
+        json={"engine_id": "fake-ref-text", "text": "你好", "voice_id": voice["id"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["params"]["ref_text"] == stored
+    client.put("/transcription/provider", json={"provider": "local"})
+
+
+def test_transcribe_unknown_voice_returns_404(client):
+    r = client.post("/voices/nope/transcribe", json={})
+    assert r.status_code == 404
+    assert r.json()["detail"] == "voice not found"

@@ -88,14 +88,9 @@ class TranscriptionSettings:
 # huggingface_hub as a dependency of the tool). HF first, hf-mirror fallback
 # — same mirror order the engine weight downloads use.
 _SNAPSHOT_SCRIPT = """
-import json, os, sys
-repo = sys.argv[1]
+import json, sys
 from huggingface_hub import snapshot_download
-try:
-    p = snapshot_download(repo)
-except Exception:
-    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-    p = snapshot_download(repo)
+p = snapshot_download(sys.argv[1])
 print("RESULT: " + json.dumps({"path": p}))
 """
 
@@ -170,10 +165,23 @@ class LocalTranscriber:
             venv_ = uvman.create_venv(uv, self.root, LOCAL_TOOL_ID, spec, env=self.env, log=log)
             python = uvman.venv_python(venv_)
             log(f"weights: downloading {self.cfg['model_repo']} (HF → hf-mirror)")
-            proc = subprocess.run(
-                [str(python), "-c", _SNAPSHOT_SCRIPT, self.cfg["model_repo"]],
-                capture_output=True, text=True, timeout=3600,
-            )
+
+            import os
+
+            def _snapshot(env_extra: dict | None) -> subprocess.CompletedProcess:
+                env = {**os.environ, **(env_extra or {})}
+                return subprocess.run(
+                    [str(python), "-c", _SNAPSHOT_SCRIPT, self.cfg["model_repo"]],
+                    capture_output=True, text=True, timeout=3600, env=env,
+                )
+
+            # The endpoint must be in the CHILD's environment BEFORE
+            # huggingface_hub imports (its constants snapshot at import time),
+            # so the mirror fallback is a second subprocess, not a re-set env.
+            proc = _snapshot()
+            if proc.returncode != 0:
+                log("weights: huggingface.co failed; retrying via hf-mirror.com")
+                proc = _snapshot({"HF_ENDPOINT": "https://hf-mirror.com"})
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"model download failed: {proc.stdout.strip()[-500:]} {proc.stderr.strip()[-500:]}"

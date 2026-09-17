@@ -518,6 +518,7 @@ export default function App() {
   const [rerunHint, setRerunHint] = useState<string | null>(null);
   const [transProviders, setTransProviders] = useState<TranscriptionProviders | null>(null);
   const [localTransInstalling, setLocalTransInstalling] = useState(false);
+  const [transError, setTransError] = useState<string | null>(null);
   // Parameters carried back from a rerun: everything the record stored except
   // server-side paths the sidecar re-injects itself (ref_audio). They ride
   // along on the next generate call unless the user clears them.
@@ -655,10 +656,20 @@ export default function App() {
   useEffect(() => {
     if (!info || !localTransInstalling) return;
     const t = setInterval(async () => {
-      const res = await fetch(`${info.baseUrl}/transcription/local/status`, {
-        headers: { Authorization: `Bearer ${info.token}` },
-      });
-      if (!res.ok) return;
+      let res: Response;
+      try {
+        res = await fetch(`${info.baseUrl}/transcription/local/status`, {
+          headers: { Authorization: `Bearer ${info.token}` },
+        });
+      } catch {
+        return; // sidecar restarting — keep polling
+      }
+      if (!res.ok) {
+        // A non-ok status ends the install lifecycle; never spin forever.
+        setLocalTransInstalling(false);
+        setTransError(`查询本地转写安装状态失败（HTTP ${res.status}）`);
+        return;
+      }
       const st = (await res.json()) as { installed: boolean; installing: boolean };
       if (!st.installing) {
         setLocalTransInstalling(false);
@@ -671,25 +682,39 @@ export default function App() {
 
   async function setTransProvider(provider: string) {
     if (!info) return;
+    setTransError(null);
     const res = await fetch(`${info.baseUrl}/transcription/provider`, {
       method: "PUT",
       headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
     });
-    if (res.ok) void refreshTransProviders();
+    if (res.ok) {
+      void refreshTransProviders();
+    } else {
+      setTransError(`切换转写提供方失败（HTTP ${res.status}）`);
+    }
   }
 
   async function installLocalTranscriber() {
     if (!info || localTransInstalling) return;
     setLocalTransInstalling(true);
+    setTransError(null);
     setLogsOpen(true);
+    let res: Response;
     try {
-      await fetch(`${info.baseUrl}/transcription/local/install`, {
+      res = await fetch(`${info.baseUrl}/transcription/local/install`, {
         method: "POST",
         headers: { Authorization: `Bearer ${info.token}` },
       });
-    } catch {
+    } catch (err) {
       setLocalTransInstalling(false);
+      setTransError(`发起本地转写安装失败：${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+      setLocalTransInstalling(false);
+      setTransError(detail?.detail ?? `发起本地转写安装失败（HTTP ${res.status}）`);
     }
   }
 
@@ -928,6 +953,7 @@ export default function App() {
               </span>
             </>
           )}
+          {transError && <div className="error">{transError}</div>}
         </div>
       </section>
 

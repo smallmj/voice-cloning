@@ -47,10 +47,16 @@ export interface GenerationRecord {
   id: string;
   engine_id: string;
   text: string;
+  normalized_text?: string;
   status: "running" | "succeeded" | "failed";
   audio_url?: string;
   sample_rate?: number;
   error?: string;
+}
+
+export interface NormalizeResult {
+  normalized: string;
+  changed: boolean;
 }
 
 export interface LogEvent {

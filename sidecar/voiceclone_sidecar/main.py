@@ -24,6 +24,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from .normalization import normalize_text, normalize_with_flag
 from .registry import InstallableEngine, Registry, default_registry
 
 SIDECAR_VERSION = "0.1.0"
@@ -184,6 +185,14 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
             return {"id": job_id, "status": "running"}
 
 
+    @app.post("/normalize", dependencies=[Depends(require_auth)])
+    async def normalize(body: dict) -> dict:
+        """Normalization preview: same layer every generation path uses."""
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise HTTPException(status_code=422, detail="text must be a string")
+        return normalize_with_flag(text)
+
     @app.post("/generations", dependencies=[Depends(require_auth)])
     async def create_generation(body: dict) -> dict:
         text = body.get("text")
@@ -194,11 +203,16 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         if engine is None:
             raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
 
+        # The normalization layer is applied centrally, here, before any
+        # engine adapter sees the text — adapters cannot bypass it.
+        normalized_text = normalize_text(text)
+
         generation_id = uuid.uuid4().hex
         record = {
             "id": generation_id,
             "engine_id": engine.engine_id,
             "text": text,
+            "normalized_text": normalized_text,
             "params": body.get("params") or {},
             "status": "running",
         }
@@ -217,7 +231,7 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         def run_synthesis():
             with generation_locks.setdefault(engine.engine_id, threading.Lock()):
                 return engine.synthesize(
-                    GenerationRequest(generation_id=generation_id, text=text, params=record["params"]),
+                    GenerationRequest(generation_id=generation_id, text=normalized_text, params=record["params"]),
                     log,
                 )
 

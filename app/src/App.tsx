@@ -6,6 +6,7 @@ import type {
   EngineInstallStatus,
   GenerationRecord,
   LogEvent,
+  NormalizeResult,
   SidecarInfo,
 } from "./api";
 
@@ -145,6 +146,7 @@ export default function App() {
   const [logsOpen, setLogsOpen] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [normalized, setNormalized] = useState<NormalizeResult | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const installingRef = useRef<Record<string, boolean>>({});
 
@@ -225,6 +227,29 @@ export default function App() {
     };
   }, []);
 
+  // 归一化预览：文本变化后防抖请求 sidecar 的 /normalize（与生成同一层）。
+  useEffect(() => {
+    if (!info) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${info.baseUrl}/normalize`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: controller.signal,
+        });
+        if (res.ok) setNormalized((await res.json()) as NormalizeResult);
+      } catch {
+        /* aborted or sidecar restarting — keep the last preview */
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [info, text]);
+
   async function generate() {
     if (!info || !selectedEngine || generating) return;
     setGenerating(true);
@@ -285,6 +310,13 @@ export default function App() {
       <section>
         <h2>生成</h2>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} />
+
+        {normalized && normalized.changed && (
+          <div className="normalize-preview">
+            <div className="normalize-title">归一化预览（生成前引擎将收到以下文本）</div>
+            <div className="normalize-text">{normalized.normalized}</div>
+          </div>
+        )}
         <button
           className="primary"
           onClick={generate}

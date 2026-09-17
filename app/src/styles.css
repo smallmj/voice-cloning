@@ -40,6 +40,8 @@ h2 { font-size: 14px; color: var(--muted); margin: 16px 0 8px; text-transform: u
 .badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; }
 .badge-on { background: #16324a; color: #9ecbff; }
 .badge-off { background: #22252e; color: #5a6070; }
+.badge-design { background: #2a2148; color: #c4a5ff; }
+.badge-clone { background: #143026; color: #7fd8a4; }
 
 textarea {
   width: 100%; background: var(--panel); color: var(--text);
@@ -93,7 +95,10 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .voice-delete:hover { background: #2a1616; }
 .voice-create { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
 .voice-create-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.voice-create-row input[type="text"], .voice-create input:not([type]) { flex: 1; min-width: 160px; background: #0d0f14; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; }
+.voice-create-row input[type="text"], .voice-create input:not([type]), .voice-design input:not([type]) { flex: 1; min-width: 160px; background: #0d0f14; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; }
+.voice-design { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.voice-design-title { font-weight: 600; }
+.voice-design select { background: #0d0f14; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; }
 .voice-picker { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .voice-picker select { background: #0d0f14; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
 

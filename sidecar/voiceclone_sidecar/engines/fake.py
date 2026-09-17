@@ -21,6 +21,21 @@ SAMPLE_RATE = 22050
 BASE_FREQ = 220.0
 
 
+def write_tone_wav(path: Path, duration: float, amplitude: float = 0.35) -> None:
+    """Write the fake engine's tone output as a real, playable WAV."""
+    frames = bytearray()
+    for i in range(int(duration * SAMPLE_RATE)):
+        t = i / SAMPLE_RATE
+        envelope = min(1.0, t * 8.0, max(0.0, duration - t) * 8.0)
+        sample = amplitude * envelope * math.sin(2 * math.pi * BASE_FREQ * t)
+        frames += struct.pack("<h", int(sample * 32767))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(bytes(frames))
+
+
 class FakeEngine(Engine):
     engine_id = "fake"
     display_name = "Fake Engine (built-in)"
@@ -51,22 +66,10 @@ class FakeEngine(Engine):
         duration = max(0.5, min(5.0, len(request.text) * 0.05))
         log(f"fake: synthesizing {duration:.2f}s of audio at {SAMPLE_RATE} Hz")
 
-        frames = bytearray()
-        for i in range(int(duration * SAMPLE_RATE)):
-            t = i / SAMPLE_RATE
-            envelope = min(1.0, t * 8.0, max(0.0, duration - t) * 8.0)
-            sample = self.amplitude * envelope * math.sin(2 * math.pi * BASE_FREQ * t)
-            frames += struct.pack("<h", int(sample * 32767))
-
         out_dir = self.output_dir or Path.cwd() / "data" / "audio"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav"
-        with wave.open(str(out_path), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(SAMPLE_RATE)
-            w.writeframes(bytes(frames))
-
+        write_tone_wav(out_path, duration, self.amplitude)
         elapsed = time.monotonic() - started
         log(f"fake: wrote {out_path.name} in {elapsed:.3f}s")
         return GenerationResult(
@@ -75,6 +78,23 @@ class FakeEngine(Engine):
             model_version="fake-1.0",
             cost=0.0,  # local synthesis has no per-run cost
         )
+
+    def design_voice(self, description: str, preview_text: str, log) -> dict:
+        """Fake voice design (issue #11): the described "voice" is a fixed
+        tone. Returns the preview sample so the sidecar can attach it as the
+        designed voice's reference — the same flow a real design engine runs."""
+        log(f"fake: designing voice from description ({len(description)} chars)")
+        out_dir = self.output_dir or Path.cwd() / "data" / "audio"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sample_path = out_dir / f"design-{uuid.uuid4().hex}.wav"
+        write_tone_wav(sample_path, 2.0)
+        voice_id = f"fake-voice-{uuid.uuid4().hex[:8]}"
+        log(f"fake: designed voice {voice_id} ready")
+        return {
+            "voice_id": voice_id,
+            "sample_audio_path": str(sample_path),
+            "transcript": preview_text,
+        }
 
     def transcribe(self, audio_path: str, log) -> str:
         """Cloud-transcription surface: any registered engine may expose this.
@@ -176,3 +196,16 @@ class FakeQuietEngine(FakeEngine):
 
     def __init__(self, output_dir: Path | None = None) -> None:
         super().__init__(output_dir, amplitude=0.02)
+
+
+class FakeFailingDesignEngine(FakeEngine):
+    """Test seam (issue #11): design_voice always fails with a non-cloud
+    error, proving the sidecar leaves no orphaned reference-less voice
+    behind even when the failure is not a CloudEngineError."""
+
+    engine_id = "fake-failing-design"
+    display_name = "Fake Engine (design always fails)"
+
+    def design_voice(self, description: str, preview_text: str, log) -> dict:
+        log("fake-failing-design: about to fail")
+        raise OSError("disk exploded")

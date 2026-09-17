@@ -71,6 +71,20 @@ class Engine(abc.ABC):
             f"engine {self.engine_id} does not support explicit reference binding"
         )
 
+    def design_voice(self, description: str, preview_text: str, log) -> dict:
+        """Create a voice from a text description (issue #11) and return
+        ``{"voice_id", "sample_audio_path", "transcript"}``.
+
+        ``sample_audio_path`` is an engine-written preview WAV that becomes
+        the designed voice's reference sample — the source of truth every
+        other engine binds from (ADR-0001). Only engines declaring the
+        ``voice_design`` capability need to implement this; the sidecar
+        never calls it on an engine that does not declare the capability.
+        """
+        raise NotImplementedError(
+            f"engine {self.engine_id} does not support voice design"
+        )
+
 
 class InstallableEngine(Engine):
     """An engine whose environment/weights must be installed before use.
@@ -137,6 +151,10 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
 
     registry.register(Qwen3TtsVcCloudEngine(output_dir=output_dir, key_store=key_store))
 
+    from .engines.qwen_tts_vd_cloud import Qwen3TtsVdCloudEngine
+
+    registry.register(Qwen3TtsVdCloudEngine(output_dir=output_dir, key_store=key_store))
+
     if sys.platform == "darwin" and os.uname().machine == "arm64":
         from .engines.qwen3_tts import Qwen3TtsMlxEngine
 
@@ -166,4 +184,10 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
 
         registry.register(FakeLoudEngine(output_dir=output_dir))
         registry.register(FakeQuietEngine(output_dir=output_dir))
+
+        # Contract-test seam (issue #11): design always fails with a plain
+        # OSError — the design endpoint must clean up the voice regardless.
+        from .engines.fake import FakeFailingDesignEngine
+
+        registry.register(FakeFailingDesignEngine(output_dir=output_dir))
     return registry

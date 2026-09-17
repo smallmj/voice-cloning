@@ -125,6 +125,10 @@ class VoiceStore:
             return
         for record in raw.get("voices", []):
             if isinstance(record, dict) and record.get("id"):
+                # Records written before issue #11 predate the origin field;
+                # a voice without one is a reference-audio clone.
+                record.setdefault("origin", "cloned")
+                record.setdefault("design", None)
                 self._voices[record["id"]] = record
 
     def _save(self) -> None:
@@ -143,6 +147,8 @@ class VoiceStore:
 
     def reference_path(self, voice_id: str) -> Path:
         record = self._voices[voice_id]
+        if not record.get("reference"):
+            raise KeyError(f"voice {voice_id} has no reference sample")
         return self.root / voice_id / record["reference"]["filename"]
 
     def avatar_path(self, voice_id: str) -> Path | None:
@@ -151,9 +157,7 @@ class VoiceStore:
             return None
         return self.root / voice_id / record["avatar"]["filename"]
 
-    def create(
-        self, name: str, description: str, audio_file: Path, avatar_file: Path | None = None
-    ) -> dict:
+    def _validate_name_description(self, name: str, description: str) -> tuple[str, str]:
         name = (name or "").strip()
         if not name:
             raise VoiceValidationError("音色名称不能为空")
@@ -161,6 +165,12 @@ class VoiceStore:
             raise VoiceValidationError(f"音色名称过长（最多 {MAX_NAME_CHARS} 字符）")
         if description and len(description) > MAX_DESCRIPTION_CHARS:
             raise VoiceValidationError(f"说明过长（最多 {MAX_DESCRIPTION_CHARS} 字符）")
+        return name, description or ""
+
+    def create(
+        self, name: str, description: str, audio_file: Path, avatar_file: Path | None = None
+    ) -> dict:
+        name, description = self._validate_name_description(name, description)
 
         ext = audio_file.suffix.lower()
         if ext not in AUDIO_EXTENSIONS:
@@ -194,6 +204,8 @@ class VoiceStore:
             "name": name,
             "description": description or "",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "origin": "cloned",
+            "design": None,
             "reference": {
                 "filename": ref_name,
                 "format": ext[1:],
@@ -213,6 +225,87 @@ class VoiceStore:
             self._voices[voice_id] = record
             self._save()
         return dict(record)
+
+    def create_designed(
+        self,
+        name: str,
+        description: str,
+        engine_id: str,
+        voice_prompt: str,
+        preview_text: str,
+    ) -> dict:
+        """Create a voice from a text description, with no reference audio.
+
+        The record starts reference-less; ``attach_reference`` fills in the
+        design engine's preview sample once it exists. If the design run
+        fails the record is removed again by the caller — an orphaned,
+        unusable voice is never persisted.
+        """
+        name, description = self._validate_name_description(name, description)
+        voice_id = uuid.uuid4().hex
+        record: dict = {
+            "id": voice_id,
+            "name": name,
+            "description": description,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "origin": "designed",
+            "design": {
+                "engine_id": engine_id,
+                "voice_prompt": voice_prompt,
+                "preview_text": preview_text,
+            },
+            "reference": None,
+            "avatar": None,
+            "bindings": {},
+        }
+        with self._lock:
+            self._voices[voice_id] = record
+            self._save()
+        return dict(record)
+
+    def attach_reference(
+        self, voice_id: str, audio_path: Path, transcript: str | None = None
+    ) -> dict:
+        """Attach an engine-produced sample as the designed voice's reference.
+
+        The sample becomes the voice's source of truth (ADR-0001): from here
+        on the designed voice binds, generates and exports like any cloned
+        voice. Only the 3–120s upload window is not re-applied — the sample
+        is engine-produced, not user material.
+        """
+        ext = audio_path.suffix.lower()
+        if ext not in AUDIO_EXTENSIONS:
+            raise VoiceValidationError(f"不支持的样本格式 {ext or '(无后缀)'}")
+        size = audio_path.stat().st_size
+        if size == 0:
+            raise VoiceValidationError("设计样本是空文件")
+        if size > MAX_AUDIO_BYTES:
+            raise VoiceValidationError(
+                f"设计样本过大（{size / 1024 / 1024:.1f} MB，上限 "
+                f"{MAX_AUDIO_BYTES // 1024 // 1024} MB）"
+            )
+        duration = probe_audio_duration(audio_path)
+
+        with self._lock:
+            record = self._voices.get(voice_id)
+            if record is None:
+                raise KeyError(voice_id)
+            if record.get("origin") != "designed" or record.get("reference"):
+                raise VoiceValidationError("该音色已有参考音频，不能附加设计样本")
+            voice_dir = self.root / voice_id
+            voice_dir.mkdir(parents=True, exist_ok=True)
+            ref_name = f"ref{ext}"
+            shutil.copyfile(audio_path, voice_dir / ref_name)
+            record["reference"] = {
+                "filename": ref_name,
+                "format": ext[1:],
+                "duration_seconds": round(duration, 3),
+                "size_bytes": size,
+                "sha256": _file_sha256(voice_dir / ref_name),
+                "transcript": transcript or None,
+            }
+            self._save()
+            return dict(record)
 
     def _store_avatar(self, voice_id: str, avatar_file: Path) -> dict:
         ext = avatar_file.suffix.lower()

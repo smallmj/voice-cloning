@@ -136,6 +136,7 @@ function VoiceCard({
   onTranscribed: (voice: Voice) => void;
 }) {
   const ref = voice.reference;
+  const designed = voice.origin === "designed";
   const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -197,10 +198,16 @@ function VoiceCard({
           <div className="voice-avatar placeholder">{voice.name.slice(0, 1)}</div>
         )}
         <div className="voice-meta">
-          <strong>{voice.name}</strong>
+          <strong>{voice.name}</strong>{" "}
+          <span className={`badge ${designed ? "badge-design" : "badge-clone"}`}>
+            {designed ? "文字设计" : "参考音频复刻"}
+          </span>
           <div className="voice-ref-info">
-            {ref.format.toUpperCase()} · {ref.duration_seconds.toFixed(1)}s ·{" "}
-            {(ref.size_bytes / 1024 / 1024).toFixed(1)}MB
+            {ref
+              ? `${ref.format.toUpperCase()} · ${ref.duration_seconds.toFixed(1)}s · ${(
+                  ref.size_bytes / 1024 / 1024
+                ).toFixed(1)}MB`
+              : "尚无参考样本"}
           </div>
         </div>
         <button
@@ -223,18 +230,24 @@ function VoiceCard({
             .join("、")}
         </div>
       )}
-      {ref.transcript && (
+      {ref?.transcript && (
         <div className="voice-transcript">
           转写文本：<code>{ref.transcript}</code>
         </div>
       )}
       <div className="voice-tools" onClick={(ev) => ev.stopPropagation()}>
-        <button onClick={() => void diagnose()} disabled={analyzing}>
-          {analyzing ? "诊断中…" : "诊断"}
-        </button>
-        <button onClick={() => void transcribe()} disabled={transcribing}>
-          {transcribing ? "转写中…" : ref.transcript ? "重新转写" : "转写"}
-        </button>
+        {ref ? (
+          <>
+            <button onClick={() => void diagnose()} disabled={analyzing}>
+              {analyzing ? "诊断中…" : "诊断"}
+            </button>
+            <button onClick={() => void transcribe()} disabled={transcribing}>
+              {transcribing ? "转写中…" : ref.transcript ? "重新转写" : "转写"}
+            </button>
+          </>
+        ) : (
+          <span className="hint">设计失败遗留的音色，请删除后重新设计。</span>
+        )}
       </div>
       {cardError && <div className="error">{cardError}</div>}
       {analysis && (
@@ -248,12 +261,14 @@ function VoiceCard({
           ))}
         </div>
       )}
-      <audio
-        controls
-        preload="none"
-        src={`${baseUrl}/voices/${voice.id}/reference?token=${token}`}
-        onClick={(ev) => ev.stopPropagation()}
-      />
+      {ref && (
+        <audio
+          controls
+          preload="none"
+          src={`${baseUrl}/voices/${voice.id}/reference?token=${token}`}
+          onClick={(ev) => ev.stopPropagation()}
+        />
+      )}
     </div>
   );
 }
@@ -810,6 +825,13 @@ export default function App() {
   const [newVoiceAvatar, setNewVoiceAvatar] = useState<File | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [creatingVoice, setCreatingVoice] = useState(false);
+  // Voice design (issue #11): create a voice from a text description.
+  const [designEngineId, setDesignEngineId] = useState("");
+  const [designName, setDesignName] = useState("");
+  const [designPrompt, setDesignPrompt] = useState("");
+  const [designPreviewText, setDesignPreviewText] = useState("你好，很高兴认识你。");
+  const [designing, setDesigning] = useState(false);
+  const [designError, setDesignError] = useState<string | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [rerunHint, setRerunHint] = useState<string | null>(null);
   const [transProviders, setTransProviders] = useState<TranscriptionProviders | null>(null);
@@ -832,6 +854,9 @@ export default function App() {
   const installingRef = useRef<Record<string, boolean>>({});
 
   const selectedEngineInfo = engines.find((e) => e.id === selectedEngine) ?? null;
+  // Voice design (issue #11): the engine picked in the design panel.
+  const selectedDesignEngine =
+    engines.find((e) => e.id === designEngineId) ?? null;
 
   // Re-derive parameter state from the selected engine's spec; parameters the
   // spec does not declare are simply not present here.
@@ -1125,6 +1150,38 @@ export default function App() {
     }
   }
 
+  async function createDesignedVoice() {
+    if (!info || !designEngineId || designing) return;
+    setDesigning(true);
+    setDesignError(null);
+    try {
+      const res = await fetch(`${info.baseUrl}/voices/design`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          engine_id: designEngineId,
+          name: designName,
+          voice_prompt: designPrompt,
+          preview_text: designPreviewText,
+        }),
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setDesignError(detail?.detail ?? `设计音色失败（HTTP ${res.status}）`);
+        return;
+      }
+      const voice = (await res.json()) as Voice;
+      setDesignName("");
+      setDesignPrompt("");
+      await refreshVoices();
+      setSelectedVoice(voice.id);
+    } catch (err) {
+      setDesignError(`设计音色失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDesigning(false);
+    }
+  }
+
   async function deleteVoice(id: string) {
     if (!info) return;
     if (!window.confirm("删除该音色？其全部引擎绑定与本地参考音频文件都会被删除。")) return;
@@ -1279,6 +1336,80 @@ export default function App() {
             </button>
           </div>
           {voiceError && <div className="error">{voiceError}</div>}
+        </div>
+        <div className="voice-design">
+          <div className="voice-design-title">用文字描述创造音色（无需参考音频）</div>
+          <div className="voice-create-row">
+            <label>
+              设计引擎：
+              <select
+                value={designEngineId}
+                onChange={(e) => {
+                  setDesignEngineId(e.target.value);
+                  setDesignError(null);
+                }}
+              >
+                <option value="">（选择引擎）</option>
+                {engines.map((e) => {
+                  const supported = e.capabilities.voice_design;
+                  const reason = !supported
+                    ? "不支持：引擎未声明音色设计能力"
+                    : e.requires_key && !e.key_configured
+                      ? "需先在「设置」页配置 API Key"
+                      : "";
+                  return (
+                    <option key={e.id} value={e.id} disabled={!supported}>
+                      {e.display_name}
+                      {reason ? ` — ${reason}` : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+          </div>
+          {selectedDesignEngine && !selectedDesignEngine.capabilities.voice_design && (
+            <div className="hint">
+              所选引擎不支持音色设计（能力未声明），请改用支持设计的引擎。
+            </div>
+          )}
+          <div className="voice-create-row">
+            <input
+              placeholder="音色名称（必填）"
+              value={designName}
+              onChange={(e) => setDesignName(e.target.value)}
+            />
+            <input
+              placeholder="声音描述，如：低沉缓慢的男声，适合纪录片旁白（必填）"
+              value={designPrompt}
+              onChange={(e) => setDesignPrompt(e.target.value)}
+            />
+            <input
+              placeholder="试听文本（设计完成后用它生成预览样本）"
+              value={designPreviewText}
+              onChange={(e) => setDesignPreviewText(e.target.value)}
+            />
+            <button
+              onClick={createDesignedVoice}
+              disabled={
+                designing ||
+                !designName.trim() ||
+                !designPrompt.trim() ||
+                !designPreviewText.trim() ||
+                !designEngineId ||
+                !selectedDesignEngine?.capabilities.voice_design ||
+                !!selectedDesignEngine?.requires_key &&
+                !selectedDesignEngine.key_configured
+              }
+            >
+              {designing ? "设计中…" : "设计音色"}
+            </button>
+          </div>
+          {selectedDesignEngine?.requires_key && !selectedDesignEngine.key_configured && (
+            <div className="hint">
+              该设计引擎需要 API Key（BYOK）：请先在下方「设置」中保存后再设计。
+            </div>
+          )}
+          {designError && <div className="error">{designError}</div>}
         </div>
         {voices.length === 0 ? (
           <div className="hint">还没有音色。上传一段参考音频创建第一个音色。</div>

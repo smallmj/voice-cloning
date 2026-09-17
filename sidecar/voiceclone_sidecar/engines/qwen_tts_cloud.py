@@ -25,17 +25,18 @@ from __future__ import annotations
 import base64
 import time
 import uuid
-import wave
 from pathlib import Path
 
 import httpx
 
 from ..capabilities import Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
+from .dashscope_base import BASE_URL, CloudEngineError, DashScopeEngine
 
-BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 ENROLL_PATH = "/services/audio/tts/customization"
 SYNTH_PATH = "/services/aigc/multimodal-generation/generation"
+
+__all__ = ["BASE_URL", "CloudEngineError", "Qwen3TtsVcCloudEngine", "billing_cost", "billed_chars"]
 
 TARGET_MODEL = "qwen3-tts-vc-2026-01-22"
 ENROLL_MODEL = "qwen-voice-enrollment"
@@ -54,10 +55,6 @@ LANGUAGE_CHOICES = (
 )
 
 
-class CloudEngineError(RuntimeError):
-    """A user-facing cloud failure: config problem or a vendor-side error."""
-
-
 def billed_chars(text: str) -> int:
     """Aliyun's char-counting rule: one CJK/full-width char = 2 chars."""
     return sum(2 if ord(c) > 127 else 1 for c in text)
@@ -67,11 +64,10 @@ def billing_cost(text: str) -> float:
     return round(billed_chars(text) / 10000 * PRICE_PER_10K_CHARS, 4)
 
 
-class Qwen3TtsVcCloudEngine(Engine):
+class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
     engine_id = "qwen3-tts-vc-cloud"
     display_name = "Qwen3-TTS 复刻（阿里百炼 · 云端）"
 
-    requires_key = True
     billing_note = (
         "qwen3-tts-vc-2026-01-22：0.8 元 / 万输入字符（1 个汉字计 2 个字符），输出不计费；"
         "北京地域每个模型有 1 万字符免费额度（开通后 90 天内有效）。按实际字符计费，"
@@ -82,13 +78,6 @@ class Qwen3TtsVcCloudEngine(Engine):
         "阿里云用于创建克隆音色，并留存于你的百炼账号下（可在控制台删除音色）。"
         "服务条款明确禁止转售本服务（BYOK 下你是阿里云的直接客户）。"
     )
-
-    def __init__(self, output_dir: Path | None = None, key_store=None,
-                 client: httpx.Client | None = None) -> None:
-        self.output_dir = output_dir
-        self.key_store = key_store
-        # Injectable client: contract tests pass an httpx.MockTransport.
-        self._client = client
 
     # -- capabilities --------------------------------------------------------
 
@@ -116,36 +105,6 @@ class Qwen3TtsVcCloudEngine(Engine):
                 help="建议与文本语种一致以获得自然发音；auto 时不向引擎发送该参数",
             ),
         ]
-
-    # -- key access ------------------------------------------------------------
-
-    def _key(self) -> str:
-        if self.key_store is None:
-            raise CloudEngineError("应用内部错误：密钥存储未初始化")
-        key = self.key_store.get(self.engine_id)
-        if not key:
-            raise CloudEngineError(
-                "尚未配置阿里百炼 API Key；请在「设置」页填入你的 API Key 后重试"
-            )
-        return key
-
-    def _http(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(timeout=120.0)
-        return self._client
-
-    @staticmethod
-    def _vendor_error(resp: httpx.Response) -> str:
-        try:
-            body = resp.json()
-        except Exception:  # noqa: BLE001 - keep the status line at minimum
-            return f"HTTP {resp.status_code}"
-        msg = body.get("message") or body.get("msg") or body
-        code = body.get("code")
-        detail = f"{code}：{msg}" if code else str(msg)
-        if resp.status_code in (401, 403):
-            return f"API Key 无效或无权限（HTTP {resp.status_code}）：{detail}"
-        return f"HTTP {resp.status_code}：{detail}"
 
     # -- binding: enrollment ---------------------------------------------------
 
@@ -226,12 +185,7 @@ class Qwen3TtsVcCloudEngine(Engine):
         out_path = out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav"
         out_path.write_bytes(dl.content)
 
-        sample_rate = 24000
-        try:
-            with wave.open(str(out_path), "rb") as w:
-                sample_rate = w.getframerate()
-        except wave.Error:
-            pass
+        sample_rate = self._probe_sample_rate(out_path, 24000)
 
         cost = billing_cost(request.text)
         log(

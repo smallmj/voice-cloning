@@ -46,7 +46,7 @@ from .transcription import (
     engine_transcribers,
 )
 from .normalization import normalize_text, normalize_with_flag
-from .engines.qwen_tts_cloud import CloudEngineError
+from .engines.dashscope_base import CloudEngineError
 from .registry import InstallableEngine, Registry, default_registry
 from .runtime import paths
 from .secrets import KeyStore, KeyStoreError
@@ -620,6 +620,77 @@ def create_app(
         binding = voice_store.bind(voice_id, engine.engine_id, status="ready", extra=binding_extra)
         return {"voice_id": voice["id"], "engine_id": engine.engine_id, **binding}
 
+    # -- voice design (issue #11) -----------------------------------------------
+    #
+    # A voice can be created from a text description alone. The design
+    # engine's preview sample becomes the voice's reference (the source of
+    # truth every other engine binds from, ADR-0001), so a designed voice is
+    # a first-class voice: multi-engine bindings, generation and deletion
+    # all go through the same paths as a cloned one.
+
+    @app.post("/voices/design", dependencies=[Depends(require_auth)])
+    async def design_voice(body: dict) -> dict:
+        engine_id = body.get("engine_id")
+        name = body.get("name")
+        description = body.get("description", "")
+        voice_prompt = body.get("voice_prompt")
+        preview_text = body.get("preview_text")
+
+        engine = registry.get(engine_id if isinstance(engine_id, str) else "")
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        if not engine.capabilities().voice_design:
+            raise HTTPException(
+                status_code=422,
+                detail=f"引擎 {engine.engine_id} 未声明音色设计能力：不支持用文字描述创建音色",
+            )
+        if engine.requires_key and keys.get(engine.engine_id) is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"引擎 {engine.engine_id} 需要 API Key；请在「设置」页配置后再设计音色",
+            )
+        if not isinstance(voice_prompt, str) or not voice_prompt.strip():
+            raise HTTPException(status_code=422, detail="声音描述不能为空")
+        if not isinstance(preview_text, str) or not preview_text.strip():
+            raise HTTPException(status_code=422, detail="试听文本不能为空")
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(status_code=422, detail="音色名称不能为空")
+
+        voice = voice_store.create_designed(
+            name, description if isinstance(description, str) else "",
+            engine_id=engine.engine_id,
+            voice_prompt=voice_prompt,
+            preview_text=preview_text,
+        )
+
+        loop = asyncio.get_running_loop()
+
+        def _design_log(message: str) -> None:
+            # Runs in the executor thread — hop back onto the loop.
+            loop.call_soon_threadsafe(log_bus.publish, f"design:{engine.engine_id}", message)
+
+        try:
+            extra = await loop.run_in_executor(
+                None,
+                lambda: engine.design_voice(voice_prompt, preview_text, _design_log),
+            )
+            voice = voice_store.attach_reference(
+                voice["id"], Path(extra["sample_audio_path"]), extra.get("transcript")
+            )
+            voice_store.bind(voice["id"], engine.engine_id, status="ready",
+                             extra={"voice_id": extra["voice_id"]})
+            return voice_store.get(voice["id"])
+        except CloudEngineError as exc:
+            voice_store.delete(voice["id"])
+            raise HTTPException(status_code=502, detail=f"设计音色失败：{exc}") from exc
+        except (Exception, OSError) as exc:  # noqa: BLE001
+            # ANY failure (vendor or local IO) leaves no orphaned,
+            # reference-less voice behind — ADR-0010's hard guarantee.
+            voice_store.delete(voice["id"])
+            raise HTTPException(
+                status_code=500, detail=f"设计音色失败：{exc}"
+            ) from exc
+
     @app.post("/normalize", dependencies=[Depends(require_auth)])
     async def normalize(body: dict) -> dict:
         """Normalization preview: same layer every generation path uses."""
@@ -649,6 +720,13 @@ def create_app(
         voice = None
         if voice_id:
             voice = _require_voice(voice_id)
+            if not voice.get("reference"):
+                # Designed voices always carry their preview sample after a
+                # successful design run; a record without one is unusable.
+                raise HTTPException(
+                    status_code=409,
+                    detail="该音色没有参考样本，无法参与生成；请删除后重新创建",
+                )
             ref_path = voice_store.reference_path(voice_id)
             if not ref_path.is_file():
                 raise HTTPException(

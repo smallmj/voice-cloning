@@ -130,13 +130,23 @@ export interface VoiceAvatar {
 }
 
 // A voice is an engine-independent identity (ADR-0001); bindings are a
-// rebuildable cache, never the source of truth.
+// rebuildable cache, never the source of truth. Issue #11 adds a second
+// origin: "designed" voices are created from a text description and only
+// later receive the design engine's preview sample as their reference.
+export interface VoiceDesignInfo {
+  engine_id: string;
+  voice_prompt: string;
+  preview_text: string;
+}
+
 export interface Voice {
   id: string;
   name: string;
   description: string;
   created_at: string;
-  reference: VoiceReference;
+  origin: "cloned" | "designed";
+  design?: VoiceDesignInfo | null;
+  reference: VoiceReference | null;
   avatar: VoiceAvatar | null;
   bindings: Record<string, VoiceBinding>;
 }

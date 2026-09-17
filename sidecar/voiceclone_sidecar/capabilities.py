@@ -52,6 +52,10 @@ class Capabilities:
     # declare it; the sidecar then auto-fills ref_text from the voice's
     # transcript (transcribing on demand) instead of making the user type it.
     requires_reference_text: bool = False
+    # Over-length text is auto-segmented at this many characters per request
+    # (issue #13). None means the engine declares no limit and long text is
+    # sent as one request — segmentation never silently rewrites behavior.
+    max_chars_per_request: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -65,4 +69,5 @@ class Capabilities:
             "upload_used_for_training": self.upload_used_for_training,
             "api_closed_loop": self.api_closed_loop,
             "requires_reference_text": self.requires_reference_text,
+            "max_chars_per_request": self.max_chars_per_request,
         }

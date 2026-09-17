@@ -121,6 +121,11 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
             cross_device_use=True,  # the cloned voice lives in the cloud account
             upload_used_for_training=False,
             api_closed_loop=True,
+            # Conservative per-request cap: the vendor counts 1 Chinese
+            # character as 2 and allows far more per call, but prosody
+            # quality degrades on very long single requests — segment
+            # earlier rather than pushing the API ceiling (issue #13).
+            max_chars_per_request=2000,
         )
 
     def param_specs(self) -> list[ParamSpec]:

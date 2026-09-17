@@ -78,6 +78,7 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
             cross_device_use=True,  # the designed voice lives in the cloud account
             upload_used_for_training=False,
             api_closed_loop=True,
+            max_chars_per_request=2000,  # same cap as the VC engine (issue #13)
         )
 
     # -- voice design ----------------------------------------------------------

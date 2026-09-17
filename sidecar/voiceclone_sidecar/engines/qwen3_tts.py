@@ -73,6 +73,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
             upload_used_for_training=False,
             api_closed_loop=False,
             requires_reference_text=True,  # the sidecar auto-fills ref_text from the transcript
+            max_chars_per_request=500,  # local VRAM ceiling; keep requests small (issue #13)
         )
 
     # -- install surface ----------------------------------------------------

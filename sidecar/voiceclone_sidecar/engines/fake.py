@@ -58,6 +58,9 @@ class FakeEngine(Engine):
             cross_device_use=True,
             upload_used_for_training=False,
             api_closed_loop=True,
+            # Small on purpose: the contract tests exercise multi-segment
+            # long-text jobs without generating huge strings (issue #13).
+            max_chars_per_request=100,
         )
 
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
@@ -270,3 +273,47 @@ class FakeBrokenRebuildEngine(FakeKeyEngine):
         self.rebuild_attempted = True
         log("fake-broken-rebuild: enrolling reference")
         return {"voice_id": f"fake-voice-{uuid.uuid4().hex[:8]}"}
+
+
+class FakeSlowEngine(FakeEngine):
+    """Test seam (issue #13): every synthesis sleeps, so a job's segments
+    take long enough to observe the queue — cancel-while-running and
+    cancel-while-queued are testable without racing a millisecond engine."""
+
+    engine_id = "fake-slow"
+    display_name = "Fake Engine (slow)"
+
+    def __init__(self, output_dir: Path | None = None, sleep_seconds: float = 2.0) -> None:
+        super().__init__(output_dir)
+        self.sleep_seconds = sleep_seconds
+
+    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
+        log(f"fake-slow: sleeping {self.sleep_seconds}s")
+        time.sleep(self.sleep_seconds)
+        return super().synthesize(request, log)
+
+
+class FakeRateLimitedEngine(FakeKeyEngine):
+    """Test seam (issue #13): the vendor throttles the first N synthesis
+    calls with a rate-limit error, then lets everything through. The
+    sidecar must retry with backoff and succeed — the throttle never
+    surfaces as a user-facing generation failure."""
+
+    engine_id = "fake-rate-limited"
+    display_name = "Fake Engine (rate limited at first)"
+
+    def __init__(self, output_dir: Path | None = None, throttled_calls: int = 2) -> None:
+        super().__init__(output_dir)
+        self.throttled_calls = throttled_calls
+        self.calls = 0
+
+    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
+        self.calls += 1
+        if self.calls <= self.throttled_calls:
+            from .dashscope_base import CloudEngineError
+
+            log(f"fake-rate-limited: call {self.calls} throttled")
+            raise CloudEngineError(
+                "云端合成失败：Throttling：Requests rate limit exceeded, please try again later. (HTTP 429)"
+            )
+        return super().synthesize(request, log)

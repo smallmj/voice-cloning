@@ -37,6 +37,8 @@ from .compare import (
 )
 from .loudness import TARGET_LUFS, LoudnessError, normalize_wav_lufs
 from .generations import GenerationStore, now_iso
+from .jobs import JobStore, is_cancel_requested, new_job, public_view
+from .segmentation import concat_wav_files, split_text
 from .transcription import (
     LOCAL_TOOL_ID,
     DEFAULT_PROVIDER,
@@ -120,6 +122,8 @@ def create_app(
     data_dir: Path | None = None,
     runtime_root: Path | None = None,
     key_store: KeyStore | None = None,
+    rate_limit_attempts: int = 4,
+    rate_limit_backoff: float = 1.0,
 ) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -904,14 +908,47 @@ def create_app(
 
         from .registry import GenerationRequest
 
+        def _looks_like_rate_limit(exc: Exception) -> bool:
+            msg = str(exc).lower()
+            return any(
+                marker in msg
+                for marker in ("429", "限流", "throttl", "rate limit", "ratelimit", "toomanyrequests")
+            )
+
         def run_synthesis():
             # setdefault stores the per-engine lock so later generations of the
             # same engine serialize behind it, even after a worker crash.
-            with generation_locks.setdefault(engine.engine_id, threading.Lock()):
-                return engine.synthesize(
-                    GenerationRequest(generation_id=generation_id, text=normalized_text, params=record["params"]),
-                    log,
-                )
+            request = GenerationRequest(
+                generation_id=generation_id, text=normalized_text, params=record["params"]
+            )
+
+            def attempt() -> object:
+                with generation_locks.setdefault(engine.engine_id, threading.Lock()):
+                    return engine.synthesize(request, log)
+
+            # Issue #13: a vendor-side throttle is queue pressure, not a
+            # failure the user should ever see. Retry with backoff — while
+            # holding the per-engine lock each time, which is the throttle's
+            # natural cure (one request at a time). Any other error, or the
+            # attempts exhausted, propagates unchanged.
+            backoff = rate_limit_backoff
+            for attempt_no in range(1, rate_limit_attempts + 1):
+                try:
+                    return attempt()
+                except Exception as exc:  # noqa: BLE001 - re-raised below
+                    if (
+                        not engine.requires_key
+                        or attempt_no >= rate_limit_attempts
+                        or not _looks_like_rate_limit(exc)
+                    ):
+                        raise
+                    wait = min(backoff, 10.0)
+                    log(
+                        f"云端限流，{wait:.1f}s 后自动重试"
+                        f"（第 {attempt_no}/{rate_limit_attempts - 1} 次）…"
+                    )
+                    time.sleep(wait)
+                    backoff *= 2
 
         try:
             result = await loop.run_in_executor(None, run_synthesis)
@@ -972,6 +1009,186 @@ def create_app(
             body.get("voice_id"),
             body.get("params"),
         )
+
+    # -- long-text jobs: queue + cancellation (issue #13) ---------------------
+    #
+    # An over-length script is split into engine-sized segments (the engine's
+    # declared max_chars_per_request), and each segment runs through the SAME
+    # shared pipeline as a plain generation — one real generation record per
+    # segment, full lineage. One worker drains the FIFO queue, so vendor
+    # throttling is absorbed by pacing (plus the rate-limit retry in the
+    # pipeline) instead of surfacing as user-facing errors.
+
+    job_store = JobStore()
+    job_worker_task: asyncio.Task | None = None
+
+    async def _run_job(job: dict) -> None:
+        job["status"] = "running"
+        job["started_at"] = now_iso()
+        completed: list[str] = []
+        failure: str | None = None
+        for seg in job["segments"]:
+            if is_cancel_requested(job):
+                break
+            seg["status"] = "running"
+            try:
+                record = await run_generation(
+                    job["engine_id"], seg["text"], job["voice_id"] or None, None
+                )
+            except Exception as exc:  # noqa: BLE001 - recorded on the job
+                seg["status"] = "failed"
+                seg["error"] = str(getattr(exc, "detail", exc))
+                failure = seg["error"]
+                log_bus.publish(job["id"], f"分段 {seg['index'] + 1} 失败：{failure}")
+                break
+            seg["status"] = "succeeded"
+            seg["generation_id"] = record["id"]
+            completed.append(record["audio_file"])
+            log_bus.publish(
+                job["id"], f"分段 {seg['index'] + 1}/{len(job['segments'])} 完成"
+            )
+
+        cancelled = failure is None and (
+            is_cancel_requested(job)
+            # Queued segments left after a cancel request mid-run.
+            or any(s["status"] == "pending" for s in job["segments"])
+        )
+        for seg in job["segments"]:
+            if seg["status"] == "pending":
+                seg["status"] = "skipped"
+
+        # Cancelled jobs KEEP the audio of the segments that finished — a
+        # partial result beats throwing completed synthesis away.
+        if completed:
+            try:
+                out_name = f"job-{job['id']}.wav"
+                loop = asyncio.get_running_loop()
+                rate = await loop.run_in_executor(
+                    None,
+                    lambda: concat_wav_files(
+                        [audio_dir / name for name in completed], audio_dir / out_name
+                    ),
+                )
+                job["audio_file"] = out_name
+                job["audio_url"] = f"/audio/{out_name}"
+                job["sample_rate"] = rate
+            except Exception as exc:  # noqa: BLE001 - concat is the last step
+                if failure is None and not cancelled:
+                    failure = f"分段音频拼接失败：{exc}"
+
+        job["finished_at"] = now_iso()
+        if cancelled:
+            job["status"] = "cancelled"
+        elif failure is not None:
+            job["status"] = "failed"
+            job["error"] = failure
+        else:
+            job["status"] = "succeeded"
+        log_bus.publish(
+            job["id"],
+            {
+                "cancelled": "任务已取消",
+                "failed": "任务失败",
+                "succeeded": "任务完成",
+            }.get(job["status"], f"任务 {job['status']}"),
+        )
+
+    async def job_worker() -> None:
+        # FIFO drain by polling: cancel-while-queued is then a plain flag
+        # check, and a worker crash is healed by _ensure_worker's next run.
+        while True:
+            job = job_store.next_queued()
+            if job is None:
+                await asyncio.sleep(0.1)
+                continue
+            if is_cancel_requested(job):
+                # Cancelled before it started: no segment ever runs.
+                job["status"] = "cancelled"
+                job["finished_at"] = now_iso()
+                log_bus.publish(job["id"], "任务已取消（尚未开始）")
+                continue
+            try:
+                await _run_job(job)
+            except Exception as exc:  # noqa: BLE001 - defensive: worker must survive
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                job["finished_at"] = now_iso()
+                log_bus.publish(job["id"], f"任务失败：{exc}")
+
+    def _ensure_worker() -> None:
+        nonlocal job_worker_task
+        if job_worker_task is None or job_worker_task.done():
+            job_worker_task = asyncio.create_task(job_worker())
+
+    def _segment_plan(engine_id: str, text: str, voice_id: str | None) -> tuple[object, list[str]]:
+        engine = registry.get(engine_id)
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        voice = None
+        if voice_id:
+            voice = _require_voice(voice_id)
+            if not voice.get("reference"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="该音色没有参考样本，无法参与生成；请删除后重新创建",
+                )
+            if not voice_store.reference_path(voice_id).is_file():
+                raise HTTPException(
+                    status_code=409,
+                    detail="voice reference sample is missing; delete and recreate the voice",
+                )
+        max_chars = engine.capabilities().max_chars_per_request
+        segments = split_text(text, max_chars) if max_chars else [text]
+        return voice, segments
+
+    @app.post("/generations/jobs", dependencies=[Depends(require_auth)])
+    async def create_generation_job(body: dict) -> dict:
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(status_code=422, detail="text is required")
+        voice, segments = _segment_plan(
+            body.get("engine_id") or "", text, body.get("voice_id")
+        )
+        job = new_job(
+            body.get("engine_id") or "",
+            body.get("voice_id"),
+            voice["name"] if voice else None,
+            text,
+            segments,
+        )
+        job["created_at"] = now_iso()
+        job_store.add(job)
+        _ensure_worker()
+        max_chars = registry.get(body.get("engine_id") or "").capabilities().max_chars_per_request
+        log_bus.publish(
+            job["id"],
+            f"任务已入队：{len(segments)} 个分段（每段 ≤ {max_chars or len(text)} 字符）",
+        )
+        return public_view(job)
+
+    @app.get("/jobs", dependencies=[Depends(require_auth)])
+    async def list_jobs(limit: int = 50) -> dict:
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        return {"jobs": [public_view(j) for j in job_store.list(limit)]}
+
+    @app.get("/jobs/{job_id}", dependencies=[Depends(require_auth)])
+    async def get_job(job_id: str) -> dict:
+        job = job_store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return public_view(job)
+
+    @app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])
+    async def cancel_job(job_id: str) -> dict:
+        job = job_store.request_cancel(job_id)
+        if job is None:
+            # Unknown id, or already terminal: distinguish for the client.
+            if job_store.get(job_id) is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            raise HTTPException(status_code=409, detail="任务已结束，无法取消")
+        log_bus.publish(job_id, "收到取消请求，将在当前分段结束后停止…")
+        return public_view(job)
 
     # -- blind comparison + preference profile (issue #10, ADR-0009) ----------
     #

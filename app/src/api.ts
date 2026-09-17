@@ -23,6 +23,9 @@ export interface Capabilities {
   upload_used_for_training: boolean;
   api_closed_loop: boolean;
   requires_reference_text?: boolean;
+  // Issue #13: over-length text is auto-segmented at this many characters
+  // per request; null/absent means the engine declares no limit.
+  max_chars_per_request?: number | null;
 }
 
 export interface ParamSpecInfo {
@@ -239,4 +242,34 @@ export interface PreferenceCell {
 
 export interface PreferenceProfile {
   cells: PreferenceCell[];
+}
+
+// --- long-text jobs: queue / segmentation / cancel (issue #13) ---
+
+export interface JobSegment {
+  index: number;
+  text: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  generation_id: string | null;
+  error: string | null;
+}
+
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface GenerationJob {
+  id: string;
+  engine_id: string;
+  voice_id: string | null;
+  voice_name: string | null;
+  text: string;
+  status: JobStatus;
+  segment_count: number;
+  segments: JobSegment[];
+  audio_url: string | null;
+  audio_file: string | null;
+  sample_rate: number | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
 }

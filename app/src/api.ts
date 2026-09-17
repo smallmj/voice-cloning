@@ -65,3 +65,35 @@ export interface LogEvent {
   message: string;
   ts: number;
 }
+
+export interface VoiceReference {
+  filename: string;
+  format: string;
+  duration_seconds: number;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface VoiceBinding {
+  status: string;
+  reference_sha256: string;
+  created_at: string;
+}
+
+export interface VoiceAvatar {
+  filename: string;
+  format: string;
+  size_bytes: number;
+}
+
+// A voice is an engine-independent identity (ADR-0001); bindings are a
+// rebuildable cache, never the source of truth.
+export interface Voice {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  reference: VoiceReference;
+  avatar: VoiceAvatar | null;
+  bindings: Record<string, VoiceBinding>;
+}

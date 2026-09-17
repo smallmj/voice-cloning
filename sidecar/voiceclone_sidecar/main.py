@@ -21,11 +21,12 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from .normalization import normalize_text, normalize_with_flag
 from .registry import InstallableEngine, Registry, default_registry
+from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
 
 SIDECAR_VERSION = "0.1.0"
 
@@ -60,7 +61,12 @@ def verify_token(expected: str):
 
     async def _verify(request: Request) -> None:
         auth = request.headers.get("Authorization", "")
-        if not compare(auth, f"Bearer {expected}"):
+        query_token = request.query_params.get("token", "")
+        # The query-parameter form exists for media elements (<img>/<audio>),
+        # which cannot set Authorization headers — same rationale as WS auth.
+        if not (
+            compare(auth, f"Bearer {expected}") or compare(query_token, expected)
+        ):
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
     return _verify
@@ -83,7 +89,9 @@ def verify_token_ws(expected: str):
     return _verify
 
 
-def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
+def create_app(
+    registry: Registry, token: str, audio_dir: Path, data_dir: Path | None = None
+) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
 
     app = FastAPI(title="voiceclone-sidecar", version=SIDECAR_VERSION)
@@ -106,6 +114,24 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
     # Engine installs run in background threads; one at a time, keyed by id.
     install_lock = threading.Lock()
     install_jobs: dict[str, dict] = {}
+    # Voices live next to the audio dir (data root). Reference samples are the
+    # source of truth; engine bindings derived from them are a cache.
+    voice_store = VoiceStore(data_dir if data_dir is not None else audio_dir.parent)
+
+    def _require_voice(voice_id: str) -> dict:
+        record = voice_store.get(voice_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="voice not found")
+        return record
+
+    async def _read_upload(upload: UploadFile | None) -> Path | None:
+        if upload is None or not upload.filename:
+            return None
+        tmp = audio_dir / f"upload-{uuid.uuid4().hex}{Path(upload.filename).suffix}"
+        with open(tmp, "wb") as f:
+            while chunk := await upload.read(1 << 20):
+                f.write(chunk)
+        return tmp
 
     @app.get("/health", dependencies=[Depends(require_auth)])
     async def health() -> dict:
@@ -185,6 +211,119 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
             return {"id": job_id, "status": "running"}
 
 
+    # -- voices ---------------------------------------------------------------
+
+    @app.post("/voices", dependencies=[Depends(require_auth)])
+    async def create_voice(
+        file: UploadFile,
+        name: str = Form(...),
+        description: str = Form(""),
+        avatar: UploadFile | None = None,
+    ) -> dict:
+        audio_tmp = avatar_tmp = None
+        try:
+            audio_tmp = await _read_upload(file)
+            avatar_tmp = await _read_upload(avatar)
+            if audio_tmp is None:
+                raise VoiceValidationError("参考音频不能为空")
+            return voice_store.create(name, description, audio_tmp, avatar_tmp)
+        except VoiceValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            for tmp in (audio_tmp, avatar_tmp):
+                if tmp is not None:
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+
+    @app.get("/voices", dependencies=[Depends(require_auth)])
+    async def list_voices() -> dict:
+        return {"voices": voice_store.list()}
+
+    @app.get("/voices/{voice_id}", dependencies=[Depends(require_auth)])
+    async def get_voice(voice_id: str) -> dict:
+        return _require_voice(voice_id)
+
+    @app.patch("/voices/{voice_id}", dependencies=[Depends(require_auth)])
+    async def update_voice(voice_id: str, body: dict) -> dict:
+        _require_voice(voice_id)
+        try:
+            return voice_store.update(
+                voice_id,
+                name=body.get("name") if "name" in body else None,
+                description=body.get("description") if "description" in body else None,
+            )
+        except VoiceValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/voices/{voice_id}/avatar", dependencies=[Depends(require_auth)])
+    async def set_voice_avatar(voice_id: str, avatar: UploadFile) -> dict:
+        _require_voice(voice_id)
+        avatar_tmp = None
+        try:
+            avatar_tmp = await _read_upload(avatar)
+            if avatar_tmp is None:
+                raise VoiceValidationError("头像不能为空")
+            return voice_store.set_avatar(voice_id, avatar_tmp)
+        except VoiceValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            if avatar_tmp is not None:
+                try:
+                    avatar_tmp.unlink()
+                except OSError:
+                    pass
+
+    @app.delete("/voices/{voice_id}", dependencies=[Depends(require_auth)])
+    async def delete_voice(voice_id: str) -> dict:
+        _require_voice(voice_id)
+        voice_store.delete(voice_id)
+        return {"deleted": voice_id}
+
+    @app.get("/voices/{voice_id}/reference", dependencies=[Depends(require_auth)])
+    async def voice_reference(voice_id: str) -> FileResponse:
+        _require_voice(voice_id)
+        path = voice_store.reference_path(voice_id)
+        media = AUDIO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+        return FileResponse(path, media_type=media, filename=path.name)
+
+    @app.get("/voices/{voice_id}/avatar", dependencies=[Depends(require_auth)])
+    async def voice_avatar(voice_id: str) -> FileResponse:
+        _require_voice(voice_id)
+        path = voice_store.avatar_path(voice_id)
+        if path is None or not path.is_file():
+            raise HTTPException(status_code=404, detail="voice has no avatar")
+        media = AVATAR_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+        return FileResponse(path, media_type=media)
+
+    @app.post("/voices/{voice_id}/bindings/{engine_id}", dependencies=[Depends(require_auth)])
+    async def bind_voice(voice_id: str, engine_id: str) -> dict:
+        """Create or refresh this voice's binding on one engine.
+
+        For local engines a binding records that the engine can be handed the
+        reference sample at generation time; it is rebuilt from the reference
+        at any time. The engine must be installed — a binding never claims a
+        state the engine cannot actually serve.
+        """
+        voice = _require_voice(voice_id)
+        engine = registry.get(engine_id)
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        if not engine.capabilities().voice_cloning:
+            raise HTTPException(
+                status_code=422,
+                detail=f"engine {engine.engine_id} does not support voice cloning",
+            )
+        if isinstance(engine, InstallableEngine) and not engine.is_installed():
+            raise HTTPException(
+                status_code=409,
+                detail=f"engine {engine.engine_id} is not installed yet; "
+                "install it before binding voices to it",
+            )
+        binding = voice_store.bind(voice_id, engine.engine_id, status="ready")
+        return {"voice_id": voice["id"], "engine_id": engine.engine_id, **binding}
+
     @app.post("/normalize", dependencies=[Depends(require_auth)])
     async def normalize(body: dict) -> dict:
         """Normalization preview: same layer every generation path uses."""
@@ -203,6 +342,23 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         if engine is None:
             raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
 
+        params = dict(body.get("params") or {})
+        voice_id = body.get("voice_id")
+        voice = None
+        if voice_id:
+            voice = _require_voice(voice_id)
+            ref_path = voice_store.reference_path(voice_id)
+            if not ref_path.is_file():
+                raise HTTPException(
+                    status_code=409,
+                    detail="voice reference sample is missing; delete and recreate the voice",
+                )
+            if engine.capabilities().voice_cloning and not params.get("ref_audio"):
+                # The reference sample is the source of truth: hand it to the
+                # engine on every generation. The binding below only records
+                # that this happened.
+                params["ref_audio"] = str(ref_path)
+
         # The normalization layer is applied centrally, here, before any
         # engine adapter sees the text — adapters cannot bypass it.
         normalized_text = normalize_text(text)
@@ -213,7 +369,8 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
             "engine_id": engine.engine_id,
             "text": text,
             "normalized_text": normalized_text,
-            "params": body.get("params") or {},
+            "params": params,
+            "voice_id": voice["id"] if voice else None,
             "status": "running",
         }
         generations[generation_id] = record
@@ -229,6 +386,8 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
         from .registry import GenerationRequest
 
         def run_synthesis():
+            # setdefault stores the per-engine lock so later generations of the
+            # same engine serialize behind it, even after a worker crash.
             with generation_locks.setdefault(engine.engine_id, threading.Lock()):
                 return engine.synthesize(
                     GenerationRequest(generation_id=generation_id, text=normalized_text, params=record["params"]),
@@ -248,6 +407,11 @@ def create_app(registry: Registry, token: str, audio_dir: Path) -> FastAPI:
             audio_url=f"/audio/{Path(result.audio_path).name}",
             sample_rate=result.sample_rate,
         )
+        if voice is not None:
+            # Persist the binding only after a real synthesis succeeded —
+            # the binding claims the reference works on this engine.
+            voice_store.bind(voice["id"], engine.engine_id, status="ready")
+            record["binding"] = voice_store.get(voice["id"])["bindings"].get(engine.engine_id)
         return record
 
     @app.get("/generations/{generation_id}", dependencies=[Depends(require_auth)])
@@ -287,12 +451,23 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=0, help="0 = dynamic port")
     parser.add_argument("--token", default=os.environ.get("SIDECAR_TOKEN") or secrets.token_urlsafe(32))
     parser.add_argument("--audio-dir", default=os.environ.get("SIDECAR_AUDIO_DIR") or "data/audio")
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("SIDECAR_DATA_DIR") or None,
+        help="voice library root; defaults to the audio dir's parent",
+    )
     args = parser.parse_args(argv)
     audio_dir = Path(args.audio_dir)
+    data_dir = Path(args.data_dir) if args.data_dir else None
 
     import uvicorn
 
-    app = create_app(default_registry(output_dir=audio_dir), token=args.token, audio_dir=audio_dir)
+    app = create_app(
+        default_registry(output_dir=audio_dir),
+        token=args.token,
+        audio_dir=audio_dir,
+        data_dir=data_dir,
+    )
 
     config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     server = uvicorn.Server(config)

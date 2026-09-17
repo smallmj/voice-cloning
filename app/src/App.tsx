@@ -8,6 +8,7 @@ import type {
   LogEvent,
   NormalizeResult,
   SidecarInfo,
+  Voice,
 } from "./api";
 
 const CAP_LABELS: Record<keyof Capabilities, string> = {
@@ -98,6 +99,76 @@ function EngineCard({
   );
 }
 
+function VoiceCard({
+  voice,
+  baseUrl,
+  token,
+  selected,
+  onSelect,
+  onDelete,
+}: {
+  voice: Voice;
+  baseUrl: string;
+  token: string;
+  selected: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const ref = voice.reference;
+  return (
+    <div
+      className={`voice-card ${selected ? "selected" : ""}`}
+      onClick={onSelect}
+      role="button"
+      aria-pressed={selected}
+    >
+      <div className="voice-head">
+        {voice.avatar ? (
+          <img
+            className="voice-avatar"
+            src={`${baseUrl}/voices/${voice.id}/avatar?token=${token}`}
+            alt={voice.name}
+          />
+        ) : (
+          <div className="voice-avatar placeholder">{voice.name.slice(0, 1)}</div>
+        )}
+        <div className="voice-meta">
+          <strong>{voice.name}</strong>
+          <div className="voice-ref-info">
+            {ref.format.toUpperCase()} · {ref.duration_seconds.toFixed(1)}s ·{" "}
+            {(ref.size_bytes / 1024 / 1024).toFixed(1)}MB
+          </div>
+        </div>
+        <button
+          className="voice-delete"
+          title="删除音色（连带删除全部绑定与本地文件）"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onDelete();
+          }}
+        >
+          删除
+        </button>
+      </div>
+      {voice.description && <div className="voice-desc">{voice.description}</div>}
+      {Object.keys(voice.bindings).length > 0 && (
+        <div className="voice-bindings">
+          绑定：
+          {Object.entries(voice.bindings)
+            .map(([engineId, b]) => `${engineId}（${b.status}）`)
+            .join("、")}
+        </div>
+      )}
+      <audio
+        controls
+        preload="none"
+        src={`${baseUrl}/voices/${voice.id}/reference?token=${token}`}
+        onClick={(ev) => ev.stopPropagation()}
+      />
+    </div>
+  );
+}
+
 function Waveform({ url, headers }: { url: string; headers: Record<string, string> }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
@@ -147,6 +218,14 @@ export default function App() {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [normalized, setNormalized] = useState<NormalizeResult | null>(null);
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
+  const [newVoiceName, setNewVoiceName] = useState("");
+  const [newVoiceDesc, setNewVoiceDesc] = useState("");
+  const [newVoiceFile, setNewVoiceFile] = useState<File | null>(null);
+  const [newVoiceAvatar, setNewVoiceAvatar] = useState<File | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [creatingVoice, setCreatingVoice] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const installingRef = useRef<Record<string, boolean>>({});
 
@@ -250,6 +329,68 @@ export default function App() {
     };
   }, [info, text]);
 
+  async function refreshVoices() {
+    if (!info) return;
+    const res = await fetch(`${info.baseUrl}/voices`, {
+      headers: { Authorization: `Bearer ${info.token}` },
+    });
+    if (res.ok) setVoices(((await res.json()) as { voices: Voice[] }).voices);
+  }
+
+  useEffect(() => {
+    void refreshVoices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info]);
+
+  async function createVoice() {
+    if (!info || !newVoiceFile || creatingVoice) return;
+    setCreatingVoice(true);
+    setVoiceError(null);
+    try {
+      const form = new FormData();
+      form.append("name", newVoiceName);
+      form.append("description", newVoiceDesc);
+      form.append("file", newVoiceFile);
+      if (newVoiceAvatar) form.append("avatar", newVoiceAvatar);
+      const res = await fetch(`${info.baseUrl}/voices`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}` },
+        body: form,
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setVoiceError(detail?.detail ?? `创建音色失败（HTTP ${res.status}）`);
+        return;
+      }
+      const voice = (await res.json()) as Voice;
+      setNewVoiceName("");
+      setNewVoiceDesc("");
+      setNewVoiceFile(null);
+      setNewVoiceAvatar(null);
+      await refreshVoices();
+      setSelectedVoice(voice.id);
+    } catch (err) {
+      setVoiceError(`创建音色失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCreatingVoice(false);
+    }
+  }
+
+  async function deleteVoice(id: string) {
+    if (!info) return;
+    if (!window.confirm("删除该音色？其全部引擎绑定与本地参考音频文件都会被删除。")) return;
+    const res = await fetch(`${info.baseUrl}/voices/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${info.token}` },
+    });
+    if (res.ok) {
+      setVoices((prev) => prev.filter((v) => v.id !== id));
+      setSelectedVoice((prev) => (prev === id ? null : prev));
+    } else {
+      setVoiceError(`删除音色失败（HTTP ${res.status}）`);
+    }
+  }
+
   async function generate() {
     if (!info || !selectedEngine || generating) return;
     setGenerating(true);
@@ -259,7 +400,11 @@ export default function App() {
       const res = await fetch(`${info.baseUrl}/generations`, {
         method: "POST",
         headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ engine_id: selectedEngine, text }),
+        body: JSON.stringify({
+          engine_id: selectedEngine,
+          text,
+          ...(selectedVoice ? { voice_id: selectedVoice } : {}),
+        }),
       });
       if (!res.ok) {
         setGenerateError(`生成请求失败（HTTP ${res.status}）`);
@@ -308,7 +453,89 @@ export default function App() {
       </section>
 
       <section>
+        <h2>音色库</h2>
+        <div className="voice-create">
+          <div className="voice-create-row">
+            <input
+              placeholder="音色名称（必填）"
+              value={newVoiceName}
+              onChange={(e) => setNewVoiceName(e.target.value)}
+            />
+            <input
+              placeholder="文字说明（可选）"
+              value={newVoiceDesc}
+              onChange={(e) => setNewVoiceDesc(e.target.value)}
+            />
+          </div>
+          <div className="voice-create-row">
+            <label>
+              参考音频（WAV/MP3/FLAC/M4A/OGG，3–120s，≤20MB）：
+              <input
+                type="file"
+                accept=".wav,.mp3,.flac,.m4a,.ogg"
+                onChange={(e) => setNewVoiceFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <label>
+              头像（可选）：
+              <input
+                type="file"
+                accept=".png,.jpg,.jpeg,.webp,.gif"
+                onChange={(e) => setNewVoiceAvatar(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <button
+              onClick={createVoice}
+              disabled={!newVoiceName.trim() || !newVoiceFile || creatingVoice}
+            >
+              {creatingVoice ? "创建中…" : "创建音色"}
+            </button>
+          </div>
+          {voiceError && <div className="error">{voiceError}</div>}
+        </div>
+        {voices.length === 0 ? (
+          <div className="hint">还没有音色。上传一段参考音频创建第一个音色。</div>
+        ) : (
+          <div className="voice-list">
+            {voices.map((v) => (
+              <VoiceCard
+                key={v.id}
+                voice={v}
+                baseUrl={info?.baseUrl ?? ""}
+                token={info?.token ?? ""}
+                selected={v.id === selectedVoice}
+                onSelect={() => setSelectedVoice(v.id === selectedVoice ? null : v.id)}
+                onDelete={() => void deleteVoice(v.id)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
         <h2>生成</h2>
+        <div className="voice-picker">
+          <label>
+            使用音色：
+            <select
+              value={selectedVoice ?? ""}
+              onChange={(e) => setSelectedVoice(e.target.value || null)}
+            >
+              <option value="">（不用音色，直接合成）</option>
+              {voices.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedVoice &&
+            selectedEngine &&
+            engines.find((e) => e.id === selectedEngine)?.capabilities.voice_cloning ===
+              false && (
+              <span className="hint">该引擎不支持声音复刻，将忽略参考音频。</span>
+            )}
+        </div>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} />
 
         {normalized && normalized.changed && (

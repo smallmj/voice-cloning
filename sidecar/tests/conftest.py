@@ -67,6 +67,7 @@ def sidecar(tmp_path_factory):
             "token": token,
             "process": process,
             "audio_dir": audio_dir,
+            "data_dir": audio_dir.parent,
         }
     finally:
         process.terminate()

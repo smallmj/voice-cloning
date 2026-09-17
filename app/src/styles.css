@@ -160,3 +160,57 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
   grid-column: 2;
   color: #666;
 }
+
+/* --- settings (issue #9: BYOK keys + engine disclosure) --- */
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-engine {
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-engine-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.key-row input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.engine-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #555;
+}
+
+.engine-note-label {
+  display: inline-block;
+  font-weight: 600;
+  margin-right: 8px;
+  color: #333;
+}
+
+.param-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}

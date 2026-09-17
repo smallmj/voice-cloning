@@ -14,6 +14,7 @@ import wave
 from pathlib import Path
 
 from ..capabilities import Capabilities
+from .qwen_tts_cloud import billed_chars
 from ..registry import Engine, GenerationRequest, GenerationResult
 
 SAMPLE_RATE = 22050
@@ -95,3 +96,54 @@ class FakeRefTextEngine(FakeEngine):
     def capabilities(self) -> Capabilities:
         caps = super().capabilities()
         return Capabilities(**{**caps.to_dict(), "requires_reference_text": True})
+
+
+class FakeKeyEngine(FakeEngine):
+    """Test seam: a BYOK cloud-shaped engine.
+
+    Registered only when VOICECLONE_TEST_ENGINES=1. It exercises the whole
+    issue-#9 surface without touching any real vendor: key requirements and
+    the /settings/keys contract, billing/data-usage disclosure, parameter
+    specs, reference binding that mints a voice_id, and the voice_id
+    injection into generation params.
+    """
+
+    engine_id = "fake-key"
+    display_name = "Fake Engine (BYOK cloud)"
+    requires_key = True
+    billing_note = "fake：0.8 元 / 万字符（1 个汉字计 2 个字符），输出不计费"
+    data_usage_note = "fake：上传内容不会用于训练（测试声明）"
+
+    def capabilities(self) -> Capabilities:
+        caps = super().capabilities()
+        return Capabilities(**{**caps.to_dict(), "requires_reference_text": False})
+
+    def param_specs(self):
+        from ..capabilities import ParamSpec
+
+        return [
+            ParamSpec(
+                name="fake_mode",
+                label="测试模式",
+                kind="select",
+                default="auto",
+                choices=("auto", "fast"),
+                help="仅用于测试的参数",
+            )
+        ]
+
+    def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
+        log("fake-key: enrolling reference")
+        return {"voice_id": f"fake-voice-{uuid.uuid4().hex[:8]}"}
+
+    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
+        voice_id = request.params.get("voice_id")
+        if not voice_id:
+            raise RuntimeError("fake-key requires a bound voice_id")
+        result = super().synthesize(request, log)
+        return GenerationResult(
+            audio_path=result.audio_path,
+            sample_rate=result.sample_rate,
+            model_version=voice_id,
+            cost=round(billed_chars(request.text) / 10000 * 0.8, 4),
+        )

@@ -10,6 +10,32 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class ParamSpec:
+    """One user-facing parameter an engine accepts.
+
+    The UI renders EXACTLY this list for the selected engine — parameters a
+    spec does not declare are never shown (issue #9: unsupported parameters
+    are not rendered, not silently ignored)."""
+
+    name: str
+    label: str
+    kind: str  # "select" | "text" | "number"
+    default: str | int | float | None = None
+    choices: tuple[str, ...] = ()
+    help: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "label": self.label,
+            "kind": self.kind,
+            "default": self.default,
+            "choices": list(self.choices),
+            "help": self.help,
+        }
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """What an engine supports. Every field defaults to "not supported"."""
 

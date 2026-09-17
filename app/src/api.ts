@@ -25,11 +25,32 @@ export interface Capabilities {
   requires_reference_text?: boolean;
 }
 
+export interface ParamSpecInfo {
+  name: string;
+  label: string;
+  kind: "select" | "text" | "number";
+  default: string | number | null;
+  choices: string[];
+  help: string;
+}
+
 export interface EngineInfo {
   id: string;
   display_name: string;
   capabilities: Capabilities;
   installed?: boolean;
+  // BYOK cloud engines (issue #9): key management + billing/data-usage
+  // disclosure, rendered verbatim on the settings page.
+  requires_key?: boolean;
+  key_configured?: boolean | null;
+  billing_note?: string | null;
+  data_usage_note?: string | null;
+  params?: ParamSpecInfo[];
+}
+
+export interface KeyStatus {
+  engine_id: string;
+  configured: boolean;
 }
 
 export interface InstallStepState {

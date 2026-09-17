@@ -5,6 +5,7 @@ import type {
   ReferenceAnalysis,
   TranscriptionProviders,
   EngineInfo,
+  KeyStatus,
   EngineInstallStatus,
   GenerationListResult,
   GenerationRecord,
@@ -67,6 +68,11 @@ function EngineCard({
       aria-pressed={selected}
     >
       <strong>{engine.display_name}</strong>{" "}
+      {engine.requires_key && (
+        <span className={`badge ${engine.key_configured ? "badge-on" : "badge-off"}`}>
+          {engine.key_configured ? "API Key 已配置" : "未配置 API Key"}
+        </span>
+      )}
       {installed ? (
         <span className="badge badge-on">已就绪</span>
       ) : (
@@ -519,6 +525,14 @@ export default function App() {
   const [transProviders, setTransProviders] = useState<TranscriptionProviders | null>(null);
   const [localTransInstalling, setLocalTransInstalling] = useState(false);
   const [transError, setTransError] = useState<string | null>(null);
+  // BYOK keys (issue #9): inputs + per-engine busy flags; values live in the
+  // OS key store after save — the renderer never persists them.
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [keyBusy, setKeyBusy] = useState<Record<string, boolean>>({});
+  const [keyError, setKeyError] = useState<string | null>(null);
+  // Per-engine generation parameters, driven strictly by the engine's
+  // declared param specs (unsupported parameters are never rendered).
+  const [engineParams, setEngineParams] = useState<Record<string, string>>({});
   // Parameters carried back from a rerun: everything the record stored except
   // server-side paths the sidecar re-injects itself (ref_audio). They ride
   // along on the next generate call unless the user clears them.
@@ -526,6 +540,75 @@ export default function App() {
   const generateRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const installingRef = useRef<Record<string, boolean>>({});
+
+  const selectedEngineInfo = engines.find((e) => e.id === selectedEngine) ?? null;
+
+  // Re-derive parameter state from the selected engine's spec; parameters the
+  // spec does not declare are simply not present here.
+  useEffect(() => {
+    const spec = selectedEngineInfo?.params ?? [];
+    setEngineParams(
+      Object.fromEntries(
+        spec.filter((p) => p.default != null).map((p) => [p.name, String(p.default)]),
+      ),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEngine, engines]);
+
+  async function refreshEngines() {
+    if (!info) return;
+    const res = await fetch(`${info.baseUrl}/engines`, {
+      headers: { Authorization: `Bearer ${info.token}` },
+    });
+    if (res.ok) setEngines(((await res.json()) as { engines: EngineInfo[] }).engines);
+  }
+
+  async function saveKey(engineId: string) {
+    if (!info) return;
+    const key = (keyInputs[engineId] ?? "").trim();
+    if (!key) {
+      setKeyError("API Key 不能为空");
+      return;
+    }
+    setKeyBusy((p) => ({ ...p, [engineId]: true }));
+    setKeyError(null);
+    try {
+      const res = await fetch(`${info.baseUrl}/settings/keys`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ engine_id: engineId, key }),
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setKeyError(detail?.detail ?? `保存 API Key 失败（HTTP ${res.status}）`);
+        return;
+      }
+      setKeyInputs((p) => ({ ...p, [engineId]: "" }));
+      await refreshEngines();
+    } finally {
+      setKeyBusy((p) => ({ ...p, [engineId]: false }));
+    }
+  }
+
+  async function deleteKey(engineId: string) {
+    if (!info) return;
+    setKeyBusy((p) => ({ ...p, [engineId]: true }));
+    setKeyError(null);
+    try {
+      const res = await fetch(`${info.baseUrl}/settings/keys/${engineId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setKeyError(detail?.detail ?? `删除 API Key 失败（HTTP ${res.status}）`);
+        return;
+      }
+      await refreshEngines();
+    } finally {
+      setKeyBusy((p) => ({ ...p, [engineId]: false }));
+    }
+  }
 
   async function installEngine(id: string) {
     if (!info || installing[id]) return;
@@ -780,7 +863,20 @@ export default function App() {
           engine_id: selectedEngine,
           text,
           ...(selectedVoice ? { voice_id: selectedVoice } : {}),
-          ...(rerunParams ? { params: rerunParams } : {}),
+          ...(rerunParams || Object.keys(engineParams).length > 0
+            ? {
+                params: {
+                  ...engineParams,
+                  // Rerun carries only parameters the engine still declares —
+                  // undeclared parameters are never sent, only not rendered.
+                  ...Object.fromEntries(
+                    Object.entries(rerunParams ?? {}).filter(([k]) =>
+                      (selectedEngineInfo?.params ?? []).some((p) => p.name === k),
+                    ),
+                  ),
+                },
+              }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -964,6 +1060,10 @@ export default function App() {
             使用音色：
             <select
               value={selectedVoice ?? ""}
+              disabled={
+                !!selectedEngineInfo &&
+                selectedEngineInfo.capabilities.voice_cloning === false
+              }
               onChange={(e) => setSelectedVoice(e.target.value || null)}
             >
               <option value="">（不用音色，直接合成）</option>
@@ -978,7 +1078,9 @@ export default function App() {
             selectedEngine &&
             engines.find((e) => e.id === selectedEngine)?.capabilities.voice_cloning ===
               false && (
-              <span className="hint">该引擎不支持声音复刻，将忽略参考音频。</span>
+              <span className="hint">
+                该引擎不支持声音复刻，音色选择已禁用（无参考音频可交给该引擎）。
+              </span>
             )}
             {selectedVoice &&
               selectedEngine &&
@@ -989,6 +1091,37 @@ export default function App() {
                 </span>
               )}
         </div>
+        {(selectedEngineInfo?.params ?? []).map((p) => (
+          <div className="param-row" key={p.name}>
+            <label>
+              {p.label}：
+              {p.kind === "select" ? (
+                <select
+                  value={engineParams[p.name] ?? String(p.default ?? "")}
+                  onChange={(e) =>
+                    setEngineParams((prev) => ({ ...prev, [p.name]: e.target.value }))
+                  }
+                >
+                  {p.choices.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type={p.kind === "number" ? "number" : "text"}
+                  value={engineParams[p.name] ?? String(p.default ?? "")}
+                  onChange={(e) =>
+                    setEngineParams((prev) => ({ ...prev, [p.name]: e.target.value }))
+                  }
+                />
+              )}
+            </label>
+            {p.help && <span className="hint">{p.help}</span>}
+          </div>
+        ))}
+
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} />
 
         {normalized && normalized.changed && (
@@ -997,12 +1130,24 @@ export default function App() {
             <div className="normalize-text">{normalized.normalized}</div>
           </div>
         )}
+        {selectedEngineInfo?.requires_key && !selectedEngineInfo.key_configured && (
+          <div className="hint">
+            云端引擎需要你自己的 API Key（BYOK）：请先在下方「设置」中保存，生成已禁用。
+          </div>
+        )}
+        {selectedEngineInfo?.requires_key && selectedEngineInfo.key_configured && !selectedVoice && (
+          <div className="hint">
+            云端引擎必须使用音色：请先选择一个音色，首次生成时会自动把参考音频注册为云端音色。
+          </div>
+        )}
         <button
           className="primary"
           onClick={generate}
           disabled={
             generating ||
             !selectedEngine ||
+            (!!selectedEngineInfo?.requires_key && !selectedEngineInfo.key_configured) ||
+            (!!selectedEngineInfo?.requires_key && !selectedVoice) ||
             (installStatus[selectedEngine]
               ? !installStatus[selectedEngine].installed
               : false)
@@ -1033,6 +1178,76 @@ export default function App() {
             <button onClick={() => setRerunParams(null)}>清除</button>
           </div>
         )}
+      </section>
+
+      <section>
+        <h2>设置</h2>
+        <div className="hint">
+          云端引擎一律 BYOK（Bring Your Own Key）：API Key 只保存在本机系统钥匙串中，
+          不落明文文件，也不经过任何第三方服务器。
+        </div>
+        <div className="settings-list">
+          {engines.map((e) => (
+            <div className="settings-engine" key={e.id}>
+              <div className="settings-engine-head">
+                <strong>{e.display_name}</strong>
+                {e.requires_key ? (
+                  <span className={`badge ${e.key_configured ? "badge-on" : "badge-off"}`}>
+                    {e.key_configured ? "API Key 已配置（存于系统钥匙串）" : "未配置 API Key"}
+                  </span>
+                ) : (
+                  <span className="badge badge-on">本地引擎，无需密钥</span>
+                )}
+              </div>
+              {e.requires_key && (
+                <div className="key-row">
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    placeholder="粘贴 API Key（DashScope，sk-…）"
+                    value={keyInputs[e.id] ?? ""}
+                    onChange={(ev) =>
+                      setKeyInputs((p) => ({ ...p, [e.id]: ev.target.value }))
+                    }
+                  />
+                  <button
+                    disabled={keyBusy[e.id] || !(keyInputs[e.id] ?? "").trim()}
+                    onClick={() => void saveKey(e.id)}
+                  >
+                    {keyBusy[e.id] ? "保存中…" : "保存"}
+                  </button>
+                  {e.key_configured && (
+                    <button disabled={keyBusy[e.id]} onClick={() => void deleteKey(e.id)}>
+                      删除
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="engine-note">
+                <span className="engine-note-label">能力</span>
+                {`${CAP_LABELS.languages}：${e.capabilities.languages.join("/") || "—"} · `}
+                {(
+                  ["voice_cloning", "voice_design", "pronunciation_control", "emotion"] as const
+                )
+                  .map((k) => `${CAP_LABELS[k]} ${e.capabilities[k] ? "✓" : "✗（不支持）"}`)
+                  .join(" · ")}
+              </div>
+              {e.billing_note && (
+                <div className="engine-note">
+                  <span className="engine-note-label">计费口径</span>
+                  {e.billing_note}
+                </div>
+              )}
+              {e.data_usage_note && (
+                <div className="engine-note">
+                  <span className="engine-note-label">数据与训练</span>
+                  {e.data_usage_note}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        {keyError && <div className="error">{keyError}</div>}
       </section>
 
       {info && (

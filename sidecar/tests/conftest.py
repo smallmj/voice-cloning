@@ -52,7 +52,7 @@ def sidecar(tmp_path_factory):
             "--audio-dir",
             str(audio_dir),
         ],
-        env={**os.environ, "VOICECLONE_TEST_ENGINES": "1"},
+        env={**os.environ, "VOICECLONE_TEST_ENGINES": "1", "VOICECLONE_KEY_BACKEND": "memory"},
         cwd=SIDECAR_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

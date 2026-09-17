@@ -9,7 +9,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass
 
-from .capabilities import Capabilities
+from .capabilities import Capabilities, ParamSpec
 
 
 @dataclass(frozen=True)
@@ -39,14 +39,37 @@ class Engine(abc.ABC):
 
     engine_id: str
     display_name: str
+    # BYOK engines need a per-user API key from the OS key store (ADR-0003);
+    # the sidecar refuses generation while the key is not configured.
+    requires_key: bool = False
+    # Billing and data-usage disclosure shown verbatim in the settings page.
+    # The billing note must state the practical Chinese unit price (issue #9).
+    billing_note: str | None = None
+    data_usage_note: str | None = None
 
     @abc.abstractmethod
     def capabilities(self) -> Capabilities: ...
+
+    def param_specs(self) -> list[ParamSpec]:
+        """The full, closed list of user-facing parameters this engine
+        accepts. The UI renders exactly this list — nothing else."""
+        return []
 
     @abc.abstractmethod
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
         """Run one text -> audio generation. Use ``log(msg)`` to emit
         progress lines; they are streamed to the UI over WebSocket."""
+
+    def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
+        """Prepare the reference on this engine and return binding extras.
+
+        Local engines hand the file over at generation time and don't need
+        this; cloud engines enroll the sample and return e.g. a voice_id.
+        Failures surface the vendor's error message to the user.
+        """
+        raise NotImplementedError(
+            f"engine {self.engine_id} does not support explicit reference binding"
+        )
 
 
 class InstallableEngine(Engine):
@@ -86,7 +109,7 @@ class Registry:
         return list(self._engines.values())
 
 
-def default_registry(output_dir=None) -> Registry:
+def default_registry(output_dir=None, key_store=None) -> Registry:
     """Registry with the engines shipped in this package.
 
     The fake engine is a built-in: it runs the exact same code path as real
@@ -94,7 +117,8 @@ def default_registry(output_dir=None) -> Registry:
     backend the contract tests exercise.
 
     Real local engines register only where they can run (platform +
-    architecture); a cloud-API engine would always be registered.
+    architecture); cloud-API engines are always registered — they are usable
+    the moment the user brings their own API key (ADR-0003).
     """
     from .engines.fake import FakeEngine
 
@@ -103,6 +127,15 @@ def default_registry(output_dir=None) -> Registry:
 
     import os
     import sys
+
+    if key_store is None:
+        from .secrets import KeyStore
+
+        key_store = KeyStore()
+
+    from .engines.qwen_tts_cloud import Qwen3TtsVcCloudEngine
+
+    registry.register(Qwen3TtsVcCloudEngine(output_dir=output_dir, key_store=key_store))
 
     if sys.platform == "darwin" and os.uname().machine == "arm64":
         from .engines.qwen3_tts import Qwen3TtsMlxEngine
@@ -120,4 +153,10 @@ def default_registry(output_dir=None) -> Registry:
         from .engines.fake import FakeRefTextEngine
 
         registry.register(FakeRefTextEngine(output_dir=output_dir))
+
+        # Contract-test seam: a BYOK cloud-shaped engine for the issue-#9
+        # surface (keys, billing disclosure, cloud bindings, voice_id).
+        from .engines.fake import FakeKeyEngine
+
+        registry.register(FakeKeyEngine(output_dir=output_dir))
     return registry

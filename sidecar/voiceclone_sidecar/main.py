@@ -36,8 +36,10 @@ from .transcription import (
     engine_transcribers,
 )
 from .normalization import normalize_text, normalize_with_flag
+from .engines.qwen_tts_cloud import CloudEngineError
 from .registry import InstallableEngine, Registry, default_registry
 from .runtime import paths
+from .secrets import KeyStore, KeyStoreError
 from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
 
 SIDECAR_VERSION = "0.1.0"
@@ -107,6 +109,7 @@ def create_app(
     audio_dir: Path,
     data_dir: Path | None = None,
     runtime_root: Path | None = None,
+    key_store: KeyStore | None = None,
 ) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -122,6 +125,9 @@ def create_app(
     log_bus = LogBus()
     require_auth = verify_token(token)
     require_auth_ws = verify_token_ws(token)
+    # BYOK API keys (ADR-0003): the sidecar reads them from the OS key store
+    # on demand and keeps nothing on disk. Tests inject an in-memory backend.
+    keys = key_store if key_store is not None else KeyStore()
     # Generation records are durable history (search/filter/paginate/rerun);
     # each one snapshots enough lineage to reproduce its run.
     generation_store = GenerationStore(
@@ -222,10 +228,62 @@ def create_app(
                     "installed": e.is_installed()
                     if isinstance(e, InstallableEngine)
                     else True,
+                    "requires_key": e.requires_key,
+                    "key_configured": keys.get(e.engine_id) is not None
+                    if e.requires_key
+                    else None,
+                    "billing_note": e.billing_note,
+                    "data_usage_note": e.data_usage_note,
+                    "params": [p.to_dict() for p in e.param_specs()],
                 }
                 for e in registry.list()
             ]
         }
+
+    # -- BYOK keys (issue #9) ---------------------------------------------------
+    #
+    # The contract never returns key values — only which engines have one
+    # configured. Values go renderer -> sidecar -> OS key store and are then
+    # dropped from memory beyond the read the engines make at call time.
+
+    def _key_engine(engine_id: str):
+        engine = registry.get(engine_id)
+        if engine is None:
+            raise HTTPException(status_code=404, detail=f"unknown engine: {engine_id!r}")
+        if not engine.requires_key:
+            raise HTTPException(
+                status_code=422, detail=f"engine {engine.engine_id} does not use an API key"
+            )
+        return engine
+
+    @app.get("/settings/keys", dependencies=[Depends(require_auth)])
+    async def list_keys() -> dict:
+        cloud = [e.engine_id for e in registry.list() if e.requires_key]
+        return {"keys": keys.status(cloud)}
+
+    @app.put("/settings/keys", dependencies=[Depends(require_auth)])
+    async def set_key(body: dict) -> dict:
+        engine_id = body.get("engine_id")
+        key = body.get("key")
+        if not isinstance(engine_id, str) or not isinstance(key, str):
+            raise HTTPException(status_code=422, detail="engine_id and key are required")
+        _key_engine(engine_id)
+        if not key.strip():
+            raise HTTPException(status_code=422, detail="API Key 不能为空")
+        try:
+            keys.set(engine_id, key)
+        except KeyStoreError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"engine_id": engine_id, "configured": True}
+
+    @app.delete("/settings/keys/{engine_id}", dependencies=[Depends(require_auth)])
+    async def delete_key(engine_id: str) -> dict:
+        _key_engine(engine_id)
+        try:
+            keys.delete(engine_id)
+        except KeyStoreError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"engine_id": engine_id, "configured": False}
 
     @app.get("/engines/{engine_id}/status", dependencies=[Depends(require_auth)])
     async def engine_status(engine_id: str) -> dict:
@@ -499,8 +557,10 @@ def create_app(
 
         For local engines a binding records that the engine can be handed the
         reference sample at generation time; it is rebuilt from the reference
-        at any time. The engine must be installed — a binding never claims a
-        state the engine cannot actually serve.
+        at any time. For BYOK cloud engines the binding carries the vendor's
+        voice_id minted by enrolling the reference (issue #9). The engine
+        must be usable — installed (local) and keyed (cloud) — a binding
+        never claims a state the engine cannot actually serve.
         """
         voice = _require_voice(voice_id)
         engine = registry.get(engine_id)
@@ -511,13 +571,40 @@ def create_app(
                 status_code=422,
                 detail=f"engine {engine.engine_id} does not support voice cloning",
             )
+        if engine.requires_key and keys.get(engine.engine_id) is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"engine {engine.engine_id} needs an API key; "
+                "set it on the settings page first",
+            )
         if isinstance(engine, InstallableEngine) and not engine.is_installed():
             raise HTTPException(
                 status_code=409,
                 detail=f"engine {engine.engine_id} is not installed yet; "
                 "install it before binding voices to it",
             )
-        binding = voice_store.bind(voice_id, engine.engine_id, status="ready")
+
+        binding_extra: dict | None = None
+        if engine.requires_key:
+            ref_path = voice_store.reference_path(voice_id)
+            transcript = (voice.get("reference") or {}).get("transcript")
+            loop = asyncio.get_running_loop()
+
+            def _bind_log(message: str) -> None:
+                # Runs in the executor thread — hop back onto the loop.
+                loop.call_soon_threadsafe(log_bus.publish, f"bind:{engine_id}", message)
+
+            try:
+                binding_extra = await loop.run_in_executor(
+                    None,
+                    lambda: engine.bind_reference(ref_path, transcript, _bind_log),
+                )
+            except CloudEngineError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"云端绑定失败：{exc}"
+                ) from exc
+
+        binding = voice_store.bind(voice_id, engine.engine_id, status="ready", extra=binding_extra)
         return {"voice_id": voice["id"], "engine_id": engine.engine_id, **binding}
 
     @app.post("/normalize", dependencies=[Depends(require_auth)])
@@ -571,12 +658,66 @@ def create_app(
                         ) from exc
                     voice_store.set_transcript(voice["id"], transcript)
                 params["ref_text"] = transcript
+            elif not params.get("ref_text"):
+                # Engines that don't require reference text still benefit from
+                # one when it exists (cloud enrollment quality) — pass it if
+                # it is already known, never transcribe on demand for them.
+                transcript = (voice.get("reference") or {}).get("transcript")
+                if transcript:
+                    params["ref_text"] = transcript
 
         # The normalization layer is applied centrally, here, before any
         # engine adapter sees the text — adapters cannot bypass it.
         normalized_text = normalize_text(text)
 
         generation_id = uuid.uuid4().hex
+
+        # BYOK cloud engines: the key must exist, and the voice needs its
+        # cloud binding. Missing bindings are minted right here (issue #9):
+        # the reference is enrolled once, the returned voice_id becomes part
+        # of the binding persisted after the run succeeds.
+        binding_extra: dict | None = None
+        if engine.requires_key:
+            if keys.get(engine.engine_id) is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"引擎 {engine.engine_id} 需要阿里百炼 API Key；"
+                    "请在「设置」页配置后再生成",
+                )
+            if voice is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"云端引擎 {engine.engine_id} 必须使用音色生成"
+                    "（复刻模型需要一个已绑定的云端音色）",
+                )
+            cloud_voice_id = (voice["bindings"].get(engine.engine_id) or {}).get("voice_id")
+            if not cloud_voice_id:
+                ref_path = voice_store.reference_path(voice["id"])
+                transcript = params.get("ref_text") or (voice.get("reference") or {}).get("transcript")
+
+                enroll_loop = asyncio.get_running_loop()
+
+                def _log(message: str) -> None:
+                    # Runs in the executor thread — hop back onto the loop.
+                    enroll_loop.call_soon_threadsafe(log_bus.publish, generation_id, message)
+
+                try:
+                    binding_extra = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: engine.bind_reference(ref_path, transcript, _log),
+                    )
+                except CloudEngineError as exc:
+                    raise HTTPException(
+                        status_code=502, detail=f"云端音色创建失败：{exc}"
+                    ) from exc
+                cloud_voice_id = binding_extra["voice_id"]
+                # Persist the cloud binding the moment enrollment succeeds —
+                # the vendor-side voice now exists regardless of what happens
+                # to this synthesis run. Waiting for synthesis would leak an
+                # orphaned cloud voice on every failed run.
+                voice_store.bind(voice["id"], engine.engine_id, status="ready", extra=binding_extra)
+            params["voice_id"] = cloud_voice_id
+
         started_monotonic = time.monotonic()
         record = {
             "id": generation_id,
@@ -651,8 +792,10 @@ def create_app(
         )
         if voice is not None:
             # Persist the binding only after a real synthesis succeeded —
-            # the binding claims the reference works on this engine.
-            voice_store.bind(voice["id"], engine.engine_id, status="ready")
+            # the binding claims the reference works on this engine. A cloud
+            # engine's voice_id (minted during this run or an earlier one)
+            # rides along as binding extras.
+            voice_store.bind(voice["id"], engine.engine_id, status="ready", extra=binding_extra)
             record["binding"] = voice_store.get(voice["id"])["bindings"].get(engine.engine_id)
         return generation_store.persist(record)
 
@@ -732,7 +875,7 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     app = create_app(
-        default_registry(output_dir=audio_dir),
+        default_registry(output_dir=audio_dir, key_store=KeyStore()),
         token=args.token,
         audio_dir=audio_dir,
         data_dir=data_dir,

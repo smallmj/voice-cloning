@@ -69,6 +69,7 @@ from .regression import (
     build_capability_matrix,
     char_error_rate,
     load_matrix_data,
+    make_item_record,
     sample_peak_vram,
     wav_duration_seconds,
 )
@@ -1623,29 +1624,21 @@ def create_app(
         async def _run():
             for step in plan:
                 item = next(i for i in REGRESSION_ITEMS if i["id"] == step["item_id"])
-                record_item = {
-                    "item_id": step["item_id"],
-                    "category": step["category"],
-                    "engine_id": step["engine_id"],
-                    "status": "running",
-                    "generation_id": None,
-                    "audio_url": None,
-                    "audio_seconds": None,
-                    "wall_seconds": None,
-                    "rtf": None,
-                    "peak_vram_bytes": None,
-                    "asr_text": None,
-                    "cer": None,
-                    "error": None,
-                }
+                record_item = make_item_record(
+                    step["engine_id"], item, status="running"
+                )
 
                 def _flush():
-                    fresh = regression_store.get(session_id) or session_snapshot[0]
+                    fresh = regression_store.get(session_id)
+                    if fresh is None:
+                        return
                     fresh["items"] = [
-                        record_item if i.get("item_id") == step["item_id"] and i.get("engine_id") == step["engine_id"] else i
+                        record_item
+                        if i.get("item_id") == step["item_id"]
+                        and i.get("engine_id") == step["engine_id"]
+                        else i
                         for i in fresh["items"]
                     ]
-                    session_snapshot[0] = fresh
                     regression_store.update(fresh)
 
                 try:
@@ -1667,6 +1660,8 @@ def create_app(
                         )
                     record_item["generation_id"] = record["id"]
                     record_item["audio_url"] = record.get("audio_url")
+                    # 口径：run_generation 的 duration_seconds 是端到端墙钟
+                    # （含引擎加载与归一化）——与 docs/evaluation/README 一致。
                     record_item["wall_seconds"] = record.get("duration_seconds")
                     audio_file = record.get("audio_file")
                     if audio_file:
@@ -1695,19 +1690,23 @@ def create_app(
                     detail = getattr(exc, "detail", None) or str(exc)
                     record_item["error"] = detail
                 _flush()
-            fresh = regression_store.get(session_id) or session_snapshot[0]
-            fresh["status"] = "completed"
-            fresh["finished_at"] = now_iso()
-            regression_store.update(fresh)
+            fresh = regression_store.get(session_id)
+            if fresh is not None:
+                fresh["status"] = "completed"
+                fresh["finished_at"] = now_iso()
+                regression_store.update(fresh)
 
-        session_snapshot = [regression_store.get(session_id)]
         try:
             asyncio.run(_run())
-        except Exception:  # noqa: BLE001 - the session keeps its items either way
-            fresh = regression_store.get(session_id) or session_snapshot[0]
-            fresh["status"] = "completed"
-            fresh["finished_at"] = now_iso()
-            regression_store.update(fresh)
+        except Exception as exc:  # noqa: BLE001 - a crashed run must NOT read
+            # as "completed" evidence: the matrix only merges sessions whose
+            # status is exactly "completed".
+            fresh = regression_store.get(session_id)
+            if fresh is not None:
+                fresh["status"] = "failed"
+                fresh["error"] = str(exc)
+                fresh["finished_at"] = now_iso()
+                regression_store.update(fresh)
 
     @app.post("/regression/run", dependencies=[Depends(require_auth)])
     async def run_regression(body: dict) -> dict:
@@ -1752,10 +1751,7 @@ def create_app(
             "engines": list(engine_ids),
             "asr_check": asr_check,
             "items": [
-                {"item_id": p["item_id"], "category": p["category"], "engine_id": p["engine_id"],
-                 "status": "pending", "generation_id": None, "audio_url": None,
-                 "audio_seconds": None, "wall_seconds": None, "rtf": None,
-                 "peak_vram_bytes": None, "asr_text": None, "cer": None, "error": None}
+                make_item_record(p["engine_id"], {"id": p["item_id"], "category": p["category"]})
                 for p in plan
             ],
         }

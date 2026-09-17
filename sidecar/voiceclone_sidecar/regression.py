@@ -59,7 +59,7 @@ REGRESSION_ITEMS: list[dict] = [
     {"id": "poly-01", "category": "polyphones", "text": "他重新考虑了这件事的重量。", "expect": "他重新考虑了这件事的重量。"},
     {"id": "poly-02", "category": "polyphones", "text": "银行门口有一条长长的人行通道。", "expect": "银行门口有一条长长的人行通道。"},
     {"id": "poly-03", "category": "polyphones", "text": "大会还讨论了存款利率下调的问题。", "expect": "大会还讨论了存款利率下调的问题。"},
-    {"id": "poly-04", "category": "polyphones", "text": "这种乐器叫做大乐,演奏起来很快乐。", "expect": "这种乐器叫做大乐，演奏起来很快乐。"},
+    {"id": "poly-04", "category": "polyphones", "text": "这种乐器叫做大乐，演奏起来很快乐。", "expect": "这种乐器叫做大乐，演奏起来很快乐。"},
 ]
 
 
@@ -120,7 +120,7 @@ def sample_peak_vram(interval: float = 0.2):
 
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi is None:
-        yield {"peak_vram_bytes": None, "sampling": False}
+        yield {"peak_vram_bytes": None}
         return
 
     def _used() -> int | None:
@@ -136,7 +136,7 @@ def sample_peak_vram(interval: float = 0.2):
     baseline = _used()
     # The poller mutates this holder in place while the with-body runs; the
     # caller reads it AFTER the body (the with-block's own duration).
-    holder = {"peak_vram_bytes": None, "sampling": baseline is not None}
+    holder = {"peak_vram_bytes": None}
     if baseline is None:
         yield holder
         return
@@ -169,6 +169,29 @@ _ITEM_KEYS = (
     "audio_url", "audio_seconds", "wall_seconds", "rtf",
     "peak_vram_bytes", "asr_text", "cer", "error",
 )
+
+
+def make_item_record(engine_id: str, item: dict, status: str = "pending") -> dict:
+    """One engine × one regression item, in its canonical 14-field shape.
+
+    The single source of both the session's initial placeholder rows and the
+    worker's updated rows — the two sites can never drift apart.
+    """
+    return {
+        "item_id": item["id"],
+        "category": item["category"],
+        "engine_id": engine_id,
+        "status": status,
+        "generation_id": None,
+        "audio_url": None,
+        "audio_seconds": None,
+        "wall_seconds": None,
+        "rtf": None,
+        "peak_vram_bytes": None,
+        "asr_text": None,
+        "cer": None,
+        "error": None,
+    }
 
 
 class RegressionStore:

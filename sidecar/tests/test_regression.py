@@ -100,7 +100,7 @@ def test_peak_vram_sampler_degrades_without_nvidia_smi(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with sample_peak_vram() as holder:
         pass
-    assert holder == {"peak_vram_bytes": None, "sampling": False}
+    assert holder == {"peak_vram_bytes": None}
 
 
 # ---------------------------------------------------------------------------

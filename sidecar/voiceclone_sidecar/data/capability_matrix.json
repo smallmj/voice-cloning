@@ -28,7 +28,8 @@
         {"field": "主观听感 (MOS)", "value": "尚未做过——仅有 ASR 可懂度复核", "verification": "unknown", "source": "issue #16 现状缺口", "date": "2026-09-18"}
       ],
       "performance": [
-        {"env": "Apple M5 Pro 24GB（热）", "rtf": 0.37, "rtf_range": [0.35, 0.4], "peak_vram_bytes": 2362232012, "peak_kind": "unified_memory", "verification": "measured", "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）", "date": "2026-09-16"}
+        {"env": "Apple M5 Pro 24GB（热，引擎级口径）", "rtf": 0.37, "rtf_range": [0.35, 0.4], "peak_vram_bytes": 2362232012, "peak_kind": "unified_memory", "verification": "measured", "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）", "date": "2026-09-16"},
+        {"env": "Mac 开发机（端到端口径，回归会话 4a4dd3fcd385460b84fa1839b3cddff8）", "rtf": 0.979, "peak_vram_bytes": null, "peak_kind": "unified_memory_not_sampled", "verification": "measured", "source": "POST /regression/run：17/17 成功，端到端墙钟含引擎加载与归一化，故高于引擎级 0.35–0.40", "date": "2026-09-18"}
       ],
       "notes": "回归集数字/日期/金额条目在本机 ASR 复核 3/3 正确（2025 年 / 100 万类难例含在 ①② 的实测里）；五类完整回归集按 issue #16 流程重跑并记录于回归索引。"
     },

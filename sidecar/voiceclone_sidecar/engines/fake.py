@@ -70,3 +70,28 @@ class FakeEngine(Engine):
             model_version="fake-1.0",
             cost=0.0,  # local synthesis has no per-run cost
         )
+
+    def transcribe(self, audio_path: str, log) -> str:
+        """Cloud-transcription surface: any registered engine may expose this.
+
+        The fake returns a deterministic transcript so the transcription
+        contract (providers, stored transcripts, ref_text auto-fill) is fully
+        testable and demonstrable without a real ASR provider.
+        """
+        log(f"fake: transcribing {Path(audio_path).name}")
+        return "这是一段用于测试的转写文本。"
+
+
+class FakeRefTextEngine(FakeEngine):
+    """Test seam: the fake engine, but declaring it needs reference text.
+
+    Registered only when VOICECLONE_TEST_ENGINES=1 (the contract-test
+    harness); it exercises the ref_text auto-fill path end to end.
+    """
+
+    engine_id = "fake-ref-text"
+    display_name = "Fake Engine (requires ref text)"
+
+    def capabilities(self) -> Capabilities:
+        caps = super().capabilities()
+        return Capabilities(**{**caps.to_dict(), "requires_reference_text": True})

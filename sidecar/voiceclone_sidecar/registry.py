@@ -113,4 +113,11 @@ def default_registry(output_dir=None) -> Registry:
         from .engines.indextts25 import IndexTts25CudaEngine
 
         registry.register(IndexTts25CudaEngine(output_dir=output_dir))
+
+    if os.environ.get("VOICECLONE_TEST_ENGINES") == "1":
+        # Contract-test seam only: exercises the reference-text auto-fill
+        # path without any real ASR/synthesis backend.
+        from .engines.fake import FakeRefTextEngine
+
+        registry.register(FakeRefTextEngine(output_dir=output_dir))
     return registry

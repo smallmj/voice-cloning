@@ -275,6 +275,20 @@ class VoiceStore:
 
     # -- engine bindings -------------------------------------------------------
 
+    def set_transcript(self, voice_id: str, text: str) -> dict:
+        """Store the reference's transcript on the voice record.
+
+        The transcript is metadata about the reference, never a modification
+        of the audio itself (issue #8: the app does not touch user material).
+        """
+        with self._lock:
+            record = self._voices.get(voice_id)
+            if record is None:
+                raise KeyError(voice_id)
+            record["reference"]["transcript"] = text
+            self._save()
+        return dict(record)
+
     def bind(self, voice_id: str, engine_id: str, status: str = "ready",
              extra: dict | None = None) -> dict:
         """Create or refresh the voice's binding on one engine.

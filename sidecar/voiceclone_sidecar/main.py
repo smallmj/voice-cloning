@@ -25,9 +25,19 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from .diagnostics import DiagnosticError, analyze_audio
 from .generations import GenerationStore, now_iso
+from .transcription import (
+    LOCAL_TOOL_ID,
+    DEFAULT_PROVIDER,
+    LocalTranscriber,
+    TranscriptionError,
+    TranscriptionSettings,
+    engine_transcribers,
+)
 from .normalization import normalize_text, normalize_with_flag
 from .registry import InstallableEngine, Registry, default_registry
+from .runtime import paths
 from .voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceStore, VoiceValidationError
 
 SIDECAR_VERSION = "0.1.0"
@@ -92,7 +102,11 @@ def verify_token_ws(expected: str):
 
 
 def create_app(
-    registry: Registry, token: str, audio_dir: Path, data_dir: Path | None = None
+    registry: Registry,
+    token: str,
+    audio_dir: Path,
+    data_dir: Path | None = None,
+    runtime_root: Path | None = None,
 ) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
 
@@ -123,12 +137,66 @@ def create_app(
     # Voices live next to the audio dir (data root). Reference samples are the
     # source of truth; engine bindings derived from them are a cache.
     voice_store = VoiceStore(data_dir if data_dir is not None else audio_dir.parent)
+    # Transcription (issue #8): provider choice is durable; the local tool
+    # is built lazily so unsupported platforms degrade to cloud-only.
+    transcription_settings = TranscriptionSettings(
+        data_dir if data_dir is not None else audio_dir.parent
+    )
+    _transcriber: LocalTranscriber | None = None
+
+    def _local_transcriber() -> LocalTranscriber:
+        nonlocal _transcriber
+        if _transcriber is None:
+            _transcriber = LocalTranscriber(root=runtime_root)
+        return _transcriber
 
     def _require_voice(voice_id: str) -> dict:
         record = voice_store.get(voice_id)
         if record is None:
             raise HTTPException(status_code=404, detail="voice not found")
         return record
+
+    def _transcribe_voice_sync(voice_id: str, provider: str | None) -> str:
+        """Transcribe a voice's reference with the chosen provider.
+
+        Runs blocking (worker subprocess / engine API call) — callers on the
+        event loop must wrap it in an executor.
+        """
+        record = voice_store.get(voice_id)
+        if record is None:
+            raise KeyError(voice_id)
+        ref_path = voice_store.reference_path(voice_id)
+        if not ref_path.is_file():
+            raise TranscriptionError("参考音频文件缺失，无法转写")
+        provider = provider or transcription_settings.provider()
+        if provider == "local":
+            return _local_transcriber().transcribe(str(ref_path), lambda m: None)
+        engine = registry.get(provider)
+        if engine is None or not callable(getattr(engine, "transcribe", None)):
+            raise TranscriptionError(f"引擎 {provider!r} 不提供转写能力")
+        return engine.transcribe(str(ref_path), lambda m: None)
+
+    def _transcription_providers() -> dict:
+        engines = [
+            {"id": e.engine_id, "display_name": e.display_name}
+            for e in engine_transcribers(registry)
+        ]
+        local: dict = {"supported": True, "installed": False, "label": None, "status": None}
+        try:
+            tr = _local_transcriber()
+            local.update(
+                installed=tr.is_installed(),
+                label=tr.cfg["label"],
+                status=tr.install_state(),
+            )
+        except TranscriptionError as exc:
+            local.update(supported=False, label=None, reason=str(exc))
+        return {
+            "provider": transcription_settings.provider(),
+            "default": DEFAULT_PROVIDER,
+            "local": local,
+            "engines": engines,
+        }
 
     async def _read_upload(upload: UploadFile | None) -> Path | None:
         if upload is None or not upload.filename:
@@ -303,6 +371,124 @@ def create_app(
         media = AVATAR_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return FileResponse(path, media_type=media)
 
+    # -- diagnostics + transcription (issue #8) -------------------------------
+
+    def _diagnose_sync(path: Path) -> dict:
+        return analyze_audio(path)
+
+    @app.post("/diagnose", dependencies=[Depends(require_auth)])
+    async def diagnose_upload(file: UploadFile) -> dict:
+        """Diagnose an audio file BEFORE creating a voice. Read-only: the
+        upload lands in a temp file that is deleted after analysis."""
+        tmp = None
+        try:
+            tmp = await _read_upload(file)
+            if tmp is None:
+                raise VoiceValidationError("参考音频不能为空")
+            return await asyncio.get_running_loop().run_in_executor(
+                None, _diagnose_sync, tmp
+            )
+        except (DiagnosticError, VoiceValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+    @app.get("/voices/{voice_id}/diagnose", dependencies=[Depends(require_auth)])
+    async def diagnose_voice(voice_id: str) -> dict:
+        _require_voice(voice_id)
+        path = voice_store.reference_path(voice_id)
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, _diagnose_sync, path
+            )
+        except DiagnosticError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/transcription/providers", dependencies=[Depends(require_auth)])
+    async def transcription_providers() -> dict:
+        return _transcription_providers()
+
+    @app.put("/transcription/provider", dependencies=[Depends(require_auth)])
+    async def set_transcription_provider(body: dict) -> dict:
+        provider = body.get("provider")
+        if provider not in {"local"} | {e["id"] for e in _transcription_providers()["engines"]}:
+            raise HTTPException(
+                status_code=422,
+                detail=f"未知转写提供方：{provider!r}；可选 local 或已注册的转写引擎",
+            )
+        transcription_settings.set_provider(provider)
+        return {"provider": transcription_settings.provider()}
+
+    @app.get("/transcription/local/status", dependencies=[Depends(require_auth)])
+    async def transcription_local_status() -> dict:
+        try:
+            tr = _local_transcriber()
+        except TranscriptionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        state = tr.install_state()
+        return {
+            "id": LOCAL_TOOL_ID,
+            "installed": state["installed"],
+            "installing": LOCAL_TOOL_ID in install_jobs,
+            "steps": state["steps"],
+        }
+
+    @app.post("/transcription/local/install", dependencies=[Depends(require_auth)])
+    async def transcription_local_install() -> dict:
+        """Install the local ASR tool in the background — same lifecycle as
+        engine installs (per-step durable state, WS log lines, polling)."""
+        try:
+            tr = _local_transcriber()
+        except TranscriptionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if LOCAL_TOOL_ID in install_jobs:
+            raise HTTPException(status_code=409, detail="install already running")
+        with install_lock:
+            if LOCAL_TOOL_ID in install_jobs:
+                raise HTTPException(status_code=409, detail="install already running")
+            job_id = f"install:{LOCAL_TOOL_ID}"
+            job = {"id": job_id, "status": "running", "error": None}
+            install_jobs[LOCAL_TOOL_ID] = job
+            loop = asyncio.get_running_loop()
+
+            def log(message: str) -> None:
+                loop.call_soon_threadsafe(log_bus.publish, job_id, message)
+
+            def run():
+                try:
+                    tr.install(log)
+                    job["status"] = "succeeded"
+                except Exception as exc:  # noqa: BLE001 - recorded in the job + logs
+                    job["status"] = "failed"
+                    job["error"] = str(exc)
+                    log(f"install failed: {exc}")
+                finally:
+                    install_jobs.pop(LOCAL_TOOL_ID, None)
+
+            threading.Thread(target=run, daemon=True).start()
+            return {"id": job_id, "status": "running"}
+
+    @app.post("/voices/{voice_id}/transcribe", dependencies=[Depends(require_auth)])
+    async def transcribe_voice(voice_id: str, body: dict | None = None) -> dict:
+        """Transcribe the reference and store the transcript on the voice.
+
+        The user never types reference text for engines that need it (issue
+        #8); the transcript is metadata — the audio itself is never touched.
+        """
+        _require_voice(voice_id)
+        provider = (body or {}).get("provider")
+        try:
+            text = await asyncio.get_running_loop().run_in_executor(
+                None, _transcribe_voice_sync, voice_id, provider
+            )
+        except (TranscriptionError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return voice_store.set_transcript(voice_id, text)
+
     @app.post("/voices/{voice_id}/bindings/{engine_id}", dependencies=[Depends(require_auth)])
     async def bind_voice(voice_id: str, engine_id: str) -> dict:
         """Create or refresh this voice's binding on one engine.
@@ -364,6 +550,23 @@ def create_app(
                 # engine on every generation. The binding below only records
                 # that this happened.
                 params["ref_audio"] = str(ref_path)
+            if engine.capabilities().requires_reference_text and not params.get("ref_text"):
+                # Engines that need reference text get it automatically
+                # (issue #8): stored transcript first, on-demand transcription
+                # second — the user never types it by hand.
+                transcript = (voice.get("reference") or {}).get("transcript")
+                if not transcript:
+                    try:
+                        transcript = await asyncio.get_running_loop().run_in_executor(
+                            None, _transcribe_voice_sync, voice["id"], None
+                        )
+                    except TranscriptionError as exc:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"该引擎需要参考文本，自动转写失败：{exc}",
+                        ) from exc
+                    voice_store.set_transcript(voice["id"], transcript)
+                params["ref_text"] = transcript
 
         # The normalization layer is applied centrally, here, before any
         # engine adapter sees the text — adapters cannot bypass it.
@@ -529,6 +732,7 @@ def main(argv: list[str] | None = None) -> None:
         token=args.token,
         audio_dir=audio_dir,
         data_dir=data_dir,
+        runtime_root=paths.runtime_root(),
     )
 
     config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")

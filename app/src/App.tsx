@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import type {
   Capabilities,
+  ReferenceAnalysis,
+  TranscriptionProviders,
   EngineInfo,
   EngineInstallStatus,
   GenerationListResult,
@@ -22,6 +24,7 @@ const CAP_LABELS: Record<keyof Capabilities, string> = {
   cross_device_use: "跨设备",
   upload_used_for_training: "上传用于训练",
   api_closed_loop: "API 闭环",
+  requires_reference_text: "需参考文本",
 };
 
 function CapBadge({ label, on }: { label: string; on: boolean }) {
@@ -100,6 +103,13 @@ function EngineCard({
   );
 }
 
+const DIAG_LABELS: Record<string, string> = {
+  snr: "信噪比",
+  speaker: "说话人",
+  clipping: "削波",
+  silence: "静音段",
+};
+
 function VoiceCard({
   voice,
   baseUrl,
@@ -107,6 +117,7 @@ function VoiceCard({
   selected,
   onSelect,
   onDelete,
+  onTranscribed,
 }: {
   voice: Voice;
   baseUrl: string;
@@ -114,8 +125,52 @@ function VoiceCard({
   selected: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onTranscribed: (voice: Voice) => void;
 }) {
   const ref = voice.reference;
+  const [analysis, setAnalysis] = useState<ReferenceAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
+
+  async function diagnose() {
+    setAnalyzing(true);
+    setCardError(null);
+    try {
+      const res = await fetch(`${baseUrl}/voices/${voice.id}/diagnose`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setCardError(detail?.detail ?? `诊断失败（HTTP ${res.status}）`);
+        return;
+      }
+      setAnalysis((await res.json()) as ReferenceAnalysis);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function transcribe() {
+    setTranscribing(true);
+    setCardError(null);
+    try {
+      const res = await fetch(`${baseUrl}/voices/${voice.id}/transcribe`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null;
+        setCardError(detail?.detail ?? `转写失败（HTTP ${res.status}）`);
+        return;
+      }
+      onTranscribed((await res.json()) as Voice);
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
   return (
     <div
       className={`voice-card ${selected ? "selected" : ""}`}
@@ -158,6 +213,31 @@ function VoiceCard({
           {Object.entries(voice.bindings)
             .map(([engineId, b]) => `${engineId}（${b.status}）`)
             .join("、")}
+        </div>
+      )}
+      {ref.transcript && (
+        <div className="voice-transcript">
+          转写文本：<code>{ref.transcript}</code>
+        </div>
+      )}
+      <div className="voice-tools" onClick={(ev) => ev.stopPropagation()}>
+        <button onClick={() => void diagnose()} disabled={analyzing}>
+          {analyzing ? "诊断中…" : "诊断"}
+        </button>
+        <button onClick={() => void transcribe()} disabled={transcribing}>
+          {transcribing ? "转写中…" : ref.transcript ? "重新转写" : "转写"}
+        </button>
+      </div>
+      {cardError && <div className="error">{cardError}</div>}
+      {analysis && (
+        <div className="voice-diagnostics" onClick={(ev) => ev.stopPropagation()}>
+          {analysis.diagnostics.map((d) => (
+            <div key={d.id} className={`diagnostic diag-${d.status}`}>
+              <span className="diag-label">{DIAG_LABELS[d.id] ?? d.id}</span>
+              <span className="diag-message">{d.message}</span>
+              <span className="diag-advice">建议：{d.advice}</span>
+            </div>
+          ))}
         </div>
       )}
       <audio
@@ -436,6 +516,8 @@ export default function App() {
   const [creatingVoice, setCreatingVoice] = useState(false);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [rerunHint, setRerunHint] = useState<string | null>(null);
+  const [transProviders, setTransProviders] = useState<TranscriptionProviders | null>(null);
+  const [localTransInstalling, setLocalTransInstalling] = useState(false);
   // Parameters carried back from a rerun: everything the record stored except
   // server-side paths the sidecar re-injects itself (ref_audio). They ride
   // along on the next generate call unless the user clears them.
@@ -556,6 +638,60 @@ export default function App() {
     void refreshVoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info]);
+
+  async function refreshTransProviders() {
+    if (!info) return;
+    const res = await fetch(`${info.baseUrl}/transcription/providers`, {
+      headers: { Authorization: `Bearer ${info.token}` },
+    });
+    if (res.ok) setTransProviders((await res.json()) as TranscriptionProviders);
+  }
+
+  useEffect(() => {
+    void refreshTransProviders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info]);
+
+  useEffect(() => {
+    if (!info || !localTransInstalling) return;
+    const t = setInterval(async () => {
+      const res = await fetch(`${info.baseUrl}/transcription/local/status`, {
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
+      if (!res.ok) return;
+      const st = (await res.json()) as { installed: boolean; installing: boolean };
+      if (!st.installing) {
+        setLocalTransInstalling(false);
+        void refreshTransProviders();
+      }
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, localTransInstalling]);
+
+  async function setTransProvider(provider: string) {
+    if (!info) return;
+    const res = await fetch(`${info.baseUrl}/transcription/provider`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    });
+    if (res.ok) void refreshTransProviders();
+  }
+
+  async function installLocalTranscriber() {
+    if (!info || localTransInstalling) return;
+    setLocalTransInstalling(true);
+    setLogsOpen(true);
+    try {
+      await fetch(`${info.baseUrl}/transcription/local/install`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
+    } catch {
+      setLocalTransInstalling(false);
+    }
+  }
 
   async function createVoice() {
     if (!info || !newVoiceFile || creatingVoice) return;
@@ -746,10 +882,53 @@ export default function App() {
                 selected={v.id === selectedVoice}
                 onSelect={() => setSelectedVoice(v.id === selectedVoice ? null : v.id)}
                 onDelete={() => void deleteVoice(v.id)}
+                onTranscribed={(updated) =>
+                  setVoices((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+                }
               />
             ))}
           </div>
         )}
+      </section>
+
+      <section>
+        <h2>转写设置</h2>
+        <div className="voice-picker">
+          <label>
+            参考音频转写：
+            <select
+              value={transProviders?.provider ?? "local"}
+              onChange={(e) => void setTransProvider(e.target.value)}
+            >
+              <option value="local">
+                本地转写（{transProviders?.local.label ?? "mlx-whisper / faster-whisper"}）
+              </option>
+              {(transProviders?.engines ?? []).map((e) => (
+                <option key={e.id} value={e.id}>
+                  云端转写：{e.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {transProviders?.provider === "local" && transProviders.local.supported && (
+            <>
+              <button onClick={() => void installLocalTranscriber()} disabled={localTransInstalling}>
+                {localTransInstalling
+                  ? "安装中…"
+                  : transProviders.local.installed
+                    ? "重新安装"
+                    : "安装本地转写"}
+              </button>
+              <span className="hint">
+                {localTransInstalling
+                  ? "正在下载并安装本地转写模型，请稍候…"
+                  : transProviders.local.installed
+                    ? "本地转写已就绪（离线可用）。"
+                    : "本地转写尚未安装；安装后转写与参考文本自动补全均离线完成。"}
+              </span>
+            </>
+          )}
+        </div>
       </section>
 
       <section ref={generateRef}>
@@ -775,6 +954,14 @@ export default function App() {
               false && (
               <span className="hint">该引擎不支持声音复刻，将忽略参考音频。</span>
             )}
+            {selectedVoice &&
+              selectedEngine &&
+              engines.find((e) => e.id === selectedEngine)?.capabilities
+                .requires_reference_text && (
+                <span className="hint">
+                  该引擎需要参考文本：将自动转写所选音色的参考音频，无需手动输入。
+                </span>
+              )}
         </div>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} />
 

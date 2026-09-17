@@ -22,6 +22,10 @@ class Capabilities:
     cross_device_use: bool = False
     upload_used_for_training: bool = False
     api_closed_loop: bool = False
+    # Engines whose cloning quality/behavior depends on the reference text
+    # declare it; the sidecar then auto-fills ref_text from the voice's
+    # transcript (transcribing on demand) instead of making the user type it.
+    requires_reference_text: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -34,4 +38,5 @@ class Capabilities:
             "cross_device_use": self.cross_device_use,
             "upload_used_for_training": self.upload_used_for_training,
             "api_closed_loop": self.api_closed_loop,
+            "requires_reference_text": self.requires_reference_text,
         }

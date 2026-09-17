@@ -22,6 +22,7 @@ export interface Capabilities {
   cross_device_use: boolean;
   upload_used_for_training: boolean;
   api_closed_loop: boolean;
+  requires_reference_text?: boolean;
 }
 
 export interface EngineInfo {
@@ -92,6 +93,7 @@ export interface VoiceReference {
   duration_seconds: number;
   size_bytes: number;
   sha256: string;
+  transcript?: string | null;
 }
 
 export interface VoiceBinding {
@@ -116,4 +118,41 @@ export interface Voice {
   reference: VoiceReference;
   avatar: VoiceAvatar | null;
   bindings: Record<string, VoiceBinding>;
+}
+
+// --- diagnostics + transcription (issue #8) ---
+
+export interface CapabilitiesRequiresRefText {
+  requires_reference_text?: boolean;
+}
+
+export interface DiagnosticItem {
+  id: "snr" | "speaker" | "clipping" | "silence" | string;
+  status: "good" | "warn" | "bad";
+  message: string;
+  advice: string;
+  value?: number | null;
+  segments?: [number, number][];
+}
+
+export interface ReferenceAnalysis {
+  duration_seconds: number;
+  sample_rate: number;
+  snr_db: number;
+  silence_segments: [number, number][];
+  clipped_sample_ratio: number;
+  diagnostics: DiagnosticItem[];
+}
+
+export interface TranscriptionProviders {
+  provider: string;
+  default: string;
+  local: {
+    supported: boolean;
+    installed: boolean;
+    label: string | null;
+    status?: { installed: boolean; steps: Record<string, unknown> } | null;
+    reason?: string;
+  };
+  engines: { id: string; display_name: string }[];
 }

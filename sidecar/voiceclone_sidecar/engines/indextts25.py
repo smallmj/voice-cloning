@@ -130,6 +130,7 @@ class IndexTts25CudaEngine(InstallableEngine):
             cross_device_use=False,
             upload_used_for_training=False,
             api_closed_loop=False,
+            requires_reference_text=True,  # the sidecar auto-fills ref_text from the transcript
         )
 
     # -- install surface ----------------------------------------------------

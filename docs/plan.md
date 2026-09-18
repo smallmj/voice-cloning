@@ -82,7 +82,7 @@ voicebox 官方 troubleshooting 对大陆用户的答案原文是「Try using a 
         SQLite + 音频文件 + 音色元数据
 ```
 
-**为什么 macOS 与 Windows 用不同运行时**：PyTorch/MPS 对 TTS 基本不可用（`nn.Conv1d` 的 65536 输出通道上限，IndexTTS 在 M3 Max 上复现；GPT-SoVITS 维护者建议 Mac 用 CPU；XTTS-v2 在 MPS 上 hang）。因此 macOS 走 torch-free 路线（MLX），Windows 走 PyTorch + CUDA，**但对上层暴露同一套协议**。
+**为什么 macOS 与 Windows 用不同运行时**：PyTorch/MPS 对 TTS 曾被认为基本不可用（`nn.Conv1d` 的 65536 输出通道上限，IndexTTS 在 M3 Max 上复现；GPT-SoVITS 维护者建议 Mac 用 CPU；XTTS-v2 在 MPS 上 hang）。因此 macOS 起初走 torch-free 路线（MLX），Windows 走 PyTorch + CUDA，**但对上层暴露同一套协议**。**修正（2026-09-19）**：IndexTTS-2.5 在 torch 2.8 + M5 Pro 的 MPS 上实测可端到端出音频（`indextts-25-mps` 引擎，热 RTF ≈ 5.0，见 `docs/installation/macos-indextts-2.5-mps.md`）——MPS 路线对 IndexTTS-2.5 成立，只是速度只适合短句，长文本应走任务队列；其余引擎的 MPS 问题结论不变。
 
 **必须避开的已知陷阱**
 
@@ -141,6 +141,7 @@ voicebox 官方 troubleshooting 对大陆用户的答案原文是「Try using a 
 | 平台 | 引擎 | 实测 | 许可 |
 |---|---|---|---|
 | **macOS** | **Qwen3-TTS-0.6B-Base 8bit**（mlx-audio） | M5 Pro 热 RTF **0.37** / 峰值内存 **2.2 GB** / 权重 1.9 GB / 中文 ASR 复核 3/3 | **Apache-2.0，可随包分发** |
+| **macOS（MPS）** | **IndexTTS-2.5**（PyTorch 2.8 + MPS，fp32） | M5 Pro 热 RTF **≈5.0**（实测 2026-09-19）；冷启动加载约 75s；本地已有权重可零下载复用（`VOICECLONE_INDEXTTS25_LOCAL_WEIGHTS`） | 同 CUDA 版：bilibili 协议；**适合短句，长文本走任务队列** |
 | **Windows** | **IndexTTS-2.5**（PyTorch + CUDA） | 显存约 **6 GB**（8GB 卡可跑）；RTF **0.2065**（4090 bf16, kv_cache）；中文（2.0 版）CER 1.03 / SIM 76.5；**有拼音多音字控制**；零样本复刻**不需要参考文本转写** | bilibili 协议：MAU<1亿 且年营收<10亿人民币可商用；**基础依赖在 Windows 零编译可装** |
 
 ### ASR

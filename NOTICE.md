@@ -30,7 +30,7 @@
 | 权重 | 用途 | 许可证（权重卡标注） | 商用提示 |
 | --- | --- | --- | --- |
 | `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16` | macOS 本地引擎（Qwen3-TTS MLX） | Apache-2.0 | 可商用 |
-| `IndexTeam/IndexTTS-2.5` | Windows CUDA 本地引擎 | `other`：**bilibili Model Use License** | 有限商用：月活 ≤ 1 亿且年营收 ≤ 10 亿人民币；超阈值须另行书面授权（见 `docs/research/local-models/2026-09-16_AppleSilicon实测补充.md` §4.4） |
+| `IndexTeam/IndexTTS-2.5` | 本地引擎（Windows CUDA + macOS MPS，同一套权重） | `other`：**bilibili Model Use License** | 有限商用：月活 ≤ 1 亿且年营收 ≤ 10 亿人民币；超阈值须另行书面授权（见 `docs/research/local-models/2026-09-16_AppleSilicon实测补充.md` §4.4） |
 | ├ `facebook/w2v-bert-2.0` | IndexTTS-2.5 管线的语义编码器 | MIT（HF 卡片标注） | 可商用 |
 | ├ `amphion/MaskGCT`（`semantic_codec/model.safetensors`） | IndexTTS-2.5 管线的语义 codec | **CC-BY-NC-4.0** | ⚠️ **非商用**。该权重是 IndexTTS-2.5 自身管线要求的依赖；**商用部署 IndexTTS-2.5 需自行取得 Amphion 授权** |
 | ├ `funasr/campplus`（`campplus_cn_common.bin`） | 说话人特征 | Apache-2.0 | 可商用 |

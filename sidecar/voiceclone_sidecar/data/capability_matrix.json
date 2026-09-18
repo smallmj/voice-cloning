@@ -9,10 +9,22 @@
       "kind": "builtin",
       "role": "无模型 / 无 Key 的内置兜底引擎：真实 WAV 输出、真实代码路径，合同测试的唯一后端。",
       "evidence": [
-        {"field": "输出", "value": "内置合成音（非语音）", "verification": "measured", "source": "voiceclone_sidecar/engines/fake.py", "date": "2026-09-18"}
+        {
+          "field": "输出",
+          "value": "内置合成音（非语音）",
+          "verification": "measured",
+          "source": "voiceclone_sidecar/engines/fake.py",
+          "date": "2026-09-18"
+        }
       ],
       "performance": [
-        {"env": "任意（无 GPU 依赖）", "rtf": null, "peak_vram_bytes": null, "verification": "measured", "note": "纯 Python 写 WAV，无模型加载"}
+        {
+          "env": "任意（无 GPU 依赖）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "measured",
+          "note": "纯 Python 写 WAV，无模型加载"
+        }
       ],
       "notes": "不参与听感评测；能力矩阵只用来验证界面渲染路径。"
     },
@@ -22,14 +34,58 @@
       "kind": "local",
       "role": "macOS (Apple Silicon) 本地复刻引擎，v1 默认本地档。",
       "evidence": [
-        {"field": "权重许可", "value": "Apache-2.0（代码+权重，官方明写 free for commercial use）", "verification": "verified", "source": "Qwen 官方仓库 LICENSE；docs/research/local-models/2026-09-16_引擎选型报告.md", "date": "2026-09-16"},
-        {"field": "零样本复刻", "value": "支持（ref audio + ref_text）", "verification": "measured", "source": "docs/research/local-models/2026-09-16_AppleSilicon实测补充.md（M5 Pro 真机）", "date": "2026-09-16"},
-        {"field": "中文可懂度", "value": "上游 zh WER 3.27（同表最低）；本机 ASR 复核 3/3 正确", "verification": "measured", "source": "2026-09-16_AppleSilicon实测补充.md", "date": "2026-09-16"},
-        {"field": "主观听感 (MOS)", "value": "尚未做过——仅有 ASR 可懂度复核", "verification": "unknown", "source": "issue #16 现状缺口", "date": "2026-09-18"}
+        {
+          "field": "权重许可",
+          "value": "Apache-2.0（代码+权重，官方明写 free for commercial use）",
+          "verification": "verified",
+          "source": "Qwen 官方仓库 LICENSE；docs/research/local-models/2026-09-16_引擎选型报告.md",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "零样本复刻",
+          "value": "支持（ref audio + ref_text）",
+          "verification": "measured",
+          "source": "docs/research/local-models/2026-09-16_AppleSilicon实测补充.md（M5 Pro 真机）",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "中文可懂度",
+          "value": "上游 zh WER 3.27（同表最低）；本机 ASR 复核 3/3 正确",
+          "verification": "measured",
+          "source": "2026-09-16_AppleSilicon实测补充.md",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过——仅有 ASR 可懂度复核",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-18"
+        }
       ],
       "performance": [
-        {"env": "Apple M5 Pro 24GB（热，引擎级口径）", "rtf": 0.37, "rtf_range": [0.35, 0.4], "peak_vram_bytes": 2362232012, "peak_kind": "unified_memory", "verification": "measured", "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）", "date": "2026-09-16"},
-        {"env": "Mac 开发机（端到端口径，回归会话 4a4dd3fcd385460b84fa1839b3cddff8）", "rtf": 0.979, "peak_vram_bytes": null, "peak_kind": "unified_memory_not_sampled", "verification": "measured", "source": "POST /regression/run：17/17 成功，端到端墙钟含引擎加载与归一化，故高于引擎级 0.35–0.40", "date": "2026-09-18"}
+        {
+          "env": "Apple M5 Pro 24GB（热，引擎级口径）",
+          "rtf": 0.37,
+          "rtf_range": [
+            0.35,
+            0.4
+          ],
+          "peak_vram_bytes": 2362232012,
+          "peak_kind": "unified_memory",
+          "verification": "measured",
+          "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）",
+          "date": "2026-09-16"
+        },
+        {
+          "env": "Mac 开发机（端到端口径，回归会话 4a4dd3fcd385460b84fa1839b3cddff8）",
+          "rtf": 0.979,
+          "peak_vram_bytes": null,
+          "peak_kind": "unified_memory_not_sampled",
+          "verification": "measured",
+          "source": "POST /regression/run：17/17 成功，端到端墙钟含引擎加载与归一化，故高于引擎级 0.35–0.40",
+          "date": "2026-09-18"
+        }
       ],
       "notes": "回归集数字/日期/金额条目在本机 ASR 复核 3/3 正确（2025 年 / 100 万类难例含在 ①② 的实测里）；五类完整回归集按 issue #16 流程重跑并记录于回归索引。"
     },
@@ -39,16 +95,67 @@
       "kind": "local",
       "role": "Windows CUDA 本地复刻引擎，v1 Windows 档。",
       "evidence": [
-        {"field": "权重许可", "value": "bilibili Model Use License：MAU<1亿 且 上年营收<10亿人民币 → 可商用；另有两条附加条款", "verification": "verified", "source": "仓库 LICENSE + LICENSE_ZH.txt §2.2；docs/research/local-models/2026-09-16_Windows重型引擎选型.md §3.1.4", "date": "2026-09-16"},
-        {"field": "推理显存（厂商口径）", "value": "约 6 GB（HF 模型卡原文）", "verification": "vendor", "source": "IndexTTS-2.5 HF 模型卡", "date": "2026-09-16"},
-        {"field": "常驻显存风险", "value": "issue #649：常驻可达 10 GB（含情绪模型）→ 产品需提供释放显存能力", "verification": "verified", "source": "IndexTTS issue #649（2026-02-06）", "date": "2026-02-06"},
-        {"field": "中文可懂度", "value": "2.0（1.5B）seed-tts-eval test-zh CER 1.03 / SIM 76.5；2.5 官方称 WER/SIM 与 2 相当", "verification": "verified", "source": "三方模型卡交叉引用（CosyVoice3 / LongCat / VoxCPM2）", "date": "2026-09-16"},
-        {"field": "主观听感 (MOS)", "value": "尚未做过——仅有 ASR 可懂度复核", "verification": "unknown", "source": "issue #16 现状缺口", "date": "2026-09-18"}
+        {
+          "field": "权重许可",
+          "value": "bilibili Model Use License：MAU<1亿 且 上年营收<10亿人民币 → 可商用；另有两条附加条款",
+          "verification": "verified",
+          "source": "仓库 LICENSE + LICENSE_ZH.txt §2.2；docs/research/local-models/2026-09-16_Windows重型引擎选型.md §3.1.4",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "推理显存（厂商口径）",
+          "value": "约 6 GB（HF 模型卡原文）",
+          "verification": "vendor",
+          "source": "IndexTTS-2.5 HF 模型卡",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "常驻显存风险",
+          "value": "issue #649：常驻可达 10 GB（含情绪模型）→ 产品需提供释放显存能力",
+          "verification": "verified",
+          "source": "IndexTTS issue #649（2026-02-06）",
+          "date": "2026-02-06"
+        },
+        {
+          "field": "中文可懂度",
+          "value": "2.0（1.5B）seed-tts-eval test-zh CER 1.03 / SIM 76.5；2.5 官方称 WER/SIM 与 2 相当",
+          "verification": "verified",
+          "source": "三方模型卡交叉引用（CosyVoice3 / LongCat / VoxCPM2）",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过——仅有 ASR 可懂度复核",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-18"
+        }
       ],
       "performance": [
-        {"env": "RTX 4090（官方 README Inference Speed 表，2.5 bf16, kv_cache=True）", "rtf": 0.2065, "peak_vram_bytes": null, "verification": "verified", "source": "IndexTTS-2.5 官方 README", "date": "2026-09-16"},
-        {"env": "RTX 4080（vLLM 加速，zeeklog 搜索摘要）", "rtf": 0.15, "peak_vram_bytes": null, "verification": "unverified", "source": "zeeklog（仅搜索摘要，未核实）", "date": "2026-09-16"},
-        {"env": "RTX 3090 24GB（本机 ALAN-PC）", "rtf": null, "peak_vram_bytes": null, "verification": "unknown", "source": "issue #16：待用回归集 + sample_peak_vram 实测后回填", "date": "2026-09-18"}
+        {
+          "env": "RTX 4090（官方 README Inference Speed 表，2.5 bf16, kv_cache=True）",
+          "rtf": 0.2065,
+          "peak_vram_bytes": null,
+          "verification": "verified",
+          "source": "IndexTTS-2.5 官方 README",
+          "date": "2026-09-16"
+        },
+        {
+          "env": "RTX 4080（vLLM 加速，zeeklog 搜索摘要）",
+          "rtf": 0.15,
+          "peak_vram_bytes": null,
+          "verification": "unverified",
+          "source": "zeeklog（仅搜索摘要，未核实）",
+          "date": "2026-09-16"
+        },
+        {
+          "env": "RTX 3090 24GB（本机 ALAN-PC）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "issue #16：待用回归集 + sample_peak_vram 实测后回填",
+          "date": "2026-09-18"
+        }
       ],
       "notes": "3090 实测是本工单的硬验收项：跑 POST /regression/run 后把回归会话里的 rtf / peak_vram_bytes 回填到这里并升级验证等级。"
     },
@@ -58,13 +165,44 @@
       "kind": "cloud",
       "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）。",
       "evidence": [
-        {"field": "计费", "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费；1 万字符免费额度（90 天）", "verification": "verified", "source": "阿里百炼定价页；engines/qwen_tts_cloud.py billing_note", "date": "2026-09-17"},
-        {"field": "数据用途", "value": "输入输出不用于训练；参考音频上传留存于账号（可删除）；禁止转售", "verification": "verified", "source": "阿里云隐私声明 + 服务条款（BYOK 下用户为阿里云直接客户）", "date": "2026-09-17"},
-        {"field": "中文可懂度", "value": "官方中文第一梯队（国内厂商 Elo 全球第 4 的同厂模型）", "verification": "vendor", "source": "docs/research/cloud-api/2026-09-16_中国大陆云端API.md", "date": "2026-09-16"},
-        {"field": "主观听感 (MOS)", "value": "尚未做过", "verification": "unknown", "source": "issue #16 现状缺口", "date": "2026-09-18"}
+        {
+          "field": "计费",
+          "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费；1 万字符免费额度（90 天）",
+          "verification": "verified",
+          "source": "阿里百炼定价页；engines/qwen_tts_cloud.py billing_note",
+          "date": "2026-09-17"
+        },
+        {
+          "field": "数据用途",
+          "value": "输入输出不用于训练；参考音频上传留存于账号（可删除）；禁止转售",
+          "verification": "verified",
+          "source": "阿里云隐私声明 + 服务条款（BYOK 下用户为阿里云直接客户）",
+          "date": "2026-09-17"
+        },
+        {
+          "field": "中文可懂度",
+          "value": "官方中文第一梯队（国内厂商 Elo 全球第 4 的同厂模型）",
+          "verification": "vendor",
+          "source": "docs/research/cloud-api/2026-09-16_中国大陆云端API.md",
+          "date": "2026-09-16"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-18"
+        }
       ],
       "performance": [
-        {"env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）", "rtf": null, "peak_vram_bytes": null, "verification": "unknown", "source": "云端引擎不适用本地显存口径", "date": "2026-09-18"}
+        {
+          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "云端引擎不适用本地显存口径",
+          "date": "2026-09-18"
+        }
       ],
       "notes": "回归集覆盖它对归一化后文本的处理；云端不做盲听 LUFS 归一化之外的本地测量。"
     },
@@ -74,14 +212,93 @@
       "kind": "cloud",
       "role": "BYOK 云端音色设计档（文字描述造音色，无需参考音频）。",
       "evidence": [
-        {"field": "音色设计", "value": "支持（描述 → 音色，preview sample 即参考样本，ADR-0010）", "verification": "verified", "source": "百炼 API 文档；engines/qwen_tts_vd_cloud.py", "date": "2026-09-17"},
-        {"field": "计费", "value": "音色设计模型的按字价格未公开 → 记录 cost=null，不估算", "verification": "verified", "source": "engines/qwen_tts_vd_cloud.py", "date": "2026-09-17"},
-        {"field": "主观听感 (MOS)", "value": "尚未做过", "verification": "unknown", "source": "issue #16 现状缺口", "date": "2026-09-18"}
+        {
+          "field": "音色设计",
+          "value": "支持（描述 → 音色，preview sample 即参考样本，ADR-0010）",
+          "verification": "verified",
+          "source": "百炼 API 文档；engines/qwen_tts_vd_cloud.py",
+          "date": "2026-09-17"
+        },
+        {
+          "field": "计费",
+          "value": "音色设计模型的按字价格未公开 → 记录 cost=null，不估算",
+          "verification": "verified",
+          "source": "engines/qwen_tts_vd_cloud.py",
+          "date": "2026-09-17"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-18"
+        }
       ],
       "performance": [
-        {"env": "云端", "rtf": null, "peak_vram_bytes": null, "verification": "unknown", "source": "云端引擎不适用本地显存口径", "date": "2026-09-18"}
+        {
+          "env": "云端",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "云端引擎不适用本地显存口径",
+          "date": "2026-09-18"
+        }
       ],
       "notes": "设计引擎也跑回归集（用设计出的 preview 音色），验证文字描述音色对难例的读法。"
+    },
+    {
+      "engine_id": "indextts-25-mps",
+      "display_name": "IndexTTS-2.5（本地 · MPS）",
+      "kind": "local",
+      "role": "Apple Silicon 本地复刻引擎，Mac 档补充（2026-09-19 新增）。",
+      "evidence": [
+        {
+          "field": "权重许可",
+          "value": "与 CUDA 版同一权重：bilibili Model Use License（MAU<1亿 且上年营收<10亿人民币可商用）；辅助模型含 CC-BY-NC 的 MaskGCT 依赖",
+          "verification": "verified",
+          "source": "同 indextts-25-cuda 条目；NOTICE.md",
+          "date": "2026-09-19"
+        },
+        {
+          "field": "MPS 可行性（实测）",
+          "value": "torch 2.8.0 + M5 Pro 24GB 端到端真实克隆合成成功，输出峰值 0.542/0.569 无削顶无静音——推翻 plan.md 原「MPS 对 TTS 基本不可用」中涉及 IndexTTS 的结论",
+          "verification": "measured",
+          "source": "docs/installation/macos-indextts-2.5-mps.md；docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
+          "date": "2026-09-19"
+        },
+        {
+          "field": "精度路径",
+          "value": "fp32（use_bf16=False, device='mps'）——Apple Silicon 上唯一经真实生成验证的精度；bf16 autocast on MPS 未验证",
+          "verification": "measured",
+          "source": "ComfyUI T8 节点 2026-09-16 验证 + 本引擎 2026-09-19 复验",
+          "date": "2026-09-19"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-19"
+        }
+      ],
+      "performance": [
+        {
+          "env": "Apple M5 Pro 24GB（本机，torch 2.8.0 MPS fp32，热）",
+          "rtf": 5.02,
+          "peak_vram_bytes": null,
+          "verification": "measured",
+          "source": "docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
+          "date": "2026-09-19"
+        },
+        {
+          "env": "Apple M5 Pro 24GB（首条，含预热）",
+          "rtf": 6.29,
+          "peak_vram_bytes": null,
+          "verification": "measured",
+          "source": "同上",
+          "date": "2026-09-19"
+        }
+      ]
     }
   ]
 }

@@ -197,7 +197,7 @@ def test_aggregate_empty_session_is_safe():
 # ---------------------------------------------------------------------------
 
 
-def test_matrix_data_lists_all_five_shipped_engines():
+def test_matrix_data_lists_all_shipped_engines():
     data = load_matrix_data()
     ids = {e["engine_id"] for e in data["engines"]}
     assert ids == {
@@ -206,6 +206,7 @@ def test_matrix_data_lists_all_five_shipped_engines():
         "qwen3-tts-vd-cloud",
         "qwen3-tts-mlx",
         "indextts-25-cuda",
+        "indextts-25-mps",
     }
 
 

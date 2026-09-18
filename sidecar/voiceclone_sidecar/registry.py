@@ -142,19 +142,15 @@ class Registry:
 def default_registry(output_dir=None, key_store=None) -> Registry:
     """Registry with the engines shipped in this package.
 
-    The fake engine is a built-in: it runs the exact same code path as real
-    engines, keeps the app usable without models/keys, and is the only
-    backend the contract tests exercise.
-
-    Real local engines register only where they can run (platform +
+    The fake engine is a TEST SEAM, not a product engine (issue #18): it is
+    registered only under VOICECLONE_TEST_ENGINES=1 so production engine
+    lists and the transcription provider list never offer a test double —
+    the double's transcribe() writes a fixed test text into the voice
+    library, which real engines then use as ref_text and silently degrade
+    clones. Real local engines register only where they can run (platform +
     architecture); cloud-API engines are always registered — they are usable
     the moment the user brings their own API key (ADR-0003).
     """
-    from .engines.fake import FakeEngine
-
-    registry = Registry()
-    registry.register(FakeEngine(output_dir=output_dir))
-
     import os
     import sys
 
@@ -165,6 +161,7 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
 
     from .engines.qwen_tts_cloud import Qwen3TtsVcCloudEngine
 
+    registry = Registry()
     registry.register(Qwen3TtsVcCloudEngine(output_dir=output_dir, key_store=key_store))
 
     from .engines.qwen_tts_vd_cloud import Qwen3TtsVdCloudEngine
@@ -186,10 +183,14 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
         registry.register(IndexTts25CudaEngine(output_dir=output_dir))
 
     if os.environ.get("VOICECLONE_TEST_ENGINES") == "1":
-        # Contract-test seam only: exercises the reference-text auto-fill
-        # path without any real ASR/synthesis backend.
-        from .engines.fake import FakeRefTextEngine
+        # Contract-test seam only (issue #18): the fake runs the exact same
+        # code path as real engines and keeps the contract suite runnable
+        # without models/keys — but it must never surface in production
+        # lists, and its transcribe() must never reach a user's voice
+        # library. Everything below exists only under the test switch.
+        from .engines.fake import FakeEngine, FakeRefTextEngine
 
+        registry.register(FakeEngine(output_dir=output_dir))
         registry.register(FakeRefTextEngine(output_dir=output_dir))
 
         # Contract-test seam: a BYOK cloud-shaped engine for the issue-#9

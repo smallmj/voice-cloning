@@ -321,6 +321,13 @@ function VoiceCard({
           转写文本：<code>{ref.transcript}</code>
         </div>
       )}
+      {ref?.transcript && ref.transcript_placeholder && (
+        <div className="voice-placeholder-warning" onClick={(ev) => ev.stopPropagation()}>
+          ⚠️ 这段转写文本是早期版本内置测试引擎写入的占位文本，不是真实转写结果。
+          需要参考文本的引擎会把它当成参考文本使用，影响复刻质量。
+          请先安装并使用本地转写（设置 → 转写设置），点击「重新转写」覆盖。
+        </div>
+      )}
       <div className="voice-tools" onClick={(ev) => ev.stopPropagation()}>
         {ref ? (
           <>

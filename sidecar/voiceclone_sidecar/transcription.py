@@ -29,6 +29,21 @@ from .runtime import installer, paths, uvman
 LOCAL_TOOL_ID = "transcribe-local"
 DEFAULT_PROVIDER = "local"
 
+# Issue #18: the only engine that ever returned this fixed string was the
+# fake test double. Earlier versions let it be selected as a cloud provider,
+# so some voice libraries already carry this placeholder as a "transcript"
+# — where engines with requires_reference_text silently use it as ref_text.
+# The sidecar flags such transcripts so the UI can ask for a re-transcribe.
+FAKE_TRANSCRIPT_PLACEHOLDER = "这是一段用于测试的转写文本。"
+
+
+def is_placeholder_transcript(text: str | None) -> bool:
+    """True when a stored transcript is (whitespace-insensitively) the fake
+    engine's fixed test text rather than a real transcription."""
+    if not text:
+        return False
+    return text.strip() == FAKE_TRANSCRIPT_PLACEHOLDER
+
 # macOS → mlx-whisper, Windows → faster-whisper (issue #8 mandate).
 PLATFORM_CONFIG: dict[str, dict] = {
     "darwin": {

@@ -7,6 +7,7 @@ import math
 import struct
 import subprocess
 import wave
+from pathlib import Path
 
 import httpx
 import pytest
@@ -68,6 +69,85 @@ def test_voice_diagnose_never_modifies_the_reference(client):
 
 def test_voice_diagnose_unknown_voice(client):
     assert client.get("/voices/nope/diagnose").status_code == 404
+
+
+# --- issue #18: ASR honesty — the test double leaves production ---------------
+
+
+def test_default_registry_without_test_env_excludes_fake_engine(monkeypatch, tmp_path):
+    """Production (no VOICECLONE_TEST_ENGINES) must not register the fake
+    engine at all: it cannot appear in engine lists or the transcription
+    provider list, and no path can select it."""
+    monkeypatch.delenv("VOICECLONE_TEST_ENGINES", raising=False)
+    from voiceclone_sidecar.registry import default_registry
+
+    registry = default_registry(output_dir=tmp_path / "audio")
+    assert registry.get("fake") is None
+
+
+def test_default_registry_without_test_env_has_no_engine_transcribers(
+    monkeypatch, tmp_path
+):
+    """The transcription provider list has no test double in production:
+    no registered engine exposes transcribe(), so the only provider is
+    the local tool."""
+    monkeypatch.delenv("VOICECLONE_TEST_ENGINES", raising=False)
+    from voiceclone_sidecar.registry import default_registry
+    from voiceclone_sidecar.transcription import engine_transcribers
+
+    registry = default_registry(output_dir=tmp_path / "audio")
+    assert engine_transcribers(registry) == []
+
+
+def test_default_registry_with_test_env_keeps_fake_engine(monkeypatch, tmp_path):
+    """The test-engine switch keeps the double available for contract tests."""
+    monkeypatch.setenv("VOICECLONE_TEST_ENGINES", "1")
+    from voiceclone_sidecar.registry import default_registry
+
+    registry = default_registry(output_dir=tmp_path / "audio")
+    assert registry.get("fake") is not None
+
+
+def test_placeholder_transcript_helper():
+    from voiceclone_sidecar.transcription import (
+        FAKE_TRANSCRIPT_PLACEHOLDER,
+        is_placeholder_transcript,
+    )
+
+    assert is_placeholder_transcript(FAKE_TRANSCRIPT_PLACEHOLDER)
+    assert is_placeholder_transcript(f"  {FAKE_TRANSCRIPT_PLACEHOLDER}\n")
+    assert not is_placeholder_transcript("真正的参考音频转写内容。")
+    assert not is_placeholder_transcript("")
+    assert not is_placeholder_transcript(None)
+
+
+def test_placeholder_transcript_in_library_is_flagged(client):
+    """A placeholder already written into the voice library by an earlier
+    version is recognized and surfaced to the UI as an actionable flag."""
+    voice = create_voice(client, seconds=4.0)
+    client.put("/transcription/provider", json={"provider": "fake"})
+    r = client.post(f"/voices/{voice['id']}/transcribe", json={})
+    assert r.status_code == 200, r.text
+    client.put("/transcription/provider", json={"provider": "local"})
+
+    stored = client.get(f"/voices/{voice['id']}").json()
+    assert stored["reference"]["transcript"].strip()
+    assert stored["reference"]["transcript_placeholder"] is True
+
+    listed = client.get("/voices").json()["voices"]
+    match = [v for v in listed if v["id"] == voice["id"]][0]
+    assert match["reference"]["transcript_placeholder"] is True
+
+
+def test_real_transcript_is_not_flagged(client, sidecar):
+    """A genuine transcript must not raise the placeholder warning."""
+    from voiceclone_sidecar.voices import VoiceStore
+
+    voice = create_voice(client, seconds=4.0)
+    store = VoiceStore(Path(sidecar["data_dir"]))
+    store.set_transcript(voice["id"], "这是真实参考音频的转写内容。")
+    stored = client.get(f"/voices/{voice['id']}").json()
+    assert stored["reference"]["transcript_placeholder"] is False
 
 
 # --- transcription providers + settings ---------------------------------------

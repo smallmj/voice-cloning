@@ -118,6 +118,10 @@ export interface VoiceReference {
   size_bytes: number;
   sha256: string;
   transcript?: string | null;
+  // Issue #18: the stored transcript is the old fake engine's fixed test
+  // text — the UI shows an actionable re-transcribe hint instead of letting
+  // the placeholder silently ride along as ref_text.
+  transcript_placeholder?: boolean;
 }
 
 export interface VoiceBinding {

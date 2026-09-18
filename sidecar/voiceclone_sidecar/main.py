@@ -67,6 +67,7 @@ from .transcription import (
     TranscriptionError,
     TranscriptionSettings,
     engine_transcribers,
+    is_placeholder_transcript,
 )
 from .normalization import normalize_text, normalize_with_flag
 from .regression import (
@@ -274,6 +275,21 @@ def create_app(
         if record is None:
             raise HTTPException(status_code=404, detail="voice not found")
         return record
+
+    def _flag_placeholder(record: dict) -> dict:
+        """Annotate a voice record for the UI (issue #18): reference
+        transcripts that are the old fake engine's fixed test text are
+        flagged, so the user is told to re-transcribe instead of the
+        placeholder silently riding along as ref_text. Returns a copy —
+        the flag is derived, never persisted."""
+        ref = record.get("reference")
+        if not isinstance(ref, dict) or "transcript_placeholder" in ref:
+            return record
+        annotated = {**record, "reference": {**ref}}
+        annotated["reference"]["transcript_placeholder"] = is_placeholder_transcript(
+            ref.get("transcript")
+        )
+        return annotated
 
     def _transcribe_voice_sync(voice_id: str, provider: str | None) -> str:
         """Transcribe a voice's reference with the chosen provider.
@@ -517,7 +533,7 @@ def create_app(
             avatar_tmp = await _read_upload(avatar)
             if audio_tmp is None:
                 raise VoiceValidationError("参考音频不能为空")
-            return voice_store.create(name, description, audio_tmp, avatar_tmp)
+            return _flag_placeholder(voice_store.create(name, description, audio_tmp, avatar_tmp))
         except VoiceValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
@@ -530,11 +546,11 @@ def create_app(
 
     @app.get("/voices", dependencies=[Depends(require_auth)])
     async def list_voices() -> dict:
-        return {"voices": voice_store.list()}
+        return {"voices": [_flag_placeholder(v) for v in voice_store.list()]}
 
     @app.get("/voices/{voice_id}", dependencies=[Depends(require_auth)])
     async def get_voice(voice_id: str) -> dict:
-        return _require_voice(voice_id)
+        return _flag_placeholder(_require_voice(voice_id))
 
     @app.patch("/voices/{voice_id}", dependencies=[Depends(require_auth)])
     async def update_voice(voice_id: str, body: dict) -> dict:
@@ -819,7 +835,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="voice not found") from None
         except TranscriptionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return voice_store.set_transcript(voice_id, text)
+        return _flag_placeholder(voice_store.set_transcript(voice_id, text))
 
     @app.post("/voices/{voice_id}/bindings/{engine_id}", dependencies=[Depends(require_auth)])
     async def bind_voice(voice_id: str, engine_id: str) -> dict:

@@ -44,6 +44,7 @@ def is_placeholder_transcript(text: str | None) -> bool:
         return False
     return text.strip() == FAKE_TRANSCRIPT_PLACEHOLDER
 
+
 # macOS → mlx-whisper, Windows → faster-whisper (issue #8 mandate).
 PLATFORM_CONFIG: dict[str, dict] = {
     "darwin": {

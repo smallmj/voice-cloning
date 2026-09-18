@@ -556,10 +556,14 @@ def create_app(
     async def update_voice(voice_id: str, body: dict) -> dict:
         _require_voice(voice_id)
         try:
-            return voice_store.update(
-                voice_id,
-                name=body.get("name") if "name" in body else None,
-                description=body.get("description") if "description" in body else None,
+            return _flag_placeholder(
+                voice_store.update(
+                    voice_id,
+                    name=body.get("name") if "name" in body else None,
+                    description=body.get("description")
+                    if "description" in body
+                    else None,
+                )
             )
         except VoiceValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -952,7 +956,7 @@ def create_app(
             )
             voice_store.bind(voice["id"], engine.engine_id, status="ready",
                              extra={"voice_id": extra["voice_id"]})
-            return voice_store.get(voice["id"])
+            return _flag_placeholder(voice_store.get(voice["id"]))
         except CloudEngineError as exc:
             voice_store.delete(voice["id"])
             raise HTTPException(status_code=502, detail=f"设计音色失败：{exc}") from exc

@@ -129,6 +129,20 @@ class InstallableEngine(Engine):
     @abc.abstractmethod
     def install(self, log, progress=None) -> dict: ...
 
+    def model_dir(self):
+        """Directory holding this engine's weights + venv (issue #17).
+
+        Local model management (weight-dir path, disk usage, uninstall)
+        operates on exactly this directory; the install state file lives
+        inside it, so removing it also resets the install lifecycle.
+        """
+        from pathlib import Path
+
+        from .runtime import paths
+
+        root = getattr(self, "root", None) or paths.runtime_root()
+        return paths.engine_dir(Path(root), self.engine_id)
+
 
 class Registry:
     """Real engine registry. Engines register here; nothing else knows them."""

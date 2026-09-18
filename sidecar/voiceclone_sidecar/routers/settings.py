@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import engine_config
+from .. import engine_config, sources
 from ..context import AppContext
 
 ALLOWED_THEMES = ("system", "dark", "light")
@@ -84,11 +84,53 @@ def build_router(ctx: AppContext) -> APIRouter:
         saved = engine_config.save_engine_settings(ctx.data_root, engines)
         # ADR-0015 decision 1: config is injected at construction, so the
         # change takes effect by rebuilding the registry — no sidecar restart.
-        from ..registry import default_registry
-
-        ctx.registry = default_registry(
-            output_dir=ctx.audio_dir, key_store=ctx.keys, settings=saved
-        )
+        # ADR-0016: the rebuild carries the full settings (engines + sources)
+        # so the download-source preferences stay in effect.
+        ctx.rebuild_registry()
         return saved
+
+    @router.get("/settings/sources", dependencies=[Depends(ctx.require_auth)])
+    async def get_source_prefs() -> dict:
+        """Download-source preferences (ADR-0016): one 首选 per axis, plus
+        the choice catalogs the picker renders."""
+        return {
+            "sources": engine_config.load_source_prefs(ctx.data_root),
+            "choices": {
+                "weights": [
+                    {"id": sid, "label": spec["label"]}
+                    for sid, spec in sources.WEIGHT_SOURCE_CHOICES.items()
+                ],
+                "pypi": [
+                    {"id": sid, "label": spec["label"]}
+                    for sid, spec in sources.PYPI_CHOICES.items()
+                ],
+                "cuda": [
+                    {"id": sid, "label": spec["label"]}
+                    for sid, spec in sources.CUDA_CHOICES.items()
+                ],
+            },
+        }
+
+    @router.put("/settings/sources", dependencies=[Depends(ctx.require_auth)])
+    async def put_source_prefs(body: dict) -> dict:
+        prefs = body.get("sources")
+        if not isinstance(prefs, dict):
+            raise HTTPException(status_code=422, detail="body 必须包含 sources 对象")
+        labels = {
+            "weights": ("权重源", sources.WEIGHT_SOURCE_CHOICES),
+            "pypi": ("包索引", sources.PYPI_CHOICES),
+            "cuda": ("CUDA 轮子源", sources.CUDA_CHOICES),
+        }
+        for key, (cn, choices) in labels.items():
+            if key in prefs and prefs[key] not in choices:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{cn}必须是 {'/'.join(choices)} 之一",
+                )
+        engine_config.save_source_prefs(ctx.data_root, prefs)
+        # Same seam as PUT /settings/engines: prefs map onto env knobs inside
+        # effective_env, so a registry rebuild makes them take effect.
+        ctx.rebuild_registry()
+        return engine_config.load_source_prefs(ctx.data_root)
 
     return router

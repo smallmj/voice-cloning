@@ -106,6 +106,23 @@ class AppContext:
 
     # -- voice helpers -------------------------------------------------------
 
+    def rebuild_registry(self) -> None:
+        """Rebuild the registry from the full settings storage (ADR-0015/0016).
+
+        Config is injected at construction, so any settings change — per-engine
+        overrides OR the global download-source preferences — takes effect by
+        rebuilding; no sidecar restart. Every settings-mutation endpoint goes
+        through this one place.
+        """
+        from .engine_config import load_full_settings
+        from .registry import default_registry
+
+        self.registry = default_registry(
+            output_dir=self.audio_dir,
+            key_store=self.keys,
+            settings=load_full_settings(self.data_root),
+        )
+
     def require_voice(self, voice_id: str) -> dict:
         record = self.voice_store.get(voice_id)
         if record is None:

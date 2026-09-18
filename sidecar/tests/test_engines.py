@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from voiceclone_sidecar import main as sidecar_main
+from voiceclone_sidecar import sources
 from voiceclone_sidecar.capabilities import Capabilities
 from voiceclone_sidecar.engines import qwen3_tts
 from voiceclone_sidecar.registry import Engine, GenerationRequest, GenerationResult, InstallableEngine, Registry
@@ -156,6 +157,11 @@ def test_qwen3_engine_install_steps_cover_expected_steps(tmp_path):
     assert weights_step.artifact == tmp_path / "engines" / qwen3_tts.Qwen3TtsMlxEngine.engine_id / "weights"
 
 
-def test_qwen3_engine_uses_mirror_sources():
-    assert qwen3_tts.SOURCES[0].startswith("https://huggingface.co/")
-    assert qwen3_tts.SOURCES[1].startswith("https://hf-mirror.com/")
+def test_qwen3_engine_declares_modelscope_twin():
+    """ADR-0016: qwen3-tts-mlx has a verified ModelScope twin and resolves
+    its weight chain at install time from the injected preferred source."""
+    assert qwen3_tts.MS_REPO == "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
+    chain = sources.weight_sources(qwen3_tts.REPO, ms_repo=qwen3_tts.MS_REPO)
+    assert chain[0].startswith("https://huggingface.co/")
+    assert chain[1].startswith("https://hf-mirror.com/")
+    assert chain[2].startswith("https://modelscope.cn/models/mlx-community/")

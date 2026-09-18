@@ -36,19 +36,117 @@ MODELSCOPE_TEMPLATE = "https://modelscope.cn/models/{ms_repo}/resolve/master/{pa
 HF_ENDPOINT_DEFAULT = "https://huggingface.co"
 HF_ENDPOINT_MIRROR = "https://hf-mirror.com"
 
+# -- ADR-0016: preferred source + silent fallback chain ------------------------
 
-def weight_sources(repo: str, ms_repo: str | None = None) -> list[str]:
-    """The weight-source fallback chain for one repo.
+# Env knobs the download-source settings feed into the ADR-0015 seam
+# (effective_env maps the settings `sources` block onto these). Engines read
+# them from their injected env at INSTALL time — never as module constants,
+# which would freeze the choice at import and survive no settings change.
+PREFERRED_WEIGHT_ENV = "VOICECLONE_WEIGHT_SOURCE"
+PREFERRED_CUDA_ENV = "VOICECLONE_CUDA_SOURCE"
+
+
+def weight_pref(env: dict | None) -> str | None:
+    """The preferred weight source an engine reads from its INJECTED env
+    (ADR-0015) at install time — never a module constant, which would freeze
+    the choice at import and survive no settings change."""
+    return (env or {}).get(PREFERRED_WEIGHT_ENV)
+
+# The three weight sources. The user picks ONE as 首选; the other two stay as
+# a silent fallback chain (ADR-0016 decision 2) — the picker must stay simple
+# without losing the mandated three-source degradation. ModelScope only ever
+# serves repos that declare an ms_repo counterpart (see weight_sources).
+WEIGHT_SOURCE_CHOICES: dict[str, dict[str, str]] = {
+    "hf": {"label": "HF 官方", "template": HF_TEMPLATE},
+    "hf-mirror": {"label": "hf-mirror", "template": HF_MIRROR_TEMPLATE},
+    "modelscope": {"label": "ModelScope", "template": MODELSCOPE_TEMPLATE},
+}
+DEFAULT_WEIGHT_SOURCE = "hf"
+
+# Axis 2 choices: the PyPI index for non-torch engine packages. Aliyun is the
+# China-friendly default; PyPI official is the escape hatch when a mirror
+# serves stale wheels.
+PYPI_CHOICES: dict[str, dict[str, str]] = {
+    "aliyun": {"label": "阿里云 PyPI 镜像", "index": "https://mirrors.aliyun.com/pypi/simple/"},
+    "official": {"label": "PyPI 官方", "index": "https://pypi.org/simple/"},
+}
+DEFAULT_PYPI_SOURCE = "aliyun"
+
+# Axis 3 choices: CUDA wheel hosts (exact wheel URLs, never an index —
+# ADR-0002). download.pytorch.org is canonical; Aliyun answered on many China
+# networks when the canonical host was TLS-blackholed (measured 2026-09-17).
+CUDA_CHOICES: dict[str, dict[str, str]] = {
+    "official": {
+        "label": "download.pytorch.org（官方）",
+        "template": "https://download.pytorch.org/whl/{cuda_tag}/{path}",
+    },
+    "aliyun": {
+        "label": "阿里云 pytorch-wheels 镜像",
+        "template": "https://mirrors.aliyun.com/pytorch-wheels/{cuda_tag}/{path}",
+    },
+}
+DEFAULT_CUDA_SOURCE = "official"
+
+
+def order_ids(choices: dict, preferred: str | None) -> list[str]:
+    """Source ids with the preferred one FIRST, the rest in default order.
+
+    An unknown/None preferred value is ignored (defaults apply) — the sources
+    layer never invents a source the catalog does not know. The fallback
+    order is FIXED, never auto-re-ranked by speed: ADR-0016 §后果 — automatic
+    reordering would make the serving source diverge from what the user
+    configured, defeating the "actual source" display.
+    """
+    ids = list(choices)
+    if preferred in choices:
+        ids.remove(preferred)
+        ids.insert(0, preferred)
+    return ids
+
+
+def weight_sources(
+    repo: str, ms_repo: str | None = None, preferred: str | None = None
+) -> list[str]:
+    """The weight-source fallback chain for one repo, preferred source first.
 
     ``{path}`` stays as a literal placeholder for the downloader to
     interpolate per file. ModelScope is appended only when the engine
     declares a ModelScope counterpart (``ms_repo``); it is NOT a universal
-    mirror — repos without a ModelScope twin would 404 there.
+    mirror — repos without a ModelScope twin would 404 there (verified
+    2026-09: bigvgan and mlx-community/whisper-small have none). A preferred
+    ``modelscope`` on such a repo silently degrades to the HF-first order —
+    the source simply is not applicable.
     """
-    sources = [HF_TEMPLATE.replace("{repo}", repo), HF_MIRROR_TEMPLATE.replace("{repo}", repo)]
-    if ms_repo:
-        sources.append(MODELSCOPE_TEMPLATE.replace("{ms_repo}", ms_repo))
-    return sources
+    ids = order_ids(WEIGHT_SOURCE_CHOICES, preferred)
+    if "modelscope" in ids and not ms_repo:
+        ids.remove("modelscope")
+    out = []
+    for sid in ids:
+        template = WEIGHT_SOURCE_CHOICES[sid]["template"]
+        url = template.replace("{repo}", repo)
+        if ms_repo:
+            url = url.replace("{ms_repo}", ms_repo)
+        out.append(url)
+    return out
+
+
+def source_label(url: str) -> str:
+    """Human-readable name of the source a URL belongs to.
+
+    Matched against the known templates (preferred over host parsing so the
+    log line says "ModelScope", not "modelscope.cn"). Unknown hosts fall back
+    to their hostname — a custom template still produces an honest line.
+    """
+    base = url.split("{", 1)[0] if "{" in url else url
+    for catalog in (WEIGHT_SOURCE_CHOICES, CUDA_CHOICES):
+        for spec in catalog.values():
+            template = spec["template"]
+            prefix = template.split("{", 1)[0]
+            if base.startswith(prefix):
+                return spec["label"]
+    from urllib.parse import urlparse
+
+    return urlparse(url).hostname or url
 
 
 # -- axis 2: package index ----------------------------------------------------
@@ -78,16 +176,17 @@ def python_install_mirror(env: dict | None = None) -> str:
 # -- axis 3: CUDA wheel sources -----------------------------------------------
 
 
-def torch_wheel_sources(cuda_tag: str) -> list[str]:
+def torch_wheel_sources(cuda_tag: str, preferred: str | None = None) -> list[str]:
     """Source templates for exact CUDA wheel URLs, ``{path}`` = wheel name.
 
     download.pytorch.org is canonical; the Aliyun pytorch-wheels mirror is
     the fallback that actually answers on many China networks (measured
     2026-09-17: download.pytorch.org TLS-blackholed while Aliyun responded).
     These are EXACT wheel URLs — no index is ever consulted, which is the
-    strongest form of ADR-0002's explicit-index rule.
+    strongest form of ADR-0002's explicit-index rule. ``preferred`` (an id
+    from :data:`CUDA_CHOICES`) moves its host to the front of the chain.
     """
     return [
-        f"https://download.pytorch.org/whl/{cuda_tag}/{{path}}",
-        f"https://mirrors.aliyun.com/pytorch-wheels/{cuda_tag}/{{path}}",
+        CUDA_CHOICES[sid]["template"].replace("{cuda_tag}", cuda_tag)
+        for sid in order_ids(CUDA_CHOICES, preferred)
     ]

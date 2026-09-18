@@ -29,6 +29,21 @@ from pathlib import Path
 CURL_TIMEOUT = 60 * 60  # big weights files on slow links
 
 
+def serving_label(source_template: str) -> str:
+    """Human-readable name of the source a template belongs to (ADR-0016).
+
+    Best-effort on purpose: the downloader must never fail because labeling
+    failed, and callers outside the sidecar package may pass custom
+    templates (label falls back to the host).
+    """
+    try:
+        from .. import sources as _sources
+
+        return _sources.source_label(source_template)
+    except Exception:  # noqa: BLE001 - labeling is cosmetic
+        return source_template.split("/")[2] if source_template.startswith("http") else source_template
+
+
 @dataclass(frozen=True)
 class DownloadSpec:
     """One file. ``path`` is interpolated into each source template."""
@@ -37,20 +52,32 @@ class DownloadSpec:
     dest_name: str
 
 
-def _run_curl(args: list[str]) -> tuple[int, str]:
-    """Run one curl attempt; return (final http code, stderr tail)."""
+def _run_curl(args: list[str]) -> tuple[int, str, str | None]:
+    """Run one curl attempt; return (final http code, stderr tail, effective URL).
+
+    ADR-0016: the effective URL is what makes the "actual serving source" log
+    honest — hf-mirror 308-redirects境外 traffic back to huggingface.co, and
+    only ``%{url_effective}`` reveals that the bytes came from the real site,
+    not the mirror the user picked.
+    """
     proc = subprocess.run(
         ["curl", "--connect-timeout", "20", *args],
         capture_output=True, text=True, timeout=CURL_TIMEOUT + 30,
     )
     code = 0
+    effective: str | None = None
     for line in proc.stdout.splitlines():
         if line.startswith("DSCODE:"):
-            try:
-                code = int(line.split(":", 1)[1].strip())
-            except ValueError:
-                code = 0
-    return code, proc.stderr.strip()[-300:]
+            fields = line.split(":", 1)[1].strip().split()
+            if fields:
+                try:
+                    code = int(fields[0])
+                except ValueError:
+                    code = 0
+            for f in fields[1:]:
+                if f.startswith("DSURL:"):
+                    effective = f[len("DSURL:"):]
+    return code, proc.stderr.strip()[-300:], effective
 
 
 def remote_size(url: str) -> int | None:
@@ -87,6 +114,11 @@ def download_file(
     ``sources`` entries are URL templates containing ``{path}``. ``progress``
     receives ``(dest_name, downloaded_bytes, total_bytes_or_None)``.
     Returns the final path; raises the last error if every source fails.
+
+    ADR-0016: the log always states which source ACTUALLY served the file —
+    hf-mirror's failure mode is silent (a 308 back to huggingface.co shows up
+    as slowness, not an error), so "preferred source" without "served by"
+    leaves the user guessing.
     """
     dest = dest_dir / spec.dest_name
     part = dest.with_name(dest.name + ".part")
@@ -103,8 +135,13 @@ def download_file(
                 log(f"{spec.dest_name}: already complete ({total} bytes), skipping")
             return dest
         try:
-            _download_from(url, part, spec.dest_name, progress, log, total=total)
+            served_url = _download_from(url, part, spec.dest_name, progress, log, total=total)
             part.replace(dest)
+            if log:
+                log(
+                    f"{spec.dest_name}: 本次由 {serving_label(served_url or url)} 提供"
+                    f"（{total if total is not None else '?'} bytes）"
+                )
             return dest
         except Exception as exc:  # noqa: BLE001 - try the next source
             last_error = exc
@@ -113,7 +150,7 @@ def download_file(
     raise RuntimeError(f"all sources failed for {spec.dest_name}") from last_error
 
 
-def _download_from(url: str, part: Path, name: str, progress, log, total: int | None = None) -> None:
+def _download_from(url: str, part: Path, name: str, progress, log, total: int | None = None) -> str | None:
     if total is None:
         total = remote_size(url)
     stop = threading.Event()
@@ -139,7 +176,7 @@ def _download_from(url: str, part: Path, name: str, progress, log, total: int | 
             # as dead and let the retry/fallback machinery take over.
             "--speed-time", "30", "--speed-limit", "10240",
             "-o", str(part),
-            "-w", "\nDSCODE:%{http_code}",  # final status after the body
+            "-w", "\nDSCODE:%{http_code} DSURL:%{url_effective}",
             url,
         ]
         if resume:
@@ -149,7 +186,7 @@ def _download_from(url: str, part: Path, name: str, progress, log, total: int | 
         poller = threading.Thread(target=poll_progress, daemon=True)
         poller.start()
         try:
-            code, stderr = _run_curl(args)
+            code, stderr, effective_url = _run_curl(args)
         finally:
             stop.set()
             poller.join()
@@ -162,7 +199,10 @@ def _download_from(url: str, part: Path, name: str, progress, log, total: int | 
         if code in (200, 206) and part.exists():
             if progress:
                 progress(name, part.stat().st_size, total or part.stat().st_size)
-            return
+            # The redirect chain may have silently left the requested source:
+            # label the bytes by where they ACTUALLY came from, falling back
+            # to the attempted URL when curl did not report one.
+            return effective_url or url
         raise RuntimeError(f"curl failed (http={code}): {stderr}")
 
     raise RuntimeError(f"unable to download {name}")

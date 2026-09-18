@@ -38,3 +38,11 @@
 - 三个轴必须各自可切换：只给"权重源"一个开关会让用户无法处理 PyPI 或 CUDA 轮子被墙的情况。
 - 待核两项：(a) ModelScope 是否真有 bigvgan 与 `whisper-small` 的对应仓库，没有则该文件只能两源；(b) `HF_HUB_DISABLE_XET` 在 hf-mirror 场景下是否真如文档所述生效（社区有"好像不生效"的报告，来源未核实）。
 - 本 ADR 只定策略与归属；**兜底链的顺序在"实际生效源"可见之前不得自动按速度重排**——自动重排会让用户看到的源与配置的源不一致。
+
+## 落地核验（issue #17 实现，2026-09）
+
+原「待核」两项已实测关闭：
+
+- bigvgan：ModelScope 双胞胎为 `nv-community/bigvgan_v2_22khz_80band_256x`，`config.json` 与 `bigvgan_generator.pt` resolve 均 200，已写入 `AUX_WEIGHTS`。
+- 本地转写（Windows faster-whisper-small）：`gpustack/faster-whisper-small` 的 `config.json` / `model.bin` / `tokenizer.json` / `vocabulary.txt` 均 200（该镜像无 `preprocessor_config.json`，faster-whisper 加载不需要）；macOS 的 `mlx-community/whisper-small` 仍无双胞胎，维持两源。
+- qwen3-tts-mlx：`mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16` 在 ModelScope resolve 200，缺口已关闭。

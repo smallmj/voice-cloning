@@ -43,10 +43,9 @@ TORCH_WHEELS = [
     f"torchaudio-{TORCH_VERSION}%2B{CUDA_TAG}-{PY_TAG}-{PY_TAG}-{PLATFORM_TAG}.whl",
 ]
 # CUDA wheel sources live in the central sources module (ADR-0015): exact
-# wheel URLs, no index resolution. download.pytorch.org is canonical; the
-# aliyun pytorch-wheels mirror is the fallback that actually answers on many
-# China networks (observed 2026-09-17). Mirror failure is loud, never silent.
-TORCH_SOURCES = sources.torch_wheel_sources(CUDA_TAG)
+# wheel URLs, no index resolution. The chain (preferred CUDA source first,
+# the rest as silent fallback) is resolved at INSTALL time from the injected
+# env — axis 3 is separately switchable, never merged with the others.
 # Measured 2026-09-17 on the Windows rig: download.pytorch.org ~800 KB/s
 # (after an initial TLS-blackhole window), aliyun ~240 KB/s per connection,
 # so the official source stays first and aliyun is the fallback.
@@ -89,8 +88,11 @@ AUX_WEIGHTS = [
     ("facebook/w2v-bert-2.0", "model.safetensors", "hf_cache/w2v-bert-2.0/model.safetensors", "AI-ModelScope/w2v-bert-2.0"),
     ("amphion/MaskGCT", "semantic_codec/model.safetensors", "hf_cache/semantic_codec_model.safetensors", "amphion/MaskGCT"),
     ("funasr/campplus", "campplus_cn_common.bin", "hf_cache/campplus_cn_common.bin", "iic/speech_campplus_sv_zh-cn_16k-common"),
-    ("nvidia/bigvgan_v2_22khz_80band_256x", "config.json", "hf_cache/bigvgan/config.json", None),
-    ("nvidia/bigvgan_v2_22khz_80band_256x", "bigvgan_generator.pt", "hf_cache/bigvgan/bigvgan_generator.pt", None),
+    # ModelScope twin verified 2026-09: nv-community/bigvgan_v2_22khz_80band_256x
+    # serves both files (resolve -> 200). Closes the last bigvgan coverage
+    # hole ADR-0016 decision 4 mandated; CUDA and MPS share this list.
+    ("nvidia/bigvgan_v2_22khz_80band_256x", "config.json", "hf_cache/bigvgan/config.json", "nv-community/bigvgan_v2_22khz_80band_256x"),
+    ("nvidia/bigvgan_v2_22khz_80band_256x", "bigvgan_generator.pt", "hf_cache/bigvgan/bigvgan_generator.pt", "nv-community/bigvgan_v2_22khz_80band_256x"),
 ]
 
 IDLE_TIMEOUT_S = 300.0  # release GPU memory after five idle minutes
@@ -163,6 +165,9 @@ class IndexTts25CudaEngine(InstallableEngine):
             uv = find_uv(log)
             venv_ = uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
             wheels_dir = paths.engine_dir(self.root, self.engine_id) / "wheels"
+            torch_chain = sources.torch_wheel_sources(
+                CUDA_TAG, preferred=self.env.get(sources.PREFERRED_CUDA_ENV)
+            )
             local_wheels = []
             for wheel in TORCH_WHEELS:
                 log(f"torch: fetching {wheel}")
@@ -171,7 +176,7 @@ class IndexTts25CudaEngine(InstallableEngine):
                         # URL name carries %2B; the local file must carry a
                         # literal "+" or uv rejects the wheel filename.
                         downloader.DownloadSpec(path=wheel, dest_name=urllib.parse.unquote(wheel)),
-                        wheels_dir, TORCH_SOURCES,
+                        wheels_dir, torch_chain,
                         progress=lambda name, done, total, _w=wheel: progress(f"torch:{_w}", done, total),
                         log=log,
                     )
@@ -192,20 +197,25 @@ class IndexTts25CudaEngine(InstallableEngine):
                 uvman.pip_install(uv, venv_, [f"indextts @ {fallback}"], env=self.env, log=log)
 
         def step_weights(log, progress):
-            weight_sources = sources.weight_sources(REPO, ms_repo=REPO)
+            # ADR-0016: preferred weight source from the injected env.
+            weight_chain = sources.weight_sources(
+                REPO, ms_repo=REPO,
+                preferred=sources.weight_pref(self.env),
+            )
             for f in MAIN_WEIGHTS_FILES:
                 log(f"weights: {f}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=f, dest_name=f),
-                    weights_dir, weight_sources,
+                    weights_dir, weight_chain,
                     progress=lambda name, done, total, _n=f: progress(f"weights:{_n}", done, total),
                     log=log,
                 )
             log(f"weights: {len(MAIN_WEIGHTS_FILES)} files ready in {weights_dir}")
 
         def step_aux(log, progress):
+            preferred = sources.weight_pref(self.env)
             for repo, path, dest, ms_repo in AUX_WEIGHTS:
-                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo)
+                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo, preferred=preferred)
                 log(f"aux: {repo}/{path}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=path, dest_name=dest),

@@ -39,10 +39,10 @@ WEIGHTS_FILES = [
     "vocab.json",
 ]
 
-# Weight sources come from the central sources module (ADR-0015): this engine
-# only declares the repo it needs; the HF → hf-mirror fallback chain lives in
-# ONE place.
-SOURCES = sources.weight_sources(REPO)
+# ModelScope counterpart (verified 2026-09: the official mlx-community mirror
+# exists and resolves; ADR-0016 decision 4 closes the "qwen3-tts-mlx has no
+# ModelScope source" coverage gap).
+MS_REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
 
 PACKAGES = ["mlx-audio>=0.5.4"]
 PYTHON_SPEC = "3.12"
@@ -111,6 +111,13 @@ class Qwen3TtsMlxEngine(InstallableEngine):
             uvman.pip_install(uv, venv, PACKAGES, env=self.env, log=log)
 
         def step_weights(log, progress):
+            # ADR-0016: the preferred weight source is read from the INJECTED
+            # env at install time (settings change → registry rebuild → new
+            # chain); the remaining sources stay as a silent fallback.
+            chain = sources.weight_sources(
+                REPO, ms_repo=MS_REPO,
+                preferred=sources.weight_pref(self.env),
+            )
             specs = [
                 downloader.DownloadSpec(path=f, dest_name=f)
                 for f in WEIGHTS_FILES
@@ -118,7 +125,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
             for spec in specs:
                 log(f"weights: {spec.dest_name}")
                 downloader.download_file(
-                    spec, weights_dir, SOURCES,
+                    spec, weights_dir, chain,
                     progress=lambda name, done, total, _s=spec: progress(
                         f"weights:{name}", done, total
                     ),

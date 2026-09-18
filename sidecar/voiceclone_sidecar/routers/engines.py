@@ -7,11 +7,14 @@ dropped from memory beyond the read the engines make at call time.
 
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..context import AppContext
 from ..registry import InstallableEngine
 from ..secrets import KeyStoreError
+from ..transcription import LOCAL_TOOL_ID
 
 
 def build_router(ctx: AppContext) -> APIRouter:
@@ -114,4 +117,92 @@ def build_router(ctx: AppContext) -> APIRouter:
             conflict_detail="install already running for this engine",
         )
 
+    # -- local model management (issue #17, ADR-0016 「引擎」区) --------------
+
+    def _model_target(engine_id: str):
+        """The installable object behind a model-management id."""
+        if engine_id == LOCAL_TOOL_ID:
+            try:
+                return ctx.local_transcriber()
+            except Exception as exc:  # noqa: BLE001 - unsupported platform
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"当前平台不支持本地转写：{exc}",
+                ) from exc
+        return ctx.require_engine(engine_id)
+
+    def _model_entry(target, engine_id: str, display_name: str) -> dict:
+        d = target.model_dir()
+        usage = sum(
+            f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.is_symlink()
+        )
+        try:
+            weights_dir = (
+                str(target.weights_dir())
+                if hasattr(target, "weights_dir")
+                else str(d / "weights")
+            )
+        except Exception:  # noqa: BLE001 - listing must never fail
+            weights_dir = str(d / "weights")
+        return {
+            "id": engine_id,
+            "display_name": display_name,
+            "installed": bool(target.is_installed()),
+            "model_dir": str(d),
+            "weights_dir": weights_dir,
+            "disk_usage_bytes": usage,
+            "installing": engine_id in ctx.install_jobs,
+        }
+
+    @router.get("/engines/models", dependencies=[Depends(ctx.require_auth)])
+    async def local_models() -> dict:
+        """Installed local models: weight dir, disk usage, install state.
+
+        Reads ``ctx.registry`` (not the captured one) so the listing follows
+        a settings-driven registry rebuild.
+        """
+        from ..runtime import paths
+
+        items: list[dict] = []
+        for engine in ctx.registry.list():
+            if not isinstance(engine, InstallableEngine):
+                continue
+            items.append(_model_entry(engine, engine.engine_id, engine.display_name))
+        try:
+            transcriber = ctx.local_transcriber()
+        except Exception:  # noqa: BLE001 - unsupported platform: just omit it
+            transcriber = None
+        if transcriber is not None:
+            items.append(
+                _model_entry(
+                    transcriber,
+                    LOCAL_TOOL_ID,
+                    transcriber.cfg.get("label", LOCAL_TOOL_ID),
+                )
+            )
+        return {"models": items, "runtime_root": str(ctx.runtime_root or paths.runtime_root())}
+
+    @router.delete("/engines/{engine_id}/model", dependencies=[Depends(ctx.require_auth)])
+    async def uninstall_model(engine_id: str) -> dict:
+        """Uninstall one local model: remove its engine dir (weights + venv
+        + install state) and start from a clean install lifecycle."""
+        if engine_id in ctx.install_jobs:
+            raise HTTPException(
+                status_code=409, detail="该引擎正在安装中，无法卸载"
+            )
+        target = _model_target(engine_id)
+        if not hasattr(target, "model_dir"):
+            raise HTTPException(
+                status_code=422, detail=f"engine {engine_id} 没有可卸载的本地模型"
+            )
+        # Re-check right before the destructive step: an install started
+        # between the earlier check and here must not be deleted underneath.
+        if engine_id in ctx.install_jobs:
+            raise HTTPException(
+                status_code=409, detail="该引擎刚开始安装，无法卸载；请稍后重试"
+            )
+        d = target.model_dir()
+        if d.exists():
+            shutil.rmtree(d)
+        return {"id": engine_id, "uninstalled": True, "model_dir": str(d)}
     return router

@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
-    from .engine_config import load_engine_settings
+    from .engine_config import load_full_settings
 
     app = create_app(
         # ADR-0015: the registry merges the process environment's
@@ -112,11 +112,12 @@ def main(argv: list[str] | None = None) -> None:
         # per-engine overrides persisted in the settings storage, and injects
         # the result into every engine — so documented env vars and settings
         # both actually reach the engines instead of dying at module
-        # constants.
+        # constants. ADR-0016: the same store's global download-source
+        # preferences (sources block) ride along on the same seam.
         default_registry(
             output_dir=audio_dir,
             key_store=KeyStore(),
-            settings=load_engine_settings(data_dir or audio_dir.parent),
+            settings=load_full_settings(data_dir or audio_dir.parent),
         ),
         token=args.token,
         audio_dir=audio_dir,

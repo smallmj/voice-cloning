@@ -302,3 +302,44 @@ export async function fetchMediaToken(baseUrl: string, token: string): Promise<M
   if (!res.ok) throw new Error(`media-token HTTP ${res.status}`);
   return (await res.json()) as MediaToken;
 }
+
+// --- download sources + local model management (issue #17, ADR-0016) ---
+
+export type SourceAxis = "weights" | "pypi" | "cuda";
+
+export interface SourcePrefs {
+  weights: string;
+  pypi: string;
+  cuda: string;
+}
+
+export interface SourceChoice {
+  id: string;
+  label: string;
+}
+
+export interface SourceChoiceCatalog {
+  weights: SourceChoice[];
+  pypi: SourceChoice[];
+  cuda: SourceChoice[];
+}
+
+export interface SourcesInfo {
+  sources: SourcePrefs;
+  choices: SourceChoiceCatalog;
+}
+
+export interface LocalModelInfo {
+  id: string;
+  display_name: string;
+  installed: boolean;
+  model_dir: string;
+  weights_dir: string | null;
+  disk_usage_bytes: number;
+  installing: boolean;
+}
+
+export interface LocalModelsInfo {
+  models: LocalModelInfo[];
+  runtime_root: string;
+}

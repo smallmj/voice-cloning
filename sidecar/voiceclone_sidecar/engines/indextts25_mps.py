@@ -177,14 +177,19 @@ class IndexTts25MpsEngine(InstallableEngine):
             )
 
         def step_weights(log, progress):
-            weight_sources = sources.weight_sources(REPO, ms_repo=REPO)
+            # ADR-0016: preferred weight source from the injected env.
+            weight_chain = sources.weight_sources(
+                REPO, ms_repo=REPO,
+                preferred=sources.weight_pref(self.env),
+            )
             for f in MAIN_WEIGHTS_FILES:
-                _fetch(f, f, weight_sources, log, progress, "weights")
+                _fetch(f, f, weight_chain, log, progress, "weights")
             log(f"weights: {len(MAIN_WEIGHTS_FILES)} files ready in {weights_dir}")
 
         def step_aux(log, progress):
+            preferred = sources.weight_pref(self.env)
             for repo, path, dest, ms_repo in AUX_WEIGHTS:
-                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo)
+                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo, preferred=preferred)
                 _fetch(path, dest, aux_sources, log, progress, "aux")
             log("aux: w2v-bert-2.0 / semantic codec / campplus / bigvgan ready")
 

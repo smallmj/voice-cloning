@@ -1,5 +1,6 @@
 import type { EngineInfo, EngineInstallStatus } from "../api";
 import { CapabilityMatrixSection } from "../components/CapabilityMatrixSection";
+import { DownloadSourcesSection } from "../components/DownloadSourcesSection";
 import { EngineCard } from "../components/EngineCard";
 import type { SectionId } from "../ui";
 
@@ -43,6 +44,7 @@ export function EnginesSection({
           />
         ))}
       </div>
+      <DownloadSourcesSection baseUrl={baseUrl} token={token} />
       <CapabilityMatrixSection
         baseUrl={baseUrl}
         token={token}

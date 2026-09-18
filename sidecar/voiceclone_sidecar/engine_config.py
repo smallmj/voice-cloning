@@ -27,6 +27,7 @@ from pathlib import Path
 from .storage import write_json_atomic
 
 SETTINGS_KEY = "engines"
+SOURCES_KEY = "sources"
 _SETTINGS_LOCK = threading.Lock()
 
 # Keys the engine config layer concerns itself with. Everything else in the
@@ -81,11 +82,63 @@ def effective_env(
     for key, value in process_env.items():
         if key.startswith(CONFIG_ENV_PREFIXES) and value:
             env[key] = value
+    # ADR-0016: the global download-source preferences (settings ``sources``
+    # block) sit between the process environment and per-engine overrides —
+    # the picker must take effect without touching the environment, while a
+    # per-engine ``env`` entry still fine-tunes one engine.
+    for key, value in _source_pref_env((settings or {}).get(SOURCES_KEY, {})).items():
+        env[key] = value
     engine_settings = (settings or {}).get(SETTINGS_KEY, {}).get(engine_id, {})
     for key, value in (engine_settings.get("env") or {}).items():
         if value:
             env[key] = str(value)
     return env
+
+
+# The download-source axes (ADR-0016), mapped onto the sources layer's
+# catalogs lazily (import cycle avoidance). Single source of truth for the
+# prefs validator and the env mapping below.
+SOURCE_AXES = ("weights", "pypi", "cuda")
+
+
+def _axis_choices(axis: str) -> dict:
+    from . import sources as _sources
+
+    return {
+        "weights": _sources.WEIGHT_SOURCE_CHOICES,
+        "pypi": _sources.PYPI_CHOICES,
+        "cuda": _sources.CUDA_CHOICES,
+    }[axis]
+
+
+def normalize_source_prefs(prefs: dict) -> dict[str, str]:
+    """Keep only valid axis values; unknown/invalid entries are dropped so a
+    hand-edited settings file can never poison the install environment."""
+    return {
+        axis: value
+        for axis in SOURCE_AXES
+        if (value := prefs.get(axis)) in _axis_choices(axis)
+    }
+
+
+def _source_pref_env(prefs: dict) -> dict[str, str]:
+    """Map the validated ``sources`` prefs onto the download-source env knobs.
+
+    Unknown keys/values are ignored (defaults apply) — a hand-edited settings
+    file must never poison the install environment. Only VALID choices are
+    forwarded; the sources layer's catalogs are the single source of truth.
+    """
+    from . import sources as _sources
+
+    prefs = normalize_source_prefs(prefs)
+    out: dict[str, str] = {}
+    if "weights" in prefs:
+        out[_sources.PREFERRED_WEIGHT_ENV] = prefs["weights"]
+    if "pypi" in prefs:
+        out["UV_DEFAULT_INDEX"] = _sources.PYPI_CHOICES[prefs["pypi"]]["index"]
+    if "cuda" in prefs:
+        out[_sources.PREFERRED_CUDA_ENV] = prefs["cuda"]
+    return out
 
 
 def resolve_seam(
@@ -110,6 +163,31 @@ def resolve_seam(
 
 def _settings_path(data_dir: Path | None) -> Path | None:
     return Path(data_dir) / "settings.json" if data_dir is not None else None
+
+
+def load_full_settings(data_dir: Path | None) -> dict:
+    """The FULL settings blocks the registry seam consumes.
+
+    ``{"engines": {...}, "sources": {...}}`` — callers building engine
+    configs must use this (not :func:`load_engine_settings`, engines-only) so the global
+    download-source preferences (ADR-0016) reach :func:`effective_env`.
+    """
+    path = _settings_path(data_dir)
+    if path is None:
+        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
+    if not isinstance(raw, dict):
+        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
+    engines = raw.get(SETTINGS_KEY)
+    if not isinstance(engines, dict):
+        engines = {}
+    return {
+        SETTINGS_KEY: {k: v for k, v in engines.items() if isinstance(v, dict)},
+        SOURCES_KEY: load_source_prefs(data_dir),
+    }
 
 
 def load_engine_settings(data_dir: Path | None) -> dict:
@@ -157,3 +235,53 @@ def save_engine_settings(data_dir: Path | None, engines: dict) -> dict:
         raw[SETTINGS_KEY] = clean
         write_json_atomic(path, raw)
     return {SETTINGS_KEY: clean}
+
+
+def load_source_prefs(data_dir: Path | None) -> dict:
+    """Read the download-source preferences (ADR-0016 ``sources`` block).
+
+    Shape: ``{"weights": "hf"|"hf-mirror"|"modelscope",
+    "pypi": "aliyun"|"official", "cuda": "official"|"aliyun"}``. Unknown or
+    missing values fall back to the defaults from :mod:`.sources` — a corrupt
+    file degrades to the built-in China-friendly chains, never to an error.
+    """
+    from . import sources as _sources
+
+    defaults = {
+        "weights": _sources.DEFAULT_WEIGHT_SOURCE,
+        "pypi": _sources.DEFAULT_PYPI_SOURCE,
+        "cuda": _sources.DEFAULT_CUDA_SOURCE,
+    }
+    path = _settings_path(data_dir)
+    if path is None:
+        return defaults
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    block = raw.get(SOURCES_KEY) if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return defaults
+    return {**defaults, **normalize_source_prefs(block)}
+
+
+def save_source_prefs(data_dir: Path | None, prefs: dict) -> dict:
+    """Persist the download-source preferences, preserving other settings.
+
+    Callers validate; unknown keys are dropped. Returns the normalized prefs.
+    """
+    from . import sources as _sources
+
+    path = _settings_path(data_dir)
+    if path is None:
+        raise ValueError("no data dir configured for settings storage")
+    with _SETTINGS_LOCK:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        raw[SOURCES_KEY] = normalize_source_prefs(prefs)
+        write_json_atomic(path, raw)
+    return load_source_prefs(data_dir)

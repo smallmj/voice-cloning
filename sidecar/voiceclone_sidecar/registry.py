@@ -176,6 +176,10 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
 
         registry.register(Qwen3TtsMlxEngine(output_dir=output_dir))
 
+        from .engines.indextts25_mps import IndexTts25MpsEngine
+
+        registry.register(IndexTts25MpsEngine(output_dir=output_dir))
+
     if sys.platform == "win32":
         from .engines.indextts25 import IndexTts25CudaEngine
 

@@ -168,7 +168,7 @@ class LocalTranscriber:
 
             import os
 
-            def _snapshot(env_extra: dict | None) -> subprocess.CompletedProcess:
+            def _snapshot(env_extra: dict | None = None) -> subprocess.CompletedProcess:
                 env = {**os.environ, **(env_extra or {})}
                 return subprocess.run(
                     [str(python), "-c", _SNAPSHOT_SCRIPT, self.cfg["model_repo"]],

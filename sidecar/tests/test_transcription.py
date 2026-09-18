@@ -5,10 +5,14 @@ from __future__ import annotations
 import io
 import math
 import struct
+import subprocess
 import wave
 
 import httpx
 import pytest
+
+from voiceclone_sidecar import transcription
+from voiceclone_sidecar.runtime import uvman
 
 from .test_voices import create_voice, wav_bytes
 
@@ -191,3 +195,42 @@ def test_transcribe_unknown_voice_returns_404(client):
     r = client.post("/voices/nope/transcribe", json={})
     assert r.status_code == 404
     assert r.json()["detail"] == "voice not found"
+
+
+# --- local tool install: the weights step's mirror fallback ---------------------
+
+
+def test_local_weights_step_retries_through_hf_mirror(tmp_path, monkeypatch):
+    """Regression: the weights step called its snapshot helper with no argument
+    while the helper took a required one, so the download died with a TypeError
+    before touching the network. Observed on a real machine as a 'failed'
+    weights step in the transcribe-local install state; no test covered it."""
+    if transcription.platform_config() is None:
+        pytest.skip("local transcription is unsupported on this platform")
+
+    seen: list[dict] = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(kwargs.get("env") or {})
+        # Non-zero on every attempt, so the step must try HF then hf-mirror
+        # and finally raise a plain RuntimeError.
+        return subprocess.CompletedProcess(cmd, 1, "", "boom")
+
+    monkeypatch.setattr(uvman, "find_uv", lambda *a, **k: tmp_path / "uv")
+    monkeypatch.setattr(uvman, "create_venv", lambda *a, **k: tmp_path / "venv")
+    monkeypatch.setattr(uvman, "venv_python", lambda *a, **k: tmp_path / "python")
+    monkeypatch.setattr(transcription.subprocess, "run", fake_run)
+    # _snapshot merges os.environ, so an ambient HF_ENDPOINT would make the
+    # first attempt look like a mirror attempt. Start from a clean slate.
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+
+    tool = transcription.LocalTranscriber(root=tmp_path, env={})
+    steps = {s.id: s for s in tool.install_steps()}
+    assert "weights" in steps
+
+    with pytest.raises(RuntimeError, match="model download failed"):
+        steps["weights"].run(lambda m: None, lambda *a: None)
+
+    assert len(seen) == 2, "expected one plain attempt plus one hf-mirror retry"
+    assert seen[0].get("HF_ENDPOINT") != "https://hf-mirror.com"
+    assert seen[1].get("HF_ENDPOINT") == "https://hf-mirror.com"

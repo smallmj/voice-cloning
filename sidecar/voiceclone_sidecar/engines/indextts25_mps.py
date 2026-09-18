@@ -29,19 +29,17 @@ import threading
 import uuid
 from pathlib import Path
 
+from .. import sources
 from ..capabilities import Capabilities
+from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
 from .indextts25 import (
     AUX_WEIGHTS,
     ENGINE_PACKAGE_URL,
     ENGINE_PACKAGE_URL_FALLBACK,
-    HF,
-    HF_MIRROR,
     MAIN_WEIGHTS_FILES,
-    MODELSCOPE,
     REPO,
-    _runtime_env,
 )
 from .indextts25_mps_worker import MPS_GATE_EXIT_CODE  # noqa: F401 - re-exported for tests
 from .worker_supervisor import WorkerDegradedError, WorkerSupervisor
@@ -82,9 +80,11 @@ class IndexTts25MpsEngine(InstallableEngine):
     def __init__(self, output_dir: Path | None = None, root: Path | None = None,
                  env: dict | None = None,
                  idle_timeout_s: float = IDLE_TIMEOUT_S,
-                 max_requests: int = MAX_REQUESTS_PER_WORKER) -> None:
+                 max_requests: int = MAX_REQUESTS_PER_WORKER,
+                 config: EngineConfig | None = None) -> None:
+        output_dir, env = resolve_seam(config, self.engine_id, output_dir, env)
         self.output_dir = Path(output_dir) if output_dir else None
-        self.env = env if env is not None else dict(_runtime_env())
+        self.env = env
         self.root = root if root is not None else paths.runtime_root(self.env)
         self.idle_timeout_s = idle_timeout_s
         self.max_requests = max_requests
@@ -177,24 +177,15 @@ class IndexTts25MpsEngine(InstallableEngine):
             )
 
         def step_weights(log, progress):
-            sources = [
-                HF.format(repo=REPO, path="{path}"),
-                HF_MIRROR.format(repo=REPO, path="{path}"),
-                MODELSCOPE.format(ms_repo=REPO, path="{path}"),
-            ]
+            weight_sources = sources.weight_sources(REPO, ms_repo=REPO)
             for f in MAIN_WEIGHTS_FILES:
-                _fetch(f, f, sources, log, progress, "weights")
+                _fetch(f, f, weight_sources, log, progress, "weights")
             log(f"weights: {len(MAIN_WEIGHTS_FILES)} files ready in {weights_dir}")
 
         def step_aux(log, progress):
             for repo, path, dest, ms_repo in AUX_WEIGHTS:
-                sources = [
-                    HF.format(repo=repo, path="{path}"),
-                    HF_MIRROR.format(repo=repo, path="{path}"),
-                ]
-                if ms_repo:
-                    sources.append(MODELSCOPE.format(ms_repo=ms_repo, path="{path}"))
-                _fetch(path, dest, sources, log, progress, "aux")
+                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo)
+                _fetch(path, dest, aux_sources, log, progress, "aux")
             log("aux: w2v-bert-2.0 / semantic codec / campplus / bigvgan ready")
 
         return [

@@ -31,12 +31,10 @@ import time
 import uuid
 from pathlib import Path
 
-import httpx
-
 from ..capabilities import Capabilities
 from ..registry import Engine, GenerationRequest, GenerationResult
-from .dashscope_base import BASE_URL, CloudEngineError, DashScopeEngine
-from .qwen_tts_cloud import _voice_missing_error
+from .cloud_base import CloudEngineError, voice_missing_error
+from .qwen_tts_cloud import BASE_URL, DashScopeEngine
 
 ENROLL_PATH = "/services/audio/tts/customization"
 SYNTH_PATH = "/services/aigc/multimodal-generation/generation"
@@ -156,7 +154,7 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
         )
         if resp.status_code == 200:
             return True
-        if _voice_missing_error(resp):
+        if voice_missing_error(resp):
             log(f"cloud-design: 云端音色 {voice_id} 已被厂商删除或失效")
             return False
         raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")

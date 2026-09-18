@@ -19,11 +19,12 @@ from voiceclone_sidecar.engines.qwen_tts_cloud import (
     ENROLL_MODEL,
     SYNTH_PATH,
     TARGET_MODEL,
-    CloudEngineError,
+    PRICE_PER_10K_CHARS,
     Qwen3TtsVcCloudEngine,
     billing_cost,
     billed_chars,
 )
+from voiceclone_sidecar.engines.cloud_base import CloudEngineError
 from voiceclone_sidecar.registry import GenerationRequest
 from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
@@ -75,9 +76,10 @@ def test_billed_chars_counts_cjk_as_two():
 
 
 def test_billing_cost_uses_aliyun_rate():
-    # 10000 billed chars -> 0.8 CNY
-    assert billing_cost("你" * 5000) == 0.8
-    assert billing_cost("a" * 10000) == 0.8
+    # 10000 billed chars -> 0.8 CNY (price is an explicit argument since
+    # ADR-0015 moved billing_cost into the vendor-neutral cloud base)
+    assert billing_cost("你" * 5000, PRICE_PER_10K_CHARS) == 0.8
+    assert billing_cost("a" * 10000, PRICE_PER_10K_CHARS) == 0.8
 
 
 def test_missing_key_fails_with_actionable_message(tmp_path):
@@ -248,12 +250,12 @@ def test_check_voice_unrelated_failure_raises():
 def test_voice_missing_error_never_fires_without_voice_mention():
     # A generic vendor error (e.g. text too long) must NOT be read as a
     # dead voice — the health check raises instead of rebuilding.
-    from voiceclone_sidecar.engines.qwen_tts_cloud import _voice_missing_error
+    from voiceclone_sidecar.engines.cloud_base import voice_missing_error
 
-    assert _voice_missing_error(
+    assert voice_missing_error(
         httpx.Response(400, json={"code": "InvalidParameter", "message": "voice xxx 已删除"})
     )
-    assert not _voice_missing_error(
+    assert not voice_missing_error(
         httpx.Response(400, json={"code": "InvalidParameter", "message": "文本过长"})
     )
-    assert not _voice_missing_error(httpx.Response(500, content=b"boom"))
+    assert not voice_missing_error(httpx.Response(500, content=b"boom"))

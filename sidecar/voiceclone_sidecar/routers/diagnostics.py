@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from ..context import AppContext
 from ..diagnostics import DiagnosticError, analyze_audio
-from ..engines.dashscope_base import CloudEngineError
+from ..engines.cloud_base import CloudEngineError
 from ..registry import InstallableEngine
 from ..transcription import (
     LOCAL_TOOL_ID,

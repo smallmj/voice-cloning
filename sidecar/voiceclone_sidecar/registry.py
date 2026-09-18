@@ -47,6 +47,15 @@ class Engine(abc.ABC):
     billing_note: str | None = None
     data_usage_note: str | None = None
 
+    def key_missing_hint(self) -> str:
+        """User-facing message for the pipeline's key-missing (409) path.
+
+        Vendor copy lives on the engine, never in the pipeline: a MiniMax
+        engine on this path must show MiniMax text (ADR-0015 decision 4).
+        BYOK cloud engines override this with their vendor label.
+        """
+        return f"引擎 {self.engine_id} 需要配置 API Key；请在「设置」页配置后再生成"
+
     @abc.abstractmethod
     def capabilities(self) -> Capabilities: ...
 
@@ -139,8 +148,15 @@ class Registry:
         return list(self._engines.values())
 
 
-def default_registry(output_dir=None, key_store=None) -> Registry:
+def default_registry(output_dir=None, key_store=None, env=None, settings=None) -> Registry:
     """Registry with the engines shipped in this package.
+
+    Every real engine is constructed with an injected :class:`EngineConfig`
+    (ADR-0015): its ``env`` is merged through :func:`effective_env` —
+    built-in China-friendly defaults < the process environment's
+    ``VOICECLONE_*`` / ``UV_*`` variables < per-engine settings overrides —
+    so the documented ``VOICECLONE_*`` variables and the settings store both
+    actually reach the engines. ``env=None`` means ``os.environ``.
 
     The fake engine is a TEST SEAM, not a product engine (issue #18): it is
     registered only under VOICECLONE_TEST_ENGINES=1 so production engine
@@ -150,6 +166,10 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
     clones. Real local engines register only where they can run (platform +
     architecture); cloud-API engines are always registered — they are usable
     the moment the user brings their own API key (ADR-0003).
+
+    Contract tests MUST construct engines through this factory (issue #22):
+    the previous "tests pass env= directly while the registry never did" gap
+    produced green tests for a path that did not exist in production.
     """
     import os
     import sys
@@ -159,28 +179,41 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
 
         key_store = KeyStore()
 
+    from .engine_config import SETTINGS_KEY, EngineConfig, effective_env
+
+    def config_for(engine_cls) -> EngineConfig:
+        # The engine class is the source of its own id — no parallel string
+        # literal that could silently drift from the class attribute.
+        engine_id = engine_cls.engine_id
+        return EngineConfig(
+            engine_id=engine_id,
+            output_dir=output_dir,
+            env=effective_env(engine_id, process_env=env, settings=settings),
+            settings=(settings or {}).get(SETTINGS_KEY, {}).get(engine_id, {}),
+        )
+
     from .engines.qwen_tts_cloud import Qwen3TtsVcCloudEngine
 
     registry = Registry()
-    registry.register(Qwen3TtsVcCloudEngine(output_dir=output_dir, key_store=key_store))
+    registry.register(Qwen3TtsVcCloudEngine(key_store=key_store, config=config_for(Qwen3TtsVcCloudEngine)))
 
     from .engines.qwen_tts_vd_cloud import Qwen3TtsVdCloudEngine
 
-    registry.register(Qwen3TtsVdCloudEngine(output_dir=output_dir, key_store=key_store))
+    registry.register(Qwen3TtsVdCloudEngine(key_store=key_store, config=config_for(Qwen3TtsVdCloudEngine)))
 
     if sys.platform == "darwin" and os.uname().machine == "arm64":
         from .engines.qwen3_tts import Qwen3TtsMlxEngine
 
-        registry.register(Qwen3TtsMlxEngine(output_dir=output_dir))
+        registry.register(Qwen3TtsMlxEngine(config=config_for(Qwen3TtsMlxEngine)))
 
         from .engines.indextts25_mps import IndexTts25MpsEngine
 
-        registry.register(IndexTts25MpsEngine(output_dir=output_dir))
+        registry.register(IndexTts25MpsEngine(config=config_for(IndexTts25MpsEngine)))
 
     if sys.platform == "win32":
         from .engines.indextts25 import IndexTts25CudaEngine
 
-        registry.register(IndexTts25CudaEngine(output_dir=output_dir))
+        registry.register(IndexTts25CudaEngine(config=config_for(IndexTts25CudaEngine)))
 
     if os.environ.get("VOICECLONE_TEST_ENGINES") == "1":
         # Contract-test seam only (issue #18): the fake runs the exact same

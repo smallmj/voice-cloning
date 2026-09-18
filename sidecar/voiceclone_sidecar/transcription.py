@@ -23,7 +23,9 @@ import sys
 import threading
 from pathlib import Path
 
+from . import sources
 from .capabilities import Capabilities  # noqa: F401 - re-exported for typing clarity
+from .engine_config import effective_env
 from .runtime import installer, paths, uvman
 
 LOCAL_TOOL_ID = "transcribe-local"
@@ -116,7 +118,10 @@ class LocalTranscriber:
     progress rendering as engines."""
 
     def __init__(self, root: Path | None = None, env: dict | None = None) -> None:
-        self.env = env if env is not None else dict(_runtime_env())
+        # ADR-0015: the same env seam as engines — process env over built-in
+        # defaults, never the reverse (the old literal dict shadowed the
+        # user's UV_DEFAULT_INDEX).
+        self.env = env if env is not None else dict(effective_env(LOCAL_TOOL_ID))
         self.root = root if root is not None else paths.runtime_root(self.env)
         cfg = platform_config()
         if cfg is None:
@@ -197,7 +202,7 @@ class LocalTranscriber:
             proc = _snapshot()
             if proc.returncode != 0:
                 log("weights: huggingface.co failed; retrying via hf-mirror.com")
-                proc = _snapshot({"HF_ENDPOINT": "https://hf-mirror.com"})
+                proc = _snapshot({"HF_ENDPOINT": sources.HF_ENDPOINT_MIRROR})
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"model download failed: {proc.stdout.strip()[-500:]} {proc.stderr.strip()[-500:]}"
@@ -243,13 +248,6 @@ class LocalTranscriber:
             raise TranscriptionError(f"本地转写失败：{err or f'exit code {proc.returncode}'}")
         log(f"transcribe: {len(text)} chars")
         return text
-
-
-def _runtime_env() -> dict:
-    """China-friendly defaults, mirroring the engine installers."""
-    return {
-        "UV_PYTHON_INSTALL_MIRROR": "https://ghfast.top/https://github.com/indygreg/python-build-standalone/releases/download",
-    }
 
 
 def engine_transcribers(registry) -> list:

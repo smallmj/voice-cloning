@@ -27,16 +27,33 @@ import time
 import uuid
 from pathlib import Path
 
-import httpx
 
 from ..capabilities import Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
-from .dashscope_base import BASE_URL, CloudEngineError, DashScopeEngine
+from .cloud_base import (
+    CloudEngineBase,
+    CloudEngineError,
+    billed_chars,
+    billing_cost,
+    voice_missing_error,
+)
 
 ENROLL_PATH = "/services/audio/tts/customization"
 SYNTH_PATH = "/services/aigc/multimodal-generation/generation"
 
-__all__ = ["BASE_URL", "CloudEngineError", "Qwen3TtsVcCloudEngine", "billing_cost", "billed_chars"]
+# Vendor-specific: the DashScope base URL stays with the engines that call it
+# (ADR-0015 decision 3 — only base URL, model names, payloads and error
+# classification are vendor-specific; shared behavior lives in cloud_base).
+BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+
+__all__ = [
+    "BASE_URL",
+    "CloudEngineError",
+    "Qwen3TtsVcCloudEngine",
+    "billing_cost",
+    "billed_chars",
+    "voice_missing_error",
+]
 
 TARGET_MODEL = "qwen3-tts-vc-2026-01-22"
 ENROLL_MODEL = "qwen-voice-enrollment"
@@ -55,42 +72,18 @@ LANGUAGE_CHOICES = (
 )
 
 
-# Vendor error shapes that mean "this enrolled voice no longer exists"
-# (verified against DashScope error bodies: code/message mention the voice
-# and that it is missing, deleted or expired). Matched on the lowercased
-# code+message blob; anything else must NOT be read as a dead voice.
-VOICE_MISSING_MARKERS = (
-    "不存在",
-    "not exist",
-    "not found",
-    "已删除",
-    "已被删除",
-    "已过期",
-    "expired",
-    "deleted",
-)
+# (VOICE_MISSING_MARKERS / _voice_missing_error / billed_chars / billing_cost
+# moved to the vendor-neutral cloud base in ADR-0015; re-exported above.)
 
 
-def _voice_missing_error(resp: httpx.Response) -> bool:
-    try:
-        body = resp.json()
-    except Exception:  # noqa: BLE001 - no parseable body: no verdict
-        return False
-    code = str(body.get("code") or "")
-    message = str(body.get("message") or body.get("msg") or "")
-    blob = f"{code} {message}".lower()
-    if "voice" not in blob and "音色" not in blob:
-        return False
-    return any(marker in blob for marker in VOICE_MISSING_MARKERS)
+class DashScopeEngine(CloudEngineBase):
+    """Cloud base pinned to Alibaba Cloud Model Studio (阿里百炼).
 
+    Vendor identity lives with the vendor's engines (ADR-0015 decision 3):
+    the neutral base carries only label-driven behavior.
+    """
 
-def billed_chars(text: str) -> int:
-    """Aliyun's char-counting rule: one CJK/full-width char = 2 chars."""
-    return sum(2 if ord(c) > 127 else 1 for c in text)
-
-
-def billing_cost(text: str) -> float:
-    return round(billed_chars(text) / 10000 * PRICE_PER_10K_CHARS, 4)
+    vendor_label = "阿里百炼"
 
 
 class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
@@ -179,9 +172,6 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
         log(f"cloud: 云端音色已创建（{voice}）")
         return {"voice_id": voice, "target_model": TARGET_MODEL}
 
-    def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {self._key()}"}
-
     # -- voice health (issue #12) ------------------------------------------------
 
     def check_voice(self, voice_id: str, log) -> bool:
@@ -205,7 +195,7 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
         )
         if resp.status_code == 200:
             return True
-        if _voice_missing_error(resp):
+        if voice_missing_error(resp):
             log(f"cloud: 云端音色 {voice_id} 已被厂商删除或失效")
             return False
         raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")
@@ -249,7 +239,7 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
 
         sample_rate = self._probe_sample_rate(out_path, 24000)
 
-        cost = billing_cost(request.text)
+        cost = billing_cost(request.text, PRICE_PER_10K_CHARS)
         log(
             f"cloud: 完成（{out_path.name}，{sample_rate} Hz，"
             f"估算成本 ¥{cost:.4f}，耗时 {time.monotonic() - started:.2f}s）"

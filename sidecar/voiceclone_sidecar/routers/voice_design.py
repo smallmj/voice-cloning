@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pathlib import Path
 
 from ..context import AppContext
-from ..engines.dashscope_base import CloudEngineError
+from ..engines.cloud_base import CloudEngineError
 from ..registry import InstallableEngine
 
 

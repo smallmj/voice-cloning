@@ -23,7 +23,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from .context import AppContext
-from .engines.dashscope_base import CloudEngineError
+from .engines.cloud_base import CloudEngineError
 from .generations import now_iso
 from .normalization import normalize_text
 from .registry import Engine, GenerationRequest
@@ -102,11 +102,9 @@ async def run_generation(
     binding_extra: dict | None = None
     if engine.requires_key:
         if ctx.keys.get(engine.engine_id) is None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"引擎 {engine.engine_id} 需要阿里百炼 API Key；"
-                "请在「设置」页配置后再生成",
-            )
+            # Vendor copy comes from the engine itself (ADR-0015 decision 4):
+            # a MiniMax engine must never be told it needs 阿里百炼.
+            raise HTTPException(status_code=409, detail=engine.key_missing_hint())
         if voice is None:
             raise HTTPException(
                 status_code=422,

@@ -267,7 +267,7 @@ class FakeBrokenRebuildEngine(FakeKeyEngine):
     def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
         if self.rebuild_attempted:
             log("fake-broken-rebuild: rebuild attempted")
-            from .dashscope_base import CloudEngineError
+            from .cloud_base import CloudEngineError
 
             raise CloudEngineError("模拟厂商拒绝重建：参考音频校验未通过（HTTP 400）")
         self.rebuild_attempted = True
@@ -323,7 +323,7 @@ class FakeRateLimitedEngine(FakeKeyEngine):
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
         self.calls += 1
         if self.calls <= self.throttled_calls:
-            from .dashscope_base import CloudEngineError
+            from .cloud_base import CloudEngineError
 
             log(f"fake-rate-limited: call {self.calls} throttled")
             raise CloudEngineError(

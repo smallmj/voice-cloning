@@ -25,7 +25,9 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
+from .. import sources
 from ..capabilities import Capabilities
+from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
 from .worker_supervisor import WorkerDegradedError, WorkerSupervisor
@@ -40,25 +42,21 @@ TORCH_WHEELS = [
     f"torch-{TORCH_VERSION}%2B{CUDA_TAG}-{PY_TAG}-{PY_TAG}-{PLATFORM_TAG}.whl",
     f"torchaudio-{TORCH_VERSION}%2B{CUDA_TAG}-{PY_TAG}-{PY_TAG}-{PLATFORM_TAG}.whl",
 ]
-# download.pytorch.org is the canonical CUDA wheel source; the aliyun
-# pytorch-wheels mirror is the fallback that actually answers on many China
-# networks (observed 2026-09-17: download.pytorch.org TLS-blackholed while
-# aliyun responded fine). Mirror failure is loud, never a silent slowdown.
-TORCH_SOURCES = [
-    "https://download.pytorch.org/whl/" + CUDA_TAG + "/{path}",
-    "https://mirrors.aliyun.com/pytorch-wheels/" + CUDA_TAG + "/{path}",
-]
+# CUDA wheel sources live in the central sources module (ADR-0015): exact
+# wheel URLs, no index resolution. download.pytorch.org is canonical; the
+# aliyun pytorch-wheels mirror is the fallback that actually answers on many
+# China networks (observed 2026-09-17). Mirror failure is loud, never silent.
+TORCH_SOURCES = sources.torch_wheel_sources(CUDA_TAG)
 # Measured 2026-09-17 on the Windows rig: download.pytorch.org ~800 KB/s
 # (after an initial TLS-blackhole window), aliyun ~240 KB/s per connection,
 # so the official source stays first and aliyun is the fallback.
+# The engine CODE package (a GitHub zip, not one of the three axes) is
+# engine-specific and stays here, declared with its own mirror pair and the
+# VOICECLONE_INDEXTTS_URL(_FALLBACK) env overrides.
 ENGINE_PACKAGE_URL = (
     "https://ghfast.top/https://github.com/index-tts/index-tts/archive/refs/heads/main.zip"
 )
 ENGINE_PACKAGE_URL_FALLBACK = "https://github.com/index-tts/index-tts/archive/refs/heads/main.zip"
-
-HF = f"https://huggingface.co/{{repo}}/resolve/main/{{path}}"
-HF_MIRROR = f"https://hf-mirror.com/{{repo}}/resolve/main/{{path}}"
-MODELSCOPE = f"https://modelscope.cn/models/{{ms_repo}}/resolve/master/{{path}}"
 
 # Downloader source templates interpolate {path}; these carry {repo}/{ms_repo}
 # too, so each repo passes its own identifiers alongside the file path.
@@ -108,9 +106,11 @@ class IndexTts25CudaEngine(InstallableEngine):
     def __init__(self, output_dir: Path | None = None, root: Path | None = None,
                  env: dict | None = None,
                  idle_timeout_s: float = IDLE_TIMEOUT_S,
-                 max_requests: int = MAX_REQUESTS_PER_WORKER) -> None:
+                 max_requests: int = MAX_REQUESTS_PER_WORKER,
+                 config: EngineConfig | None = None) -> None:
+        output_dir, env = resolve_seam(config, self.engine_id, output_dir, env)
         self.output_dir = Path(output_dir) if output_dir else None
-        self.env = env if env is not None else dict(_runtime_env())
+        self.env = env
         self.root = root if root is not None else paths.runtime_root(self.env)
         self.idle_timeout_s = idle_timeout_s
         self.max_requests = max_requests
@@ -182,6 +182,7 @@ class IndexTts25CudaEngine(InstallableEngine):
         def step_engine(log, progress):
             uv = find_uv(log)
             venv_ = uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
+            log(f"engine: PyPI index {sources.pypi_index(self.env)}")
             pkg = self.env.get("VOICECLONE_INDEXTTS_URL", ENGINE_PACKAGE_URL)
             try:
                 uvman.pip_install(uv, venv_, [f"indextts @ {pkg}"], env=self.env, log=log)
@@ -191,16 +192,12 @@ class IndexTts25CudaEngine(InstallableEngine):
                 uvman.pip_install(uv, venv_, [f"indextts @ {fallback}"], env=self.env, log=log)
 
         def step_weights(log, progress):
-            sources = [
-                HF.format(repo=REPO, path="{path}"),
-                HF_MIRROR.format(repo=REPO, path="{path}"),
-                MODELSCOPE.format(ms_repo=REPO, path="{path}"),
-            ]
+            weight_sources = sources.weight_sources(REPO, ms_repo=REPO)
             for f in MAIN_WEIGHTS_FILES:
                 log(f"weights: {f}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=f, dest_name=f),
-                    weights_dir, sources,
+                    weights_dir, weight_sources,
                     progress=lambda name, done, total, _n=f: progress(f"weights:{_n}", done, total),
                     log=log,
                 )
@@ -208,16 +205,11 @@ class IndexTts25CudaEngine(InstallableEngine):
 
         def step_aux(log, progress):
             for repo, path, dest, ms_repo in AUX_WEIGHTS:
-                sources = [
-                    HF.format(repo=repo, path="{path}"),
-                    HF_MIRROR.format(repo=repo, path="{path}"),
-                ]
-                if ms_repo:
-                    sources.append(MODELSCOPE.format(ms_repo=ms_repo, path="{path}"))
+                aux_sources = sources.weight_sources(repo, ms_repo=ms_repo)
                 log(f"aux: {repo}/{path}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=path, dest_name=dest),
-                    weights_dir, sources,
+                    weights_dir, aux_sources,
                     progress=lambda name, done, total, _n=dest: progress(f"aux:{_n}", done, total),
                     log=log,
                 )
@@ -313,12 +305,3 @@ class IndexTts25CudaEngine(InstallableEngine):
             model_version=REPO,
             cost=0.0,  # local synthesis has no per-run cost
         )
-
-
-def _runtime_env() -> dict:
-    """China-friendly defaults; users can override any of them."""
-    return {
-        "UV_PYTHON_INSTALL_MIRROR": "https://ghfast.top/https://github.com/indygreg/python-build-standalone/releases/download",
-        # PyPI index for the non-torch packages; overridable per machine.
-        "UV_DEFAULT_INDEX": "https://mirrors.aliyun.com/pypi/simple/",
-    }

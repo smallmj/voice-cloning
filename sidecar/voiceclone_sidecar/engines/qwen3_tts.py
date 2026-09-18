@@ -17,8 +17,10 @@ import uuid
 from pathlib import Path
 
 from ..capabilities import Capabilities
+from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
+from .. import sources
 
 REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
 
@@ -37,12 +39,10 @@ WEIGHTS_FILES = [
     "vocab.json",
 ]
 
-# Mirror order matters: HF first, hf-mirror.com as the China fallback. Both
-# templates keep {path} for repo-file paths; other full URLs pass through.
-SOURCES = [
-    f"https://huggingface.co/{REPO}/resolve/main/{{path}}",
-    f"https://hf-mirror.com/{REPO}/resolve/main/{{path}}",
-]
+# Weight sources come from the central sources module (ADR-0015): this engine
+# only declares the repo it needs; the HF → hf-mirror fallback chain lives in
+# ONE place.
+SOURCES = sources.weight_sources(REPO)
 
 PACKAGES = ["mlx-audio>=0.5.4"]
 PYTHON_SPEC = "3.12"
@@ -54,9 +54,11 @@ class Qwen3TtsMlxEngine(InstallableEngine):
     engine_id = "qwen3-tts-mlx"
     display_name = "Qwen3-TTS 0.6B Base（本地 · MLX）"
 
-    def __init__(self, output_dir: Path | None = None, root: Path | None = None, env: dict | None = None) -> None:
+    def __init__(self, output_dir: Path | None = None, root: Path | None = None,
+                 env: dict | None = None, config: EngineConfig | None = None) -> None:
+        output_dir, env = resolve_seam(config, self.engine_id, output_dir, env)
         self.output_dir = output_dir
-        self.env = env if env is not None else dict(_runtime_env())
+        self.env = env
         self.root = root if root is not None else paths.runtime_root(self.env)
 
     # -- capabilities ------------------------------------------------------
@@ -199,10 +201,3 @@ class Qwen3TtsMlxEngine(InstallableEngine):
             model_version=REPO,
             cost=0.0,  # local synthesis has no per-run cost
         )
-
-
-def _runtime_env() -> dict:
-    """China-friendly defaults; users can override any of them."""
-    return {
-        "UV_PYTHON_INSTALL_MIRROR": "https://ghfast.top/https://github.com/indygreg/python-build-standalone/releases/download",
-    }

@@ -104,8 +104,20 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
+    from .engine_config import load_engine_settings
+
     app = create_app(
-        default_registry(output_dir=audio_dir, key_store=KeyStore()),
+        # ADR-0015: the registry merges the process environment's
+        # VOICECLONE_* / UV_* variables over the built-in defaults, plus any
+        # per-engine overrides persisted in the settings storage, and injects
+        # the result into every engine — so documented env vars and settings
+        # both actually reach the engines instead of dying at module
+        # constants.
+        default_registry(
+            output_dir=audio_dir,
+            key_store=KeyStore(),
+            settings=load_engine_settings(data_dir or audio_dir.parent),
+        ),
         token=args.token,
         audio_dir=audio_dir,
         data_dir=data_dir,

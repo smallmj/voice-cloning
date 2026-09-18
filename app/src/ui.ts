@@ -1,0 +1,127 @@
+// Pure helpers behind the issue #21 refactor. Kept free of React/DOM so the
+// vitest net can test the cross-section behaviours and API-shape parsing
+// without a renderer.
+
+import type { GenerationRecord, JobStatus, LogEvent } from "./api";
+
+// --- five sections + left navigation (ADR-0013) ----------------------------
+
+export const SECTION_IDS = ["generate", "engines", "voices", "history", "settings"] as const;
+export type SectionId = (typeof SECTION_IDS)[number];
+
+export const SECTION_LABELS: Record<SectionId, string> = {
+  generate: "生成",
+  engines: "引擎",
+  voices: "音色库",
+  history: "历史",
+  settings: "设置",
+};
+
+export function isSectionId(value: string | null | undefined): value is SectionId {
+  return !!value && (SECTION_IDS as readonly string[]).includes(value);
+}
+
+// --- theme (ADR-0014) -------------------------------------------------------
+
+export type ThemePref = "system" | "dark" | "light";
+
+export function isThemePref(value: unknown): value is ThemePref {
+  return value === "system" || value === "dark" || value === "light";
+}
+
+/** Which token set the document should use: explicit choices win, `system`
+ * follows the OS. */
+export function resolveTheme(pref: ThemePref, systemPrefersDark: boolean): "dark" | "light" {
+  if (pref === "dark") return "dark";
+  if (pref === "light") return "light";
+  return systemPrefersDark ? "dark" : "light";
+}
+
+// --- cross-section: history → generate rerun (ADR-0013 §5) ------------------
+
+export interface RerunState {
+  engineId: string;
+  text: string;
+  voiceId: string | null;
+  /** Everything the record stored minus server-side paths the sidecar
+   * re-injects itself (ref_audio). */
+  params: Record<string, unknown> | null;
+  hint: string | null;
+}
+
+export function buildRerunState(
+  record: GenerationRecord,
+  voices: { id: string }[],
+): RerunState {
+  const params = { ...(record.params ?? {}) };
+  delete params.ref_audio;
+  const state: RerunState = {
+    engineId: record.engine_id,
+    text: record.text,
+    voiceId: record.voice_id && voices.some((v) => v.id === record.voice_id)
+      ? record.voice_id
+      : null,
+    params: Object.keys(params).length > 0 ? params : null,
+    hint: null,
+  };
+  if (record.voice_id && !state.voiceId) {
+    state.hint = "原音色已删除，已预填文本与引擎；请重新选择音色后再生成。";
+  }
+  return state;
+}
+
+// --- shared formatting --------------------------------------------------------
+
+export function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  return seconds < 1 ? `${Math.round(seconds * 1000)}ms` : `${seconds.toFixed(2)}s`;
+}
+
+export function fmtCost(cost: number | null | undefined): string {
+  if (cost == null) return "—";
+  return cost === 0 ? "本地（免费）" : `¥${cost.toFixed(4)}`;
+}
+
+export function fmtTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return iso.replace("T", " ").replace("Z", " UTC");
+}
+
+// --- cross-section: job settle → history refresh (ADR-0013 §5) ---------------
+
+/** A long-text job counts as "settled" (its outcome should refresh the
+ * history list) when it leaves queued/running for a terminal state. */
+export function jobSettled(prev: JobStatus | undefined, next: JobStatus): boolean {
+  return (
+    (prev === "queued" || prev === "running") &&
+    next !== prev &&
+    next !== "queued"
+  );
+}
+
+// --- log stream --------------------------------------------------------------
+
+export const LOG_BUFFER_LIMIT = 500;
+
+export function appendLog(prev: LogEvent[], event: LogEvent): LogEvent[] {
+  return [...prev.slice(-(LOG_BUFFER_LIMIT - 1)), event];
+}
+
+/** The log WebSocket delivers untrusted text; a malformed frame must be
+ * dropped, never crash the stream. */
+export function parseLogEvent(raw: string): LogEvent | null {
+  try {
+    const j = JSON.parse(raw) as Partial<LogEvent> | null;
+    if (j && j.type === "log" && typeof j.generation_id === "string" && typeof j.message === "string") {
+      return {
+        type: "log",
+        generation_id: j.generation_id,
+        message: j.message,
+        ts: typeof j.ts === "number" ? j.ts : 0,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

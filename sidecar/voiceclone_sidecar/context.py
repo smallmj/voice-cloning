@@ -76,6 +76,13 @@ class AppContext:
     consent_path: Path = field(init=False)
     consent_lock: threading.Lock = field(default_factory=threading.Lock)
 
+    # Issue #21 / ADR-0014: UI preferences (theme, last selected engine) are
+    # properties of the library, not of one machine's browser profile — so
+    # they persist in the portable data root (same file as consent), not in
+    # localStorage. A library backup/restore carries them along.
+    ui_prefs_path: Path = field(init=False)
+    ui_prefs_lock: threading.Lock = field(default_factory=threading.Lock)
+
     _transcriber: LocalTranscriber | None = field(default=None, repr=False)
 
     # Auth gates, built once from the process token (issue #19 policy).
@@ -92,6 +99,7 @@ class AppContext:
         self.voice_store = VoiceStore(self.data_root)
         self.transcription_settings = TranscriptionSettings(self.data_root)
         self.consent_path = self.data_root / "app_state.json"
+        self.ui_prefs_path = self.data_root / "app_state.json"
         self.require_auth = verify_token(self.token)
         self.require_media_auth = verify_media_query_token(self.token)
         self.require_auth_ws = verify_token_ws(self.token)
@@ -262,6 +270,30 @@ class AppContext:
                 raw = {}
             raw["voice_consent"] = state
             write_json_atomic(self.consent_path, raw)
+
+    # -- UI preferences (issue #21 / ADR-0014) ---------------------------------
+
+    def read_ui_prefs(self) -> dict:
+        try:
+            raw = json.loads(self.ui_prefs_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        prefs = raw.get("ui_prefs")
+        return prefs if isinstance(prefs, dict) else {}
+
+    def write_ui_prefs(self, state: dict) -> None:
+        from .storage import write_json_atomic
+
+        with self.ui_prefs_lock:
+            try:
+                raw = json.loads(self.ui_prefs_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                raw = {}
+            existing = raw.get("ui_prefs")
+            merged = existing if isinstance(existing, dict) else {}
+            merged.update(state)
+            raw["ui_prefs"] = merged
+            write_json_atomic(self.ui_prefs_path, raw)
 
     # -- portability -----------------------------------------------------------
 

@@ -18,6 +18,7 @@ from . import (
     meta,
     portability,
     regression,
+    settings,
     voice_design,
     voices,
 )
@@ -38,6 +39,7 @@ def install_routers(app: FastAPI, ctx: AppContext) -> None:
         jobs,
         compare,
         regression,
+        settings,
     )
     for module in modules:
         router: APIRouter = module.build_router(ctx)

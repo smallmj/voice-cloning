@@ -1,8 +1,11 @@
 """Sidecar entry: FastAPI app factory + WebSocket log bus + server bootstrap.
 
 The sidecar binds 127.0.0.1 on a dynamic port (port 0) and enforces bearer
-auth on every route. Once listening it prints a single JSON handshake line
-on stdout, e.g.:
+auth on every route — the sole exception being the media routes (audio
+files, voice reference/avatar images, the log WebSocket), which also accept
+a short-TTL, media-scoped query token so URL-bound media elements never
+need the raw sidecar token (issue #19). Once listening it prints a single
+JSON handshake line on stdout, e.g.:
 
     {"event": "ready", "port": 54321, "pid": 1234}
 
@@ -30,6 +33,12 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from .diagnostics import DiagnosticError, analyze_audio
+from .media_token import (
+    DEFAULT_MEDIA_TTL_SECONDS,
+    expires_at,
+    make_media_token,
+    verify_media_token,
+)
 from .compare import (
     ALL_LABELS,
     CompareError,
@@ -107,6 +116,11 @@ class LogBus:
             q.put_nowait(event)
 
 
+def _bearer_ok(auth: str, expected: str) -> bool:
+    """Shared constant-time comparison of an Authorization header value."""
+    return secrets.compare_digest(auth, f"Bearer {expected}")
+
+
 def verify_token(expected: str):
     """Bearer-only auth for every non-media route (issue #19).
 
@@ -115,11 +129,8 @@ def verify_token(expected: str):
     cloud calls — it must never appear in a URL. Media elements get a
     separate, short-TTL, media-scoped token instead (see ``media_token``).
     """
-    compare = secrets.compare_digest
-
     async def _verify(request: Request) -> None:
-        auth = request.headers.get("Authorization", "")
-        if not compare(auth, f"Bearer {expected}"):
+        if not _bearer_ok(request.headers.get("Authorization", ""), expected):
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
     return _verify
@@ -130,14 +141,9 @@ def verify_media_query_token(expected: str):
     token (issue #19). The raw sidecar token is NOT accepted in a query —
     only a value derived via ``media_token.make_media_token``."""
 
-    compare = secrets.compare_digest
-
     async def _verify(request: Request) -> None:
-        auth = request.headers.get("Authorization", "")
-        if compare(auth, f"Bearer {expected}"):
+        if _bearer_ok(request.headers.get("Authorization", ""), expected):
             return
-        from .media_token import verify_media_token
-
         if verify_media_token(expected, request.query_params.get("token", "")):
             return
         raise HTTPException(status_code=401, detail="invalid or missing bearer token")
@@ -151,13 +157,10 @@ def verify_token_ws(expected: str):
         # short-TTL media token as a query parameter (issue #19). The header
         # form stays the primary contract; the raw sidecar token is never
         # accepted here.
-        from .media_token import verify_media_token
-
         auth = websocket.headers.get("Authorization", "")
         query_token = websocket.query_params.get("token", "")
         if not (
-            secrets.compare_digest(auth, f"Bearer {expected}")
-            or verify_media_token(expected, query_token)
+            _bearer_ok(auth, expected) or verify_media_token(expected, query_token)
         ):
             await websocket.accept()
             await websocket.close(code=4401, reason="invalid or missing bearer token")
@@ -337,13 +340,11 @@ def create_app(
         sidecar token. It only grants the media routes and expires on its
         own; fetch a fresh one when it lapses.
         """
-        from .media_token import DEFAULT_MEDIA_TTL_SECONDS, make_media_token
-
         issued = make_media_token(token, DEFAULT_MEDIA_TTL_SECONDS)
         return {
             "media_token": issued,
             "expires_in_seconds": DEFAULT_MEDIA_TTL_SECONDS,
-            "expires_at": int(issued.rsplit(".", 1)[0]),
+            "expires_at": expires_at(issued),
         }
 
     def _mark_artifact(target: dict, path: Path, fields: dict[str, str]) -> None:

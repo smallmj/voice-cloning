@@ -51,12 +51,12 @@ def verify_media_token(root_token: str, value: str, now: float | None = None) ->
     return hmac.compare_digest(expected, sig)
 
 
-def expires_at(root_token: str) -> int | None:
-    """Extract the expiry epoch of a token the same root produced (or None)."""
-    if "." not in root_token:
+def expires_at(value: str) -> int | None:
+    """Extract the expiry epoch of a media token (or None if malformed)."""
+    if "." not in value:
         return None
     try:
-        return int(root_token.rsplit(".", 1)[0])
+        return int(value.rsplit(".", 1)[0])
     except ValueError:
         return None
 
@@ -65,4 +65,5 @@ __all__ = [
     "DEFAULT_MEDIA_TTL_SECONDS",
     "make_media_token",
     "verify_media_token",
+    "expires_at",
 ]

@@ -108,30 +108,56 @@ class LogBus:
 
 
 def verify_token(expected: str):
+    """Bearer-only auth for every non-media route (issue #19).
+
+    The query-parameter form was historically accepted everywhere, but the
+    process token is the single gate for the whole library and for paid
+    cloud calls — it must never appear in a URL. Media elements get a
+    separate, short-TTL, media-scoped token instead (see ``media_token``).
+    """
     compare = secrets.compare_digest
 
     async def _verify(request: Request) -> None:
         auth = request.headers.get("Authorization", "")
-        query_token = request.query_params.get("token", "")
-        # The query-parameter form exists for media elements (<img>/<audio>),
-        # which cannot set Authorization headers — same rationale as WS auth.
-        if not (
-            compare(auth, f"Bearer {expected}") or compare(query_token, expected)
-        ):
+        if not compare(auth, f"Bearer {expected}"):
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+
+    return _verify
+
+
+def verify_media_query_token(expected: str):
+    """Auth for media routes: bearer auth OR a short-TTL media-scoped query
+    token (issue #19). The raw sidecar token is NOT accepted in a query —
+    only a value derived via ``media_token.make_media_token``."""
+
+    compare = secrets.compare_digest
+
+    async def _verify(request: Request) -> None:
+        auth = request.headers.get("Authorization", "")
+        if compare(auth, f"Bearer {expected}"):
+            return
+        from .media_token import verify_media_token
+
+        if verify_media_token(expected, request.query_params.get("token", "")):
+            return
+        raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
     return _verify
 
 
 def verify_token_ws(expected: str):
     async def _verify(websocket: WebSocket) -> None:
-        # Browsers cannot set headers on WebSocket, so also accept the token
-        # as a query parameter. Header form stays the primary contract.
+        # Browsers cannot set headers on WebSocket, so accept a valid
+        # short-TTL media token as a query parameter (issue #19). The header
+        # form stays the primary contract; the raw sidecar token is never
+        # accepted here.
+        from .media_token import verify_media_token
+
         auth = websocket.headers.get("Authorization", "")
         query_token = websocket.query_params.get("token", "")
         if not (
             secrets.compare_digest(auth, f"Bearer {expected}")
-            or secrets.compare_digest(query_token, expected)
+            or verify_media_token(expected, query_token)
         ):
             await websocket.accept()
             await websocket.close(code=4401, reason="invalid or missing bearer token")
@@ -152,7 +178,17 @@ def create_app(
 ) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
 
-    app = FastAPI(title="voiceclone-sidecar", version=SIDECAR_VERSION)
+    # Issue #19: the default docs routes (/openapi.json, /docs, /redoc) carry
+    # no auth dependency, so they would publish the full API surface to any
+    # local process or web page. There is no human-facing API browser here —
+    # they stay off entirely.
+    app = FastAPI(
+        title="voiceclone-sidecar",
+        version=SIDECAR_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     # Renderer runs on a dev origin in development; the sidecar is a local
     # loopback service guarded by bearer auth, so origins stay permissive.
     app.add_middleware(
@@ -164,6 +200,10 @@ def create_app(
     log_bus = LogBus()
     require_auth = verify_token(token)
     require_auth_ws = verify_token_ws(token)
+    # Issue #19: media routes (audio files, reference/avatar images, the log
+    # WebSocket) additionally accept a short-TTL media-scoped query token so
+    # <img>/<audio> elements and WebSocket clients never need the raw token.
+    require_media_auth = verify_media_query_token(token)
     # BYOK API keys (ADR-0003): the sidecar reads them from the OS key store
     # on demand and keeps nothing on disk. Tests inject an in-memory backend.
     keys = key_store if key_store is not None else KeyStore()
@@ -286,6 +326,25 @@ def create_app(
     @app.get("/health", dependencies=[Depends(require_auth)])
     async def health() -> dict:
         return {"status": "ok", "version": SIDECAR_VERSION}
+
+    @app.get("/media-token", dependencies=[Depends(require_auth)])
+    async def media_token() -> dict:
+        """Issue a short-TTL, media-scoped token (issue #19).
+
+        Media elements (<img>/<audio>) and the log WebSocket cannot set
+        Authorization headers, so the renderer fetches this narrow token
+        over bearer auth and uses it in their URLs instead of the raw
+        sidecar token. It only grants the media routes and expires on its
+        own; fetch a fresh one when it lapses.
+        """
+        from .media_token import DEFAULT_MEDIA_TTL_SECONDS, make_media_token
+
+        issued = make_media_token(token, DEFAULT_MEDIA_TTL_SECONDS)
+        return {
+            "media_token": issued,
+            "expires_in_seconds": DEFAULT_MEDIA_TTL_SECONDS,
+            "expires_at": int(issued.rsplit(".", 1)[0]),
+        }
 
     def _mark_artifact(target: dict, path: Path, fields: dict[str, str]) -> None:
         """Stamp an artifact with the AIGC marker (issue #15).
@@ -512,14 +571,18 @@ def create_app(
         voice_store.delete(voice_id)
         return {"deleted": voice_id}
 
-    @app.get("/voices/{voice_id}/reference", dependencies=[Depends(require_auth)])
+    @app.get(
+        "/voices/{voice_id}/reference", dependencies=[Depends(require_media_auth)]
+    )
     async def voice_reference(voice_id: str) -> FileResponse:
         _require_voice(voice_id)
         path = voice_store.reference_path(voice_id)
         media = AUDIO_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return FileResponse(path, media_type=media, filename=path.name)
 
-    @app.get("/voices/{voice_id}/avatar", dependencies=[Depends(require_auth)])
+    @app.get(
+        "/voices/{voice_id}/avatar", dependencies=[Depends(require_media_auth)]
+    )
     async def voice_avatar(voice_id: str) -> FileResponse:
         _require_voice(voice_id)
         path = voice_store.avatar_path(voice_id)
@@ -1154,7 +1217,7 @@ def create_app(
             )
             log_bus.publish(generation_id, f"generation failed: {exc}")
             generation_store.persist(record)
-            raise HTTPException(status_code=500, detail=f"generation failed: {exc}") from exc
+            raise HTTPException(status_code=500, detail="generation failed") from exc
 
         audio_name = Path(result.audio_path).name
         # Issue #15: stamp the artifact itself with the AI-generated-content
@@ -1824,7 +1887,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="generation not found") from None
         return {"deleted": generation_id}
 
-    @app.get("/audio/{filename}", dependencies=[Depends(require_auth)])
+    @app.get("/audio/{filename}", dependencies=[Depends(require_media_auth)])
     async def audio(filename: str) -> FileResponse:
         path = (audio_dir / filename).resolve()
         if path.parent != audio_dir.resolve() or not path.is_file():

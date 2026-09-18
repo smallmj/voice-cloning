@@ -19,6 +19,7 @@ import type {
   SidecarInfo,
   Voice,
 } from "./api";
+import { fetchMediaToken } from "./api";
 
 const CAP_LABELS: Record<keyof Capabilities, string> = {
   languages: "语种",
@@ -145,10 +146,46 @@ async function errorDetail(res: Response, fallback: string): Promise<string> {
   }
 }
 
+// Issue #19: media elements (<img>/<audio>) and the log WebSocket cannot set
+// Authorization headers, so they authenticate with a short-TTL,
+// media-scoped token fetched over bearer auth — the raw sidecar token never
+// appears in a URL. The token is refreshed comfortably before expiry.
+function useMediaToken(baseUrl: string | null, token: string | null): string {
+  const [mediaToken, setMediaToken] = useState<string>("");
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!baseUrl || !token) return;
+    let cancelled = false;
+    const schedule = (ms: number) => {
+      timerRef.current = window.setTimeout(() => void run(), ms);
+    };
+    const run = async () => {
+      try {
+        const mt = await fetchMediaToken(baseUrl, token);
+        if (cancelled) return;
+        setMediaToken(mt.media_token);
+        schedule(Math.max(10_000, (mt.expires_in_seconds - 60) * 1000));
+      } catch {
+        // Retry soon; media stays broken only as long as the fetch does.
+        if (!cancelled) schedule(10_000);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, [baseUrl, token]);
+
+  return mediaToken;
+}
+
 function VoiceCard({
   voice,
   baseUrl,
   token,
+  mediaToken,
   selected,
   onSelect,
   onDelete,
@@ -157,6 +194,7 @@ function VoiceCard({
   voice: Voice;
   baseUrl: string;
   token: string;
+  mediaToken: string;
   selected: boolean;
   onSelect: () => void;
   onDelete: () => void;
@@ -236,7 +274,7 @@ function VoiceCard({
         {voice.avatar ? (
           <img
             className="voice-avatar"
-            src={`${baseUrl}/voices/${voice.id}/avatar?token=${token}`}
+            src={`${baseUrl}/voices/${voice.id}/avatar?token=${encodeURIComponent(mediaToken)}`}
             alt={voice.name}
           />
         ) : (
@@ -316,7 +354,7 @@ function VoiceCard({
         <audio
           controls
           preload="none"
-          src={`${baseUrl}/voices/${voice.id}/reference?token=${token}`}
+          src={`${baseUrl}/voices/${voice.id}/reference?token=${encodeURIComponent(mediaToken)}`}
           onClick={(ev) => ev.stopPropagation()}
         />
       )}
@@ -618,11 +656,13 @@ function CapabilityMatrixSection({
 function CompareSection({
   baseUrl,
   token,
+  mediaToken,
   voices,
   engines,
 }: {
   baseUrl: string;
   token: string;
+  mediaToken: string;
   voices: Voice[];
   engines: EngineInfo[];
 }) {
@@ -807,7 +847,7 @@ function CompareSection({
                 <audio
                   controls
                   preload="none"
-                  src={`${baseUrl}${e.normalized_audio_url}?token=${encodeURIComponent(token)}`}
+                  src={`${baseUrl}${e.normalized_audio_url}?token=${encodeURIComponent(mediaToken)}`}
                 />
                 <div className="hint">
                   原始 {e.original_lufs ?? "—"} LUFS → 归一化 {e.achieved_lufs ?? "—"} LUFS
@@ -892,12 +932,14 @@ function CompareSection({
 function HistorySection({
   baseUrl,
   token,
+  mediaToken,
   engines,
   onRerun,
   refreshKey,
 }: {
   baseUrl: string;
   token: string;
+  mediaToken: string;
   engines: EngineInfo[];
   onRerun: (record: GenerationRecord) => void;
   refreshKey: number;
@@ -1053,7 +1095,7 @@ function HistorySection({
                     </pre>
                   </div>
                   {rec.status === "succeeded" && rec.audio_url && (
-                    <audio controls preload="none" src={`${baseUrl}${rec.audio_url}?token=${token}`} />
+                    <audio controls preload="none" src={`${baseUrl}${rec.audio_url}?token=${encodeURIComponent(mediaToken)}`} />
                   )}
                 </div>
               )}
@@ -1213,6 +1255,8 @@ function JobsSection({
 
 export default function App() {
   const [info, setInfo] = useState<SidecarInfo | null>(null);
+  // Issue #19: short-TTL media-scoped token for <img>/<audio>/WS URLs.
+  const mediaToken = useMediaToken(info?.baseUrl ?? null, info?.token ?? null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [installStatus, setInstallStatus] = useState<Record<string, EngineInstallStatus>>({});
@@ -1383,7 +1427,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
     let interval: ReturnType<typeof setInterval> | null = null;
     (async () => {
       const sidecarInfo = await window.voiceclone.getSidecarInfo();
@@ -1428,24 +1471,30 @@ export default function App() {
           if (installingRef.current[e.id]) void fetchStatus(e.id);
         }
       }, 1000);
-
-      ws = new WebSocket(
-        `${sidecarInfo.baseUrl.replace("http", "ws")}/ws/logs?token=${sidecarInfo.token}`,
-      );
-      ws.onmessage = (ev) => {
-        const event = JSON.parse(ev.data) as LogEvent;
-        setLogs((prev) => [...prev.slice(-499), event]);
-      };
-      wsRef.current = ws;
     })();
-    // StrictMode double-mounts effects in dev — close the socket this
-    // mount created, otherwise the first connection leaks.
     return () => {
       if (interval) clearInterval(interval);
-      ws?.close();
-      if (ws && wsRef.current === ws) wsRef.current = null;
     };
   }, []);
+
+  // Issue #19: the log WebSocket authenticates with the short-TTL
+  // media-scoped token instead of the raw sidecar token. The effect keys on
+  // the token so a refresh reconnects with the current value.
+  useEffect(() => {
+    if (!info || !mediaToken) return;
+    const ws = new WebSocket(
+      `${info.baseUrl.replace("http", "ws")}/ws/logs?token=${encodeURIComponent(mediaToken)}`,
+    );
+    ws.onmessage = (ev) => {
+      const event = JSON.parse(ev.data) as LogEvent;
+      setLogs((prev) => [...prev.slice(-499), event]);
+    };
+    wsRef.current = ws;
+    return () => {
+      ws.close();
+      if (wsRef.current === ws) wsRef.current = null;
+    };
+  }, [info, mediaToken]);
 
   // 归一化预览：文本变化后防抖请求 sidecar 的 /normalize（与生成同一层）。
   useEffect(() => {
@@ -2013,6 +2062,7 @@ export default function App() {
                 voice={v}
                 baseUrl={info?.baseUrl ?? ""}
                 token={info?.token ?? ""}
+                mediaToken={mediaToken}
                 selected={v.id === selectedVoice}
                 onSelect={() => setSelectedVoice(v.id === selectedVoice ? null : v.id)}
                 onDelete={() => void deleteVoice(v.id)}
@@ -2208,6 +2258,7 @@ export default function App() {
           <CompareSection
             baseUrl={info.baseUrl}
             token={info.token}
+            mediaToken={mediaToken}
             voices={voices}
             engines={engines}
           />
@@ -2332,6 +2383,7 @@ export default function App() {
         <HistorySection
           baseUrl={info.baseUrl}
           token={info.token}
+          mediaToken={mediaToken}
           engines={engines}
           onRerun={rerun}
           refreshKey={historyRefreshKey}

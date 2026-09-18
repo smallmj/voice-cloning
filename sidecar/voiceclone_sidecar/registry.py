@@ -223,8 +223,14 @@ def default_registry(output_dir=None, key_store=None) -> Registry:
         # Contract-test seams (issue #13): a slow engine (segments long enough
         # to observe queue/cancel states) and one the vendor throttles on its
         # first calls (rate-limit retry must absorb it).
-        from .engines.fake import FakeRateLimitedEngine, FakeSlowEngine
+        from .engines.fake import (
+            FakeBrokenEngine,
+            FakeRateLimitedEngine,
+            FakeSlowEngine,
+        )
 
         registry.register(FakeSlowEngine(output_dir=output_dir))
         registry.register(FakeRateLimitedEngine(output_dir=output_dir))
+        # Test seam (issue #19): always fails with a path-bearing message.
+        registry.register(FakeBrokenEngine(output_dir=output_dir))
     return registry

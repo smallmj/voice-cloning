@@ -281,3 +281,20 @@ export interface GenerationJob {
   started_at: string | null;
   finished_at: string | null;
 }
+
+export interface MediaToken {
+  media_token: string;
+  expires_in_seconds: number;
+  expires_at: number;
+}
+
+/** Issue #19: fetch the short-TTL, media-scoped token used by <img> /
+ * <audio> elements and the log WebSocket. Bearer-only route — never paste
+ * the raw sidecar token into a URL. */
+export async function fetchMediaToken(baseUrl: string, token: string): Promise<MediaToken> {
+  const res = await fetch(`${baseUrl}/media-token`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`media-token HTTP ${res.status}`);
+  return (await res.json()) as MediaToken;
+}

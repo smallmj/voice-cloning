@@ -293,6 +293,19 @@ class FakeSlowEngine(FakeEngine):
         return super().synthesize(request, log)
 
 
+class FakeBrokenEngine(FakeEngine):
+    """Test seam (issue #19): synthesis always fails with an exception whose
+    message embeds a filesystem path. Verifies the generation-failure 500
+    detail is sanitized instead of echoing the raw exception text."""
+
+    engine_id = "fake-broken"
+    display_name = "Fake Engine (broken)"
+
+    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
+        log("fake-broken: simulating hard failure")
+        raise RuntimeError("/tmp/voiceclone/secret/model.bin exploded: boom")
+
+
 class FakeRateLimitedEngine(FakeKeyEngine):
     """Test seam (issue #13): the vendor throttles the first N synthesis
     calls with a rate-limit error, then lets everything through. The

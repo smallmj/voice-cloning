@@ -115,6 +115,23 @@ def _default_backend() -> KeyBackend:
     import os
 
     if os.environ.get("VOICECLONE_KEY_BACKEND") == "memory":
+        # Issue #19: the memory backend silently drops every BYOK key on
+        # exit. That is fine for tests, but a real process must never lose
+        # its keys without being told loudly.
+        import sys
+
+        in_tests = "PYTEST_CURRENT_TEST" in os.environ
+        allowed = os.environ.get("VOICECLONE_ALLOW_MEMORY_KEY_BACKEND") == "1"
+        if not (in_tests or allowed):
+            print(
+                "WARNING: VOICECLONE_KEY_BACKEND=memory is active outside the "
+                "test suite — BYOK API keys will NOT be persisted and are lost "
+                "when this process exits. Unset the variable to use the OS key "
+                "store, or set VOICECLONE_ALLOW_MEMORY_KEY_BACKEND=1 to silence "
+                "this warning.",
+                file=sys.stderr,
+                flush=True,
+            )
         return MemoryBackend()
     return KeyringBackend()
 

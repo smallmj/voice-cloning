@@ -248,6 +248,15 @@ class IndexTts25MpsEngine(InstallableEngine):
             raise RuntimeError(
                 "engine is not installed yet — call POST /engines/indextts-25-mps/install first"
             )
+
+        params = request.params or {}
+        if not params.get("ref_audio"):
+            # Zero-shot cloning with no reference: upstream fails deep inside
+            # soundfile with "Invalid file: None" — refuse here with an
+            # actionable message instead.
+            raise RuntimeError(
+                "IndexTTS-2.5 是零样本复刻引擎，必须提供参考音频：请选择一个音色（或先创建音色）再生成"
+            )
         out_dir = (self.output_dir or Path.cwd() / "data" / "audio").resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = (out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav").resolve()

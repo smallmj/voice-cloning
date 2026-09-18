@@ -179,3 +179,11 @@ def test_local_weights_env_is_expanded(tmp_path):
         output_dir=tmp_path, root=tmp_path, env={indextts25_mps.LOCAL_WEIGHTS_ENV: str(local)}
     )
     assert engine._local_weights_root() == local
+
+
+def test_synthesize_refuses_without_reference_audio(engine):
+    engine.is_installed = lambda: True  # guard sits after the install check
+    with pytest.raises(RuntimeError, match="参考音频"):
+        engine.synthesize(
+            GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None
+        )

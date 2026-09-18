@@ -218,3 +218,11 @@ def test_generations_serialize_per_engine(tmp_path):
     finally:
         server.should_exit = True
         t_server.join(timeout=5)
+
+
+def test_synthesize_refuses_without_reference_audio(engine):
+    engine.is_installed = lambda: True  # guard sits after the install check
+    with pytest.raises(RuntimeError, match="参考音频"):
+        engine.synthesize(
+            GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None
+        )

@@ -281,10 +281,17 @@ class LocalTranscriber:
 
         def _ms_weights(log, progress) -> Path:
             """Download the ASR weights from the ModelScope twin via direct
-            resolve URLs (resumable curl, same downloader as engine weights)."""
+            resolve URLs (resumable curl, same downloader as engine weights).
+
+            The fallback chain must use the PUBLIC HF repo for its HF legs:
+            the ModelScope twin id (gpustack/faster-whisper-small) is a
+            PRIVATE repo on huggingface.co (401, verified 2026-09) — passing
+            it as the HF repo would make every non-ModelScope fallback leg a
+            dead link.
+            """
             ms_dir = self._ms_weights_dir()
             chain = sources.weight_sources(
-                self.cfg["ms_repo"], ms_repo=self.cfg["ms_repo"], preferred="modelscope",
+                self.cfg["model_repo"], ms_repo=self.cfg["ms_repo"], preferred="modelscope",
             )
             for name in MS_ASR_FILES:
                 log(f"weights: {name}")

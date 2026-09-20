@@ -10,7 +10,6 @@ shared services and helpers into one importable object. Routers receive an
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import tempfile
 import threading
@@ -24,6 +23,7 @@ from fastapi import HTTPException, UploadFile
 
 from .aigc import embed_aigc_marker
 from .compare import CompareStore
+from .db import T_APP_STATE, read_kv_block, write_kv_block
 from .generations import GenerationStore
 from .jobs import JobStore
 from .logbus import LogBus
@@ -73,14 +73,12 @@ class AppContext:
     # Issue #15: first-use voice consent. Durable in the portable data root
     # (issue #14's layout), so a library backup/restore carries it along.
     consent_version: str = "voice-consent-v1"
-    consent_path: Path = field(init=False)
     consent_lock: threading.Lock = field(default_factory=threading.Lock)
 
     # Issue #21 / ADR-0014: UI preferences (theme, last selected engine) are
     # properties of the library, not of one machine's browser profile — so
-    # they persist in the portable data root (same file as consent), not in
-    # localStorage. A library backup/restore carries them along.
-    ui_prefs_path: Path = field(init=False)
+    # they persist in the portable data root (app_state table, ADR-0017),
+    # not in localStorage. A library backup/restore carries them along.
     ui_prefs_lock: threading.Lock = field(default_factory=threading.Lock)
 
     _transcriber: LocalTranscriber | None = field(default=None, repr=False)
@@ -98,8 +96,6 @@ class AppContext:
         self.regression_store = RegressionStore(self.data_root)
         self.voice_store = VoiceStore(self.data_root)
         self.transcription_settings = TranscriptionSettings(self.data_root)
-        self.consent_path = self.data_root / "app_state.json"
-        self.ui_prefs_path = self.data_root / "app_state.json"
         self.require_auth = verify_token(self.token)
         self.require_media_auth = verify_media_query_token(self.token)
         self.require_auth_ws = verify_token_ws(self.token)
@@ -271,46 +267,29 @@ class AppContext:
 
     def read_consent(self) -> dict:
         try:
-            raw = json.loads(self.consent_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            state = read_kv_block(self.data_root, T_APP_STATE, "voice_consent")
+        except Exception:  # noqa: BLE001 - a corrupt store degrades to "no consent recorded", never blocks boot
             return {}
-        state = raw.get("voice_consent")
         return state if isinstance(state, dict) else {}
 
     def write_consent(self, state: dict) -> None:
-        from .storage import write_json_atomic
-
         with self.consent_lock:
-            try:
-                raw = json.loads(self.consent_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                raw = {}
-            raw["voice_consent"] = state
-            write_json_atomic(self.consent_path, raw)
+            write_kv_block(self.data_root, T_APP_STATE, "voice_consent", state)
 
     # -- UI preferences (issue #21 / ADR-0014) ---------------------------------
 
     def read_ui_prefs(self) -> dict:
         try:
-            raw = json.loads(self.ui_prefs_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            prefs = read_kv_block(self.data_root, T_APP_STATE, "ui_prefs")
+        except Exception:  # noqa: BLE001 - a corrupt store degrades to default UI prefs, never blocks boot
             return {}
-        prefs = raw.get("ui_prefs")
         return prefs if isinstance(prefs, dict) else {}
 
     def write_ui_prefs(self, state: dict) -> None:
-        from .storage import write_json_atomic
-
         with self.ui_prefs_lock:
-            try:
-                raw = json.loads(self.ui_prefs_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                raw = {}
-            existing = raw.get("ui_prefs")
-            merged = existing if isinstance(existing, dict) else {}
+            merged = self.read_ui_prefs()
             merged.update(state)
-            raw["ui_prefs"] = merged
-            write_json_atomic(self.ui_prefs_path, raw)
+            write_kv_block(self.data_root, T_APP_STATE, "ui_prefs", merged)
 
     # -- portability -----------------------------------------------------------
 

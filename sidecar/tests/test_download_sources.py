@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+from voiceclone_sidecar.db import T_SETTINGS, write_kv_block
+
 import pytest
 
 from voiceclone_sidecar import sources
@@ -120,10 +122,8 @@ def test_source_prefs_roundtrip_and_defaults(tmp_path):
 
 
 def test_source_prefs_invalid_values_fall_back_to_defaults(tmp_path):
-    (tmp_path / "settings.json").write_text(
-        json.dumps({"sources": {"weights": "gitee", "pypi": 42, "cuda": None}}),
-        encoding="utf-8",
-    )
+    write_kv_block(tmp_path, T_SETTINGS, "sources",
+                   {"weights": "gitee", "pypi": 42, "cuda": None})
     assert load_source_prefs(tmp_path) == {
         "weights": "hf", "pypi": "aliyun", "cuda": "official",
     }

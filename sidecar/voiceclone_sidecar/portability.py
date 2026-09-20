@@ -12,27 +12,37 @@ someone else's machine is meaningless here, so the importing user rebinds
 on demand.
 
 **Library backup / restore** — a ``.zip`` of the entire data directory.
-The data dir is self-contained by construction: JSON indexes (voices,
-generations, compare sessions, settings) and all audio artifacts live
-under one portable root. BYOK API keys are excluded by design — they
-never touch disk (ADR-0003) and stay in the OS key store.
+The data dir is self-contained by construction: the SQLite index
+(``library.db``, ADR-0017) and all audio artifacts live under one portable
+root. BYOK API keys are excluded by design — they never touch disk
+(ADR-0003) and stay in the OS key store.
+
+With WAL journaling a live ``library.db`` cannot be copied consistently —
+so the backup FIRST snapshots the database with ``VACUUM INTO`` and packs
+the snapshot, not the live file. The restore path recognizes both the
+snapshot format and the pre-#24 layout of loose JSON indexes, and verifies
+snapshot integrity before anything is swapped.
 
 Zip layouts::
 
     voice package:            library backup:
       manifest.json             manifest.json
-      files/<ref|avatar>...     <every file of the data dir>
+      files/<ref|avatar>...     library.db (the VACUUM INTO snapshot)
+                                <every other file of the data dir>
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import tempfile
 import time
 import uuid
 import zipfile
 from pathlib import Path
+
+from .db import LIBRARY_DB_NAME, T_GENERATIONS, T_VOICES, Database
 
 PACKAGE_KIND = "voice-clone-package"
 BACKUP_KIND = "voice-clone-library-backup"
@@ -147,30 +157,84 @@ def import_voice_package(zip_path: Path, voice_store) -> dict:
 
 
 def create_library_backup(data_dir: Path, out_path: Path) -> Path:
-    """Zip the whole data directory (indexes + audio artifacts) with a manifest."""
+    """Zip the whole data directory (index + audio artifacts) with a manifest.
+
+    The SQLite index is snapshotted with ``VACUUM INTO`` first (ADR-0017
+    decision 4): under WAL, copying the live ``library.db`` plus its sidecar
+    files would risk a torn, inconsistent backup. The snapshot is packed as
+    ``library.db`` inside the zip; live WAL/SHM sidecar files and the
+    one-time migration backups are excluded.
+    """
     data_dir = Path(data_dir)
     if not data_dir.is_dir():
         raise PortabilityError("数据目录不存在，无法备份")
+    live_db = data_dir / LIBRARY_DB_NAME
+    snapshot = data_dir / f"{LIBRARY_DB_NAME}.backup-snapshot"
+    if live_db.exists():
+        try:
+            Database(live_db, migrate=False).vacuum_into(snapshot)
+        except Exception as exc:
+            snapshot.unlink(missing_ok=True)
+            raise PortabilityError(f"无法生成数据库快照：{exc}") from exc
+
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("manifest.json", json.dumps(
                 _manifest(BACKUP_KIND, {"notes": [
                     "BYOK API keys are not included: they live in the OS key store.",
+                    "The SQLite index is packed as a VACUUM INTO snapshot (ADR-0017).",
                 ]}),
                 ensure_ascii=False, indent=2,
             ))
             for path in sorted(data_dir.rglob("*")):
                 if not path.is_file():
                     continue
-                if path.suffix == ".tmp":
+                rel = path.relative_to(data_dir)
+                if path.suffix == ".tmp" or rel.name == snapshot.name:
                     continue
-                zf.write(path, path.relative_to(data_dir).as_posix())
+                if path.name in (LIBRARY_DB_NAME, f"{LIBRARY_DB_NAME}-wal", f"{LIBRARY_DB_NAME}-shm"):
+                    continue
+                if rel.parts and rel.parts[0].startswith("migration-backup-"):
+                    continue
+                zf.write(path, rel.as_posix())
+            if snapshot.exists():
+                zf.write(snapshot, LIBRARY_DB_NAME)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp.replace(out_path)
     finally:
         tmp.unlink(missing_ok=True)
+        snapshot.unlink(missing_ok=True)
     return out_path
+
+
+def _snapshot_counts(snapshot: Path) -> dict:
+    """Open a backup snapshot, verify its integrity, count its records.
+
+    A snapshot that fails ``PRAGMA integrity_check`` or lacks the index
+    tables cannot honestly claim a complete restore — fail loudly (the
+    project convention for corrupt backups) instead of reporting zeros.
+    """
+    try:
+        raw = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise PortabilityError(f"备份内的数据库快照无法打开：{exc}") from exc
+    try:
+        try:
+            row = raw.execute("PRAGMA integrity_check").fetchone()
+            if not row or row[0] != "ok":
+                raise PortabilityError(f"备份内的数据库快照已损坏：{row[0] if row else 'unknown'}")
+            counts = {"voices": 0, "generations": 0}
+            for table, key in ((T_VOICES, "voices"), (T_GENERATIONS, "generations")):
+                try:
+                    counts[key] = raw.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                except sqlite3.Error as exc:
+                    raise PortabilityError(f"备份内的数据库快照缺少索引表：{exc}") from exc
+            return counts
+        except sqlite3.Error as exc:
+            raise PortabilityError(f"备份内的数据库快照无法读取：{exc}") from exc
+    finally:
+        raw.close()
 
 
 def restore_library_backup(zip_path: Path, data_dir: Path) -> dict:
@@ -178,8 +242,12 @@ def restore_library_backup(zip_path: Path, data_dir: Path) -> dict:
 
     The extraction lands in a staging dir next to the data dir; only after
     the archive validates completely is the live directory swapped out, so a
-    broken archive can never leave the library half-restored. Callers must
-    reload their stores afterwards.
+    broken archive can never leave the library half-restored. Both formats
+    are accepted (ADR-0017): the current snapshot layout (``library.db``
+    inside the zip, verified via ``PRAGMA integrity_check``) and the
+    pre-#24 layout of loose JSON indexes. Callers must reload their stores
+    afterwards — a legacy-JSON restore is then migrated to SQLite by the
+    store reopen path.
     """
     data_dir = Path(data_dir)
     staging = data_dir.parent / f"{data_dir.name}.restore-{uuid.uuid4().hex[:8]}"
@@ -200,23 +268,29 @@ def restore_library_backup(zip_path: Path, data_dir: Path) -> dict:
         except zipfile.BadZipFile as exc:
             raise PortabilityError(f"备份包无法解析：{exc}") from exc
 
-        restored = {"voices": 0, "generations": 0}
-        # A backup whose indexes no longer parse cannot honestly claim a
-        # complete restore — fail loudly instead of reporting zero voices.
-        voices_index = staging / "voices.json"
-        if voices_index.is_file():
-            try:
-                restored["voices"] = len(json.loads(
-                    voices_index.read_text(encoding="utf-8")).get("voices", []))
-            except (json.JSONDecodeError, OSError) as exc:
-                raise PortabilityError(f"备份内的 voices.json 无法解析：{exc}") from exc
-        generations_index = staging / "generations.json"
-        if generations_index.is_file():
-            try:
-                restored["generations"] = len(json.loads(
-                    generations_index.read_text(encoding="utf-8")).get("generations", []))
-            except (json.JSONDecodeError, OSError) as exc:
-                raise PortabilityError(f"备份内的 generations.json 无法解析：{exc}") from exc
+        snapshot = staging / LIBRARY_DB_NAME
+        if snapshot.is_file():
+            # Snapshot format (ADR-0017): verify BEFORE the swap.
+            restored = _snapshot_counts(snapshot)
+        else:
+            restored = {"voices": 0, "generations": 0}
+            # A legacy backup whose indexes no longer parse cannot honestly
+            # claim a complete restore — fail loudly instead of reporting
+            # zero voices.
+            voices_index = staging / "voices.json"
+            if voices_index.is_file():
+                try:
+                    restored["voices"] = len(json.loads(
+                        voices_index.read_text(encoding="utf-8")).get("voices", []))
+                except (json.JSONDecodeError, OSError) as exc:
+                    raise PortabilityError(f"备份内的 voices.json 无法解析：{exc}") from exc
+            generations_index = staging / "generations.json"
+            if generations_index.is_file():
+                try:
+                    restored["generations"] = len(json.loads(
+                        generations_index.read_text(encoding="utf-8")).get("generations", []))
+                except (json.JSONDecodeError, OSError) as exc:
+                    raise PortabilityError(f"备份内的 generations.json 无法解析：{exc}") from exc
 
         # Swap: live dir -> old, staging -> live. If anything below fails we
         # roll back; the swap itself is two renames on the same filesystem.

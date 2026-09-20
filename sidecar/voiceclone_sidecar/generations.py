@@ -7,7 +7,7 @@ the source of truth for history; the audio file is its artifact).
 
 Storage layout:
 
-    <data>/generations.json              the index (atomic writes)
+    <data>/library.db                    the SQLite index (generations table)
     <audio_dir>/<generation_id>.wav      the artifact, served via /audio/
 
 Deleting a record deletes its artifact file; deleting a voice does NOT touch
@@ -19,65 +19,56 @@ renamed or deleted.
 from __future__ import annotations
 
 import json
-import threading
 import time
 from pathlib import Path
 
-from .storage import write_json_atomic
+from .db import T_GENERATIONS, Database, library_db_path
 
 
 class GenerationStore:
-    """Persistence for generation records."""
+    """Persistence for generation records.
+
+    Filtering, search and pagination run in SQL over indexed columns
+    (ADR-0017: never a full in-lock linear scan per keystroke). Reads always
+    return freshly parsed objects — a record handed to the pipeline is never
+    aliased into the store, so later in-place mutations (log appends from
+    worker threads) cannot race a serialization pass.
+    """
 
     def __init__(self, data_dir: Path, audio_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.audio_dir = Path(audio_dir)
-        self.index_path = self.data_dir / "generations.json"
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self._records: dict[str, dict] = {}
-        # Writes come from request handlers and synthesis worker threads.
-        self._lock = threading.Lock()
-        self._load()
+        self._db = Database(library_db_path(self.data_dir))
 
     # -- persistence ---------------------------------------------------------
 
-    def _load(self) -> None:
-        if not self.index_path.exists():
-            return
-        try:
-            raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        for record in raw.get("generations", []):
-            if isinstance(record, dict) and record.get("id"):
-                self._records[record["id"]] = record
-
     def reload(self) -> None:
-        """Re-read the index from disk (used by library restore, issue #14)."""
-        with self._lock:
-            self._records = {}
-            self._load()
-
-    def _save(self) -> None:
-        # Newest first, so a restarted sidecar reads history in display order.
-        ordered = sorted(
-            self._records.values(), key=lambda r: r.get("created_at", ""), reverse=True
-        )
-        write_json_atomic(self.index_path, {"generations": ordered})
+        """Reconnect to the index database (used by library restore #14)."""
+        self._db.reconnect()
 
     # -- CRUD ----------------------------------------------------------------
 
     def persist(self, record: dict) -> dict:
-        """Insert or update one record and flush it to disk."""
-        with self._lock:
-            self._records[record["id"]] = record
-            self._save()
+        """Insert or update one record; the payload is snapshotted at write
+        time, so subsequent caller-side mutations never reach the index."""
+        self._db.put_payload(
+            T_GENERATIONS,
+            record["id"],
+            record.get("created_at", ""),
+            record,
+            {
+                "engine_id": record.get("engine_id") or "",
+                "voice_id": record.get("voice_id") or "",
+                "status": record.get("status") or "",
+                "text": record.get("text") or "",
+                "voice_name": record.get("voice_name") or "",
+            },
+        )
         return dict(record)
 
     def get(self, generation_id: str) -> dict | None:
-        with self._lock:
-            record = self._records.get(generation_id)
-            return dict(record) if record else None
+        return self._db.get_payload(T_GENERATIONS, generation_id)
 
     def list(
         self,
@@ -88,36 +79,41 @@ class GenerationStore:
         limit: int = 20,
         offset: int = 0,
     ) -> dict:
-        """Search + filter + paginate. ``q`` matches text, voice name or id."""
-        with self._lock:
-            records = list(self._records.values())
+        """Search + filter + paginate in SQL. ``q`` matches text, voice name or id."""
+        where: list[str] = []
+        params: list = []
         needle = q.strip().lower()
         if needle:
-            records = [
-                r
-                for r in records
-                if needle in (r.get("text") or "").lower()
-                or needle in (r.get("voice_name") or "").lower()
-                or needle in r["id"].lower()
-            ]
+            like = f"%{needle}%"
+            where.append(
+                "(lower(text) LIKE ? OR lower(voice_name) LIKE ? OR lower(id) LIKE ?)"
+            )
+            params += [like, like, like]
         if engine_id:
-            records = [r for r in records if r.get("engine_id") == engine_id]
+            where.append("engine_id = ?")
+            params.append(engine_id)
         if voice_id:
-            records = [r for r in records if r.get("voice_id") == voice_id]
+            where.append("voice_id = ?")
+            params.append(voice_id)
         if status:
-            records = [r for r in records if r.get("status") == status]
-        records.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        total = len(records)
-        page = records[offset : offset + limit]
-        return {"records": [dict(r) for r in page], "total": total}
+            where.append("status = ?")
+            params.append(status)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        total = self._db.execute(
+            f"SELECT COUNT(*) AS n FROM {T_GENERATIONS} {clause}", tuple(params)
+        ).fetchone()["n"]
+        rows = self._db.execute(
+            f"SELECT payload FROM {T_GENERATIONS} {clause} "
+            "ORDER BY created_at DESC, id LIMIT ? OFFSET ?",
+            tuple(params) + (limit, offset),
+        ).fetchall()
+        return {"records": [json.loads(r["payload"]) for r in rows], "total": total}
 
     def delete(self, generation_id: str) -> None:
         """Remove the record and its audio artifact."""
-        with self._lock:
-            record = self._records.pop(generation_id, None)
-            if record is None:
-                raise KeyError(generation_id)
-            self._save()
+        record = self.get(generation_id)
+        if record is None or not self._db.delete_payload(T_GENERATIONS, generation_id):
+            raise KeyError(generation_id)
         audio_name = record.get("audio_file")
         if audio_name:
             try:

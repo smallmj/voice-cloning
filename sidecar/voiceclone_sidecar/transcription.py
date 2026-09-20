@@ -12,7 +12,7 @@ Two provider kinds, deliberately:
   reuses whatever providers the user already plugged in as engines. Engines
   without a ``transcribe`` method are simply not offered.
 
-The provider choice lives in ``<data>/settings.json`` so it survives restarts.
+The provider choice lives in the library database's settings table (ADR-0017) so it survives restarts.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 from . import sources
 from .capabilities import Capabilities  # noqa: F401 - re-exported for typing clarity
+from .db import T_SETTINGS, read_kv_block, write_kv_block
 from .engine_config import effective_env
 from .runtime import downloader, installer, paths, uvman
 
@@ -86,31 +86,24 @@ class TranscriptionError(RuntimeError):
 
 
 class TranscriptionSettings:
-    """Durable provider choice: local by default, cloud engines opt-in."""
+    """Durable provider choice: local by default, cloud engines opt-in.
+
+    The provider lives in the settings table of the library database
+    (ADR-0017), so it survives restarts and travels with a backup/restore.
+    """
 
     def __init__(self, data_dir: Path) -> None:
-        self.path = Path(data_dir) / "settings.json"
-        self._lock = threading.Lock()
-
-    def _load(self) -> dict:
-        if not self.path.exists():
-            return {}
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
+        self.data_dir = Path(data_dir)
 
     def provider(self) -> str:
-        with self._lock:
-            return self._load().get("transcription_provider", DEFAULT_PROVIDER)
+        try:
+            value = read_kv_block(self.data_dir, T_SETTINGS, "transcription_provider")
+        except Exception:  # noqa: BLE001 - a corrupt store degrades to the default provider, never blocks boot
+            return DEFAULT_PROVIDER
+        return value if isinstance(value, str) else DEFAULT_PROVIDER
 
     def set_provider(self, provider: str) -> None:
-        with self._lock:
-            data = self._load()
-            data["transcription_provider"] = provider
-            tmp = self.path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.path)
+        write_kv_block(self.data_dir, T_SETTINGS, "transcription_provider", provider)
 
 
 # Snapshot script executed by the TRANSCRIBE venv's python (it has

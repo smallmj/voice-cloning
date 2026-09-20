@@ -94,10 +94,16 @@ def test_store_delete_removes_record_and_audio_file(tmp_path):
     assert not (tmp_path / "generations.json.tmp").exists()
 
 
-def test_store_survives_torn_index(tmp_path):
+def test_torn_legacy_index_fails_loudly(tmp_path):
+    """ADR-0017 kills "parse-failure = empty library": a corrupt legacy JSON
+    index aborts the migration loudly instead of degrading to empty history."""
+    import pytest
+
+    from voiceclone_sidecar.db import DatabaseError
+
     (tmp_path / "generations.json").write_text("{broken", encoding="utf-8")
-    store = GenerationStore(tmp_path, tmp_path / "audio")
-    assert store.list()["total"] == 0  # no crash, empty history
+    with pytest.raises(DatabaseError, match="generations.json"):
+        GenerationStore(tmp_path, tmp_path / "audio")
 
 
 # --- contract tests (real sidecar process) ---------------------------------
@@ -170,8 +176,13 @@ def test_failed_generation_is_recorded(client, sidecar):
 
 def test_generation_record_survives_sidecar_restart(sidecar, client):
     record = client.post("/generations", json={"engine_id": "fake", "text": "重启留存测试"}).json()
-    index = json.loads((sidecar["data_dir"] / "generations.json").read_text(encoding="utf-8"))
-    assert any(rec["id"] == record["id"] for rec in index["generations"])
+    # ADR-0017: the index is SQLite now; durability is a committed row.
+    from voiceclone_sidecar.db import Database, library_db_path
+    db = Database(library_db_path(sidecar["data_dir"]), migrate=False)
+    try:
+        assert db.get_payload("generations", record["id"]) is not None
+    finally:
+        db.close()
 
 
 def test_generation_with_voice_snapshots_voice_name(client, sidecar):

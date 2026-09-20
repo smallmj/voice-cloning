@@ -11,24 +11,22 @@ config value can come from three layers, most specific wins:
    ``UV_DEFAULT_INDEX`` because ``uvman._run`` merges ``env`` over
    ``os.environ.copy()``; here the user's value lands inside ``env`` itself);
 3. **settings overrides** — per-engine values from the settings storage
-   (``<data>/settings.json``, the SAME store the transcription-provider and
-   UI-preference settings live in), which win over both so a settings change
-   can take effect without touching the environment.
+   (the ``settings`` table of ``<data>/library.db``, ADR-0017 — the SAME
+   store the transcription-provider and download-source settings live in),
+   which win over both so a settings change can take effect without touching
+   the environment.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .storage import write_json_atomic
+from .db import T_SETTINGS, read_kv_block, write_kv_block
 
 SETTINGS_KEY = "engines"
 SOURCES_KEY = "sources"
-_SETTINGS_LOCK = threading.Lock()
 
 # Keys the engine config layer concerns itself with. Everything else in the
 # process environment is deliberately NOT forwarded: engines get exactly the
@@ -161,10 +159,6 @@ def resolve_seam(
     return output_dir, env
 
 
-def _settings_path(data_dir: Path | None) -> Path | None:
-    return Path(data_dir) / "settings.json" if data_dir is not None else None
-
-
 def load_full_settings(data_dir: Path | None) -> dict:
     """The FULL settings blocks the registry seam consumes.
 
@@ -172,20 +166,9 @@ def load_full_settings(data_dir: Path | None) -> dict:
     configs must use this (not :func:`load_engine_settings`, engines-only) so the global
     download-source preferences (ADR-0016) reach :func:`effective_env`.
     """
-    path = _settings_path(data_dir)
-    if path is None:
-        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
-    if not isinstance(raw, dict):
-        return {SETTINGS_KEY: {}, SOURCES_KEY: {}}
-    engines = raw.get(SETTINGS_KEY)
-    if not isinstance(engines, dict):
-        engines = {}
+    engines = read_kv_block(data_dir, T_SETTINGS, SETTINGS_KEY)
     return {
-        SETTINGS_KEY: {k: v for k, v in engines.items() if isinstance(v, dict)},
+        SETTINGS_KEY: engines if isinstance(engines, dict) else {},
         SOURCES_KEY: load_source_prefs(data_dir),
     }
 
@@ -194,46 +177,35 @@ def load_engine_settings(data_dir: Path | None) -> dict:
     """Read the ``engines`` block from the settings storage.
 
     Shape: ``{"engines": {"<engine_id>": {"env": {...}}}}`` — one store shared
-    with the other app settings. A missing, empty or corrupt file is simply no
-    overrides: the seam must never make the app unbootable.
+    with the other app settings. A missing store is simply no overrides: the
+    seam must never make the app unbootable (a corrupt database degrades the
+    same way the corrupt JSON file used to).
     """
-    path = _settings_path(data_dir)
-    if path is None:
+    if data_dir is None:
         return {SETTINGS_KEY: {}}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        engines = read_kv_block(data_dir, T_SETTINGS, SETTINGS_KEY)
+    except Exception:  # noqa: BLE001 - a corrupt store must never block boot; degrade to no overrides
         return {SETTINGS_KEY: {}}
-    if not isinstance(raw, dict):
-        return {SETTINGS_KEY: {}}
-    engines = raw.get(SETTINGS_KEY)
     if not isinstance(engines, dict):
         return {SETTINGS_KEY: {}}
     return {SETTINGS_KEY: {k: v for k, v in engines.items() if isinstance(v, dict)}}
 
 
 def save_engine_settings(data_dir: Path | None, engines: dict) -> dict:
-    """Write the ``engines`` block into the settings storage, preserving the
-    other keys in that file. Returns the normalized ``{"engines": {...}}``."""
-    path = _settings_path(data_dir)
-    if path is None:
+    """Write the ``engines`` block into the settings storage. Other settings
+    keys are separate rows and untouched. Returns the normalized
+    ``{"engines": {...}}``."""
+    if data_dir is None:
         raise ValueError("no data dir configured for settings storage")
-    with _SETTINGS_LOCK:
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-        if not isinstance(raw, dict):
-            raw = {}
-        clean = {
-            engine_id: {
-                "env": {str(k): str(v) for k, v in (spec.get("env") or {}).items()},
-            }
-            for engine_id, spec in engines.items()
-            if isinstance(spec, dict)
+    clean = {
+        engine_id: {
+            "env": {str(k): str(v) for k, v in (spec.get("env") or {}).items()},
         }
-        raw[SETTINGS_KEY] = clean
-        write_json_atomic(path, raw)
+        for engine_id, spec in engines.items()
+        if isinstance(spec, dict)
+    }
+    write_kv_block(data_dir, T_SETTINGS, SETTINGS_KEY, clean)
     return {SETTINGS_KEY: clean}
 
 
@@ -243,7 +215,7 @@ def load_source_prefs(data_dir: Path | None) -> dict:
     Shape: ``{"weights": "hf"|"hf-mirror"|"modelscope",
     "pypi": "aliyun"|"official", "cuda": "official"|"aliyun"}``. Unknown or
     missing values fall back to the defaults from :mod:`.sources` — a corrupt
-    file degrades to the built-in China-friendly chains, never to an error.
+    store degrades to the built-in China-friendly chains, never to an error.
     """
     from . import sources as _sources
 
@@ -252,36 +224,21 @@ def load_source_prefs(data_dir: Path | None) -> dict:
         "pypi": _sources.DEFAULT_PYPI_SOURCE,
         "cuda": _sources.DEFAULT_CUDA_SOURCE,
     }
-    path = _settings_path(data_dir)
-    if path is None:
+    if data_dir is None:
         return defaults
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        block = read_kv_block(data_dir, T_SETTINGS, SOURCES_KEY)
+    except Exception:  # noqa: BLE001 - a corrupt store degrades to the built-in source chains
         return defaults
-    block = raw.get(SOURCES_KEY) if isinstance(raw, dict) else None
     if not isinstance(block, dict):
         return defaults
     return {**defaults, **normalize_source_prefs(block)}
 
 
 def save_source_prefs(data_dir: Path | None, prefs: dict) -> dict:
-    """Persist the download-source preferences, preserving other settings.
-
-    Callers validate; unknown keys are dropped. Returns the normalized prefs.
-    """
-    from . import sources as _sources
-
-    path = _settings_path(data_dir)
-    if path is None:
+    """Persist the download-source preferences. Callers validate; unknown
+    keys are dropped. Returns the normalized prefs."""
+    if data_dir is None:
         raise ValueError("no data dir configured for settings storage")
-    with _SETTINGS_LOCK:
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-        if not isinstance(raw, dict):
-            raw = {}
-        raw[SOURCES_KEY] = normalize_source_prefs(prefs)
-        write_json_atomic(path, raw)
+    write_kv_block(data_dir, T_SETTINGS, SOURCES_KEY, normalize_source_prefs(prefs))
     return load_source_prefs(data_dir)

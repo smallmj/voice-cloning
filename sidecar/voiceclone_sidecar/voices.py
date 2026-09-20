@@ -6,9 +6,9 @@ on a specific engine is an **engine binding** — a rebuildable cache that
 records how the reference was handed to that engine. Deleting a voice
 deletes every binding and every local file.
 
-Storage layout (all under the data dir):
+Storage layout (all under the data dir, ADR-0017):
 
-    <data>/voices.json            the index (atomic writes)
+    <data>/library.db             the SQLite index (voices table)
     <data>/voices/<id>/ref.<ext>  the reference sample (source of truth)
     <data>/voices/<id>/avatar.<ext>  optional avatar image
 """
@@ -16,7 +16,6 @@ Storage layout (all under the data dir):
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 import subprocess
 import threading
@@ -25,7 +24,7 @@ import uuid
 import wave
 from pathlib import Path
 
-from .storage import write_json_atomic
+from .db import T_VOICES, Database, library_db_path
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -106,59 +105,41 @@ class VoiceStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.root = self.data_dir / "voices"
-        self.index_path = self.data_dir / "voices.json"
         self.root.mkdir(parents=True, exist_ok=True)
-        self._voices: dict[str, dict] = {}
-        # Mutations come from both request handlers and the synthesis worker
-        # thread — serialize them so voices.json is never written torn.
+        self._db = Database(library_db_path(self.data_dir))
+        # File mutations and multi-step read-modify-write sequences come from
+        # both request handlers and the synthesis worker thread — serialize
+        # them so a record is never rewritten from a stale read.
         self._lock = threading.Lock()
-        self._load()
 
     # -- persistence ---------------------------------------------------------
 
-    def _load(self) -> None:
-        if not self.index_path.exists():
-            return
-        try:
-            raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        for record in raw.get("voices", []):
-            if isinstance(record, dict) and record.get("id"):
-                # Records written before issue #11 predate the origin field;
-                # a voice without one is a reference-audio clone.
-                record.setdefault("origin", "cloned")
-                record.setdefault("design", None)
-                self._voices[record["id"]] = record
-
     def reload(self) -> None:
-        """Re-read the index from disk (used by library restore, issue #14)."""
+        """Reconnect to the index database (used by library restore #14;
+        the swap replaces the file under us, ADR-0017)."""
         with self._lock:
-            self._voices = {}
-            self._load()
-
-    def _save(self) -> None:
-        write_json_atomic(self.index_path, {"voices": list(self._voices.values())})
+            self._db.reconnect()
 
     # -- CRUD ----------------------------------------------------------------
 
     def list(self) -> list[dict]:
-        with self._lock:
-            return [dict(v) for v in self._voices.values()]
+        return self._db.all_payloads(T_VOICES)
 
     def get(self, voice_id: str) -> dict | None:
-        with self._lock:
-            record = self._voices.get(voice_id)
-            return dict(record) if record else None
+        return self._db.get_payload(T_VOICES, voice_id)
 
     def reference_path(self, voice_id: str) -> Path:
-        record = self._voices[voice_id]
+        record = self.get(voice_id)
+        if record is None:
+            raise KeyError(voice_id)
         if not record.get("reference"):
             raise KeyError(f"voice {voice_id} has no reference sample")
         return self.root / voice_id / record["reference"]["filename"]
 
     def avatar_path(self, voice_id: str) -> Path | None:
-        record = self._voices[voice_id]
+        record = self.get(voice_id)
+        if record is None:
+            raise KeyError(voice_id)
         if not record.get("avatar"):
             return None
         return self.root / voice_id / record["avatar"]["filename"]
@@ -227,9 +208,7 @@ class VoiceStore:
             avatar = self._store_avatar(voice_id, avatar_file)
             record["avatar"] = avatar
 
-        with self._lock:
-            self._voices[voice_id] = record
-            self._save()
+        self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
         return dict(record)
 
     def create_designed(
@@ -264,9 +243,7 @@ class VoiceStore:
             "avatar": None,
             "bindings": {},
         }
-        with self._lock:
-            self._voices[voice_id] = record
-            self._save()
+        self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
         return dict(record)
 
     def attach_reference(
@@ -293,7 +270,7 @@ class VoiceStore:
         duration = probe_audio_duration(audio_path)
 
         with self._lock:
-            record = self._voices.get(voice_id)
+            record = self.get(voice_id)
             if record is None:
                 raise KeyError(voice_id)
             if record.get("origin") != "designed" or record.get("reference"):
@@ -310,7 +287,7 @@ class VoiceStore:
                 "sha256": _file_sha256(voice_dir / ref_name),
                 "transcript": transcript or None,
             }
-            self._save()
+            self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
             return dict(record)
 
     def _store_avatar(self, voice_id: str, avatar_file: Path) -> dict:
@@ -329,10 +306,10 @@ class VoiceStore:
 
     def update(self, voice_id: str, name: str | None = None,
                description: str | None = None) -> dict:
-        record = self._voices.get(voice_id)
-        if record is None:
-            raise KeyError(voice_id)
         with self._lock:
+            record = self.get(voice_id)
+            if record is None:
+                raise KeyError(voice_id)
             if name is not None:
                 name = name.strip()
                 if not name:
@@ -344,12 +321,12 @@ class VoiceStore:
                 if len(description) > MAX_DESCRIPTION_CHARS:
                     raise VoiceValidationError(f"说明过长（最多 {MAX_DESCRIPTION_CHARS} 字符）")
                 record["description"] = description
-            self._save()
+            self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
         return dict(record)
 
     def set_avatar(self, voice_id: str, avatar_file: Path) -> dict:
         with self._lock:
-            record = self._voices.get(voice_id)
+            record = self.get(voice_id)
             if record is None:
                 raise KeyError(voice_id)
             old = record.get("avatar")
@@ -360,16 +337,14 @@ class VoiceStore:
                 except OSError:
                     pass
             record["avatar"] = avatar
-            self._save()
+            self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
             return dict(record)
 
     def delete(self, voice_id: str) -> None:
         """Remove the voice, all of its bindings and all of its local files."""
         with self._lock:
-            if voice_id not in self._voices:
+            if not self._db.delete_payload(T_VOICES, voice_id):
                 raise KeyError(voice_id)
-            del self._voices[voice_id]
-            self._save()
         shutil.rmtree(self.root / voice_id, ignore_errors=True)
 
     # -- import (issue #14) ----------------------------------------------------
@@ -451,9 +426,7 @@ class VoiceStore:
                         "size_bytes": src.stat().st_size,
                     }
 
-        with self._lock:
-            self._voices[voice_id] = imported
-            self._save()
+        self._db.put_payload(T_VOICES, voice_id, imported["created_at"], imported)
         return dict(imported)
 
     # -- engine bindings -------------------------------------------------------
@@ -465,11 +438,11 @@ class VoiceStore:
         of the audio itself (issue #8: the app does not touch user material).
         """
         with self._lock:
-            record = self._voices.get(voice_id)
+            record = self.get(voice_id)
             if record is None:
                 raise KeyError(voice_id)
             record["reference"]["transcript"] = text
-            self._save()
+            self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
         return dict(record)
 
     def bind(self, voice_id: str, engine_id: str, status: str = "ready",
@@ -481,7 +454,7 @@ class VoiceStore:
         nothing in the model assumes permanence (ADR-0001).
         """
         with self._lock:
-            record = self._voices.get(voice_id)
+            record = self.get(voice_id)
             if record is None:
                 raise KeyError(voice_id)
             binding = {
@@ -492,5 +465,5 @@ class VoiceStore:
             if extra:
                 binding.update(extra)
             record["bindings"][engine_id] = binding
-            self._save()
+            self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
         return dict(binding)

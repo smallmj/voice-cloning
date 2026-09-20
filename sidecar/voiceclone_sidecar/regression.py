@@ -3,7 +3,7 @@
 回归集是本产品的核心资产之一：五个引擎各跑同一组中文难例
 （数字 / 日期 / 金额 / 中英混读 / 多音字），逐条记录成功与否、
 RTF（音频时长 / 端到端墙钟时间）与本地 CUDA 引擎的峰值显存。
-结果写入本地回归索引（<data>/regression.json），聚合后与仓库内
+结果写入 SQLite 回归索引（library.db 的 regression_sessions 表，ADR-0017），聚合后与仓库内
 固化的能力矩阵数据（data/capability_matrix.json）合并，经
 GET /capability-matrix 供界面直接驱动——不跑任何东西也能读。
 
@@ -21,7 +21,7 @@ import wave
 from contextlib import contextmanager
 from pathlib import Path
 
-from .storage import write_json_atomic
+from .db import T_REGRESSION, Database, library_db_path
 
 # 固定五类中文难例。类别是封闭集合——自由标签会碎成无法聚合的单例。
 REGRESSION_CATEGORIES = ("numbers", "dates", "amounts", "mixed", "polyphones")
@@ -198,62 +198,39 @@ class RegressionStore:
     """Persistence for regression sessions; items live inside each session."""
 
     def __init__(self, data_dir: Path) -> None:
-        self.index_path = Path(data_dir) / "regression.json"
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        self._sessions: dict[str, dict] = {}
-        self._lock = threading.Lock()
-        self._load()
+        self.data_dir = Path(data_dir)
+        self._db = Database(library_db_path(self.data_dir))
 
-    def _load(self) -> None:
-        if not self.index_path.exists():
-            return
-        try:
-            raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        for session in raw.get("sessions", []):
-            if isinstance(session, dict) and session.get("id"):
-                self._sessions[session["id"]] = session
-
-    def _save(self) -> None:
-        ordered = sorted(
-            self._sessions.values(), key=lambda s: s.get("created_at", ""), reverse=True
-        )
-        write_json_atomic(self.index_path, {"sessions": ordered})
+    def reload(self) -> None:
+        """Reconnect to the index database (used by library restore #14)."""
+        self._db.reconnect()
 
     def create(self, session: dict) -> dict:
-        with self._lock:
-            self._sessions[session["id"]] = session
-            self._save()
+        self._db.put_payload(
+            T_REGRESSION, session["id"], session.get("created_at", ""), session,
+            {"status": session.get("status") or ""},
+        )
         return dict(session)
 
     def get(self, session_id: str) -> dict | None:
-        with self._lock:
-            session = self._sessions.get(session_id)
-            return dict(session) if session else None
+        return self._db.get_payload(T_REGRESSION, session_id)
 
     def list(self, limit: int = 50) -> list[dict]:
-        with self._lock:
-            sessions = sorted(
-                self._sessions.values(),
-                key=lambda s: s.get("created_at", ""),
-                reverse=True,
-            )
-        return [dict(s) for s in sessions[:limit]]
+        return self._db.all_payloads(T_REGRESSION)[:limit]
 
     def update(self, session: dict) -> dict:
-        with self._lock:
-            if session["id"] not in self._sessions:
-                raise KeyError(session["id"])
-            self._sessions[session["id"]] = session
-            self._save()
+        if not self._db.get_payload(T_REGRESSION, session["id"]):
+            raise KeyError(session["id"])
+        self._db.put_payload(
+            T_REGRESSION, session["id"], session.get("created_at", ""), session,
+            {"status": session.get("status") or ""},
+        )
         return dict(session)
 
     def delete(self, session_id: str) -> dict | None:
-        with self._lock:
-            session = self._sessions.pop(session_id, None)
-            if session is not None:
-                self._save()
+        session = self.get(session_id)
+        if session is not None:
+            self._db.delete_payload(T_REGRESSION, session_id)
         return session
 
 

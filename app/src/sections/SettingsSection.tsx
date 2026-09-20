@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import type { EngineInfo } from "../api";
-import { apiJson, authHeaders, downloadWithAuth } from "../client";
+import {
+  apiJson,
+  authHeaders,
+  downloadPostWithAuth,
+  downloadWithAuth,
+} from "../client";
 import { CAP_LABELS } from "../labels";
 import type { ThemePref, UiPrefs } from "../hooks";
 
@@ -42,6 +47,7 @@ export function SettingsSection({
   const [backupBusy, setBackupBusy] = useState(false);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     apiJson<typeof transProviders>(baseUrl, token, "/transcription/providers")
@@ -142,12 +148,31 @@ export function SettingsSection({
     setBackupMessage(null);
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      await downloadWithAuth(baseUrl, token, `voice-library-backup-${stamp}.zip`);
+      await downloadPostWithAuth(`${baseUrl}/backup`, token, `voice-library-backup-${stamp}.zip`);
       setBackupMessage("备份已下载。请妥善保存备份文件。");
     } catch (err) {
       setBackupMessage(`备份失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBackupBusy(false);
+    }
+  }
+
+  // ADR-0017: the index is SQLite now; this export restores the "readable
+  // files" inspectability of the old JSON indexes.
+  async function exportIndex() {
+    if (exportBusy) return;
+    setExportBusy(true);
+    setBackupMessage(null);
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadWithAuth(
+        `${baseUrl}/diagnostics/export`, token, `voice-library-index-${stamp}.json`,
+      );
+      setBackupMessage("索引已导出（JSON，仅供诊断查看）。");
+    } catch (err) {
+      setBackupMessage(`导出失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -224,6 +249,9 @@ export function SettingsSection({
         <div className="key-row">
           <button disabled={backupBusy} onClick={() => void backupLibrary()}>
             {backupBusy ? "备份中…" : "备份整库"}
+          </button>
+          <button disabled={exportBusy} onClick={() => void exportIndex()}>
+            {exportBusy ? "导出中…" : "导出索引（诊断）"}
           </button>
           <label>
             恢复备份（.zip）：

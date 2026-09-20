@@ -166,3 +166,31 @@ def test_long_file_decode_is_capped_but_timestamps_stay_correct(tmp_path):
     write_wav(path, samples)
     result = analyze_audio(path)
     assert result["duration_seconds"] <= 120.5
+
+
+def test_diagnostics_index_export_returns_the_whole_sqlite_index(client):
+    """ADR-0017: SQLite weakens the "readable files" intuition; the export
+    endpoint restores inspectability of the full index — and actually
+    reflects the stored records."""
+    import io
+    import struct
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 16000 * 5)
+    r = client.post("/voices", data={"name": "导出检查", "description": ""},
+                    files={"file": ("ref.wav", buf.getvalue(), "audio/wav")})
+    assert r.status_code == 200, r.text
+    voice_id = r.json()["id"]
+
+    r = client.get("/diagnostics/export")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    for key in ("voices", "generations", "compare_sessions",
+                "regression_sessions", "settings", "app_state"):
+        assert key in body, f"export missing {key}"
+    assert isinstance(body["voices"], list) and isinstance(body["settings"], dict)
+    exported = next(v for v in body["voices"] if v["id"] == voice_id)
+    assert exported["name"] == "导出检查"

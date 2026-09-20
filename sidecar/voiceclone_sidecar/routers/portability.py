@@ -109,11 +109,16 @@ def build_router(ctx: AppContext) -> APIRouter:
             if tmp is None:
                 raise PortabilityError("备份包不能为空")
             restored = restore_library_backup(tmp, ctx.data_root)
+            # reload() reconnects each store's database to the swapped-in
+            # file; a legacy JSON-format restore is migrated to SQLite by
+            # that reopen path (ADR-0017).
             voice_store.reload()
             ctx.generation_store.reload()
             ctx.compare_store.reload()
-            # TranscriptionSettings re-reads settings.json on every access,
-            # so a restored provider choice takes effect immediately.
+            ctx.regression_store.reload()
+            # TranscriptionSettings and the app-state blocks read the
+            # settings/app_state tables on every access, so restored values
+            # take effect immediately.
             restored["restored"] = True
             return restored
         except PortabilityError as exc:

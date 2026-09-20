@@ -161,8 +161,12 @@ def test_voicestore_designed_record_and_legacy_origin_default(tmp_path):
     assert voice["reference"] is None
     assert voice["design"]["engine_id"] == "fake"
 
-    # Legacy records (written before issue #11) read back as cloned.
-    legacy = {
+    # Legacy records (written before issue #11, stored without the origin
+    # field) read back as cloned — now exercised through the JSON→SQLite
+    # migration of ADR-0017.
+    legacy_dir = tmp_path / "legacy-library"
+    legacy_dir.mkdir()
+    (legacy_dir / "voices.json").write_text(json.dumps({"voices": [{
         "id": "legacy1",
         "name": "旧音色",
         "description": "",
@@ -170,15 +174,9 @@ def test_voicestore_designed_record_and_legacy_origin_default(tmp_path):
         "reference": None,
         "avatar": None,
         "bindings": {},
-    }
-    # Append the legacy-shaped record to the live index (pre-#11 file).
-    index = json.loads((tmp_path / "voices.json").read_text(encoding="utf-8"))
-    index["voices"].append(legacy)
-    (tmp_path / "voices.json").write_text(json.dumps(index), encoding="utf-8")
-    store2 = VoiceStore(tmp_path)
+    }]}, ensure_ascii=False), encoding="utf-8")
+    store2 = VoiceStore(legacy_dir)
     assert store2.get("legacy1")["origin"] == "cloned"
-    # The designed record survives the reload too.
-    assert store2.get(voice["id"])["origin"] == "designed"
 
 
 def test_failed_design_leaves_no_orphaned_voice(client):

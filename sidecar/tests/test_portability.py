@@ -158,8 +158,10 @@ def test_backup_restore_roundtrip_restores_voices_history_and_settings(client, s
         manifest = json.loads(zf.read("manifest.json"))
         assert manifest["kind"] == "voice-clone-library-backup"
         names = zf.namelist()
-        assert "voices.json" in names
-        assert "generations.json" in names
+        # ADR-0017: the SQLite index travels as a VACUUM INTO snapshot.
+        assert "library.db" in names
+        assert "library.db-wal" not in names
+        assert "library.db-shm" not in names
         assert any(n.endswith(".wav") for n in names)  # audio artifacts travel with the library
 
     # Wipe the library: delete the voice and its generation history.
@@ -210,8 +212,57 @@ def test_data_dir_is_self_contained(client, sidecar):
     artifacts and voice files. Nothing points outside."""
     voice = create_voice(client)
     data_dir = sidecar["data_dir"]
-    # Indexes are created eagerly by their stores; compare/settings only
-    # once first used, so only require the always-present ones.
-    for name in ("voices.json", "generations.json"):
-        assert (data_dir / name).is_file(), f"{name} missing from data dir"
+    # ADR-0017: the whole index is one SQLite file in the data root.
+    assert (data_dir / "library.db").is_file(), "library.db missing from data dir"
     assert (data_dir / "voices" / voice["id"]).is_dir()
+
+
+# --- snapshot format (ADR-0017) ------------------------------------------------
+
+
+def test_restore_rejects_corrupt_snapshot_loudly(client):
+    """A snapshot that fails integrity_check must fail the restore, never
+    produce a silently empty library."""
+    import sqlite3
+
+    buf = io.BytesIO()
+    raw = sqlite3.connect(":memory:")
+    raw.executescript("CREATE TABLE dummy(x)")
+    raw.close()
+    corrupt = zipfile.ZipFile(buf, "w")
+    corrupt.writestr("manifest.json", json.dumps(
+        {"kind": "voice-clone-library-backup", "version": 1}))
+    # A valid zip entry that is not a database at all.
+    corrupt.writestr("library.db", b"garbage not sqlite")
+    corrupt.close()
+    r = client.post(
+        "/restore", files={"file": ("backup.zip", buf.getvalue(), "application/zip")}
+    )
+    assert r.status_code == 422
+    assert "损坏" in r.json()["detail"] or "无法" in r.json()["detail"]
+
+
+def test_restore_accepts_legacy_json_backup_and_migrates_it(client, sidecar):
+    """The pre-#24 backup layout (loose JSON indexes) still restores; the
+    store reopen path then migrates it into SQLite."""
+    manifest = json.dumps({"kind": "voice-clone-library-backup", "version": 1})
+    legacy = json.dumps({"voices": [{
+        "id": "legacy-voice", "name": "旧备份音色", "description": "",
+        "created_at": "2026-01-01T00:00:00Z", "origin": "cloned",
+        "design": None, "reference": None, "avatar": None, "bindings": {},
+    }]})
+    r = client.post("/restore", files={"file": ("legacy.zip", zip_bytes(
+        {"manifest.json": manifest.encode(), "voices.json": legacy.encode()}
+    ))})
+    assert r.status_code == 200, r.text
+    assert r.json()["voices"] == 1
+    voices = {v["id"]: v for v in client.get("/voices").json()["voices"]}
+    assert voices["legacy-voice"]["name"] == "旧备份音色"
+    # The restored legacy index now lives in SQLite.
+    from voiceclone_sidecar.db import Database, library_db_path
+    db = Database(library_db_path(sidecar["data_dir"]), migrate=False)
+    try:
+        assert db.get_payload("voices", "legacy-voice")["name"] == "旧备份音色"
+        assert not (sidecar["data_dir"] / "voices.json").exists()
+    finally:
+        db.close()

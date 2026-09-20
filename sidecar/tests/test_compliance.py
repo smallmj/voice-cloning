@@ -33,12 +33,15 @@ def test_consent_put_persists_to_data_root(client, sidecar):
 
     # GET reflects the durable state…
     assert client.get("/consent").json()["acknowledged"] is True
-    # …which lives in the portable data root (issue #14 layout), not the
-    # renderer's localStorage — so backup/restore carries it along.
-    state_file = sidecar["data_dir"] / "app_state.json"
-    assert state_file.exists()
-    raw = json.loads(state_file.read_text(encoding="utf-8"))
-    assert raw["voice_consent"]["version"]
+    # …which lives in the portable data root (issue #14 layout, SQLite
+    # app_state table per ADR-0017), not the renderer's localStorage — so
+    # backup/restore carries it along.
+    from voiceclone_sidecar.db import T_APP_STATE, Database, library_db_path
+    db = Database(library_db_path(sidecar["data_dir"]), migrate=False)
+    try:
+        assert db.get_kv(T_APP_STATE, "voice_consent")["version"]
+    finally:
+        db.close()
 
 
 def test_generation_artifact_carries_aigc_marker(client):

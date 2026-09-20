@@ -15,18 +15,15 @@ for the scheduler).
 
 Storage layout:
 
-    <data>/compare.json     session index (atomic writes)
+    <data>/library.db       the SQLite index (compare_sessions table)
 """
 
 from __future__ import annotations
 
-import json
 import re
-import threading
-import time
 from pathlib import Path
 
-from .storage import write_json_atomic
+from .db import T_COMPARE, Database, library_db_path
 
 # Fixed, closed text-type vocabulary: free-form tags would fragment the
 # profile into singletons it can never aggregate over.
@@ -63,71 +60,35 @@ class CompareStore:
     """Persistence for compare sessions; ratings live inside each session."""
 
     def __init__(self, data_dir: Path) -> None:
-        self.index_path = Path(data_dir) / "compare.json"
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        self._sessions: dict[str, dict] = {}
-        self._lock = threading.Lock()
-        self._load()
-
-    def _load(self) -> None:
-        if not self.index_path.exists():
-            return
-        try:
-            raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        for session in raw.get("sessions", []):
-            if isinstance(session, dict) and session.get("id"):
-                self._sessions[session["id"]] = session
+        self.data_dir = Path(data_dir)
+        self._db = Database(library_db_path(self.data_dir))
 
     def reload(self) -> None:
-        """Re-read the index from disk (used by library restore, issue #14)."""
-        with self._lock:
-            self._sessions = {}
-            self._load()
-
-    def _save(self) -> None:
-        ordered = sorted(
-            self._sessions.values(), key=lambda s: s.get("created_at", ""), reverse=True
-        )
-        write_json_atomic(self.index_path, {"sessions": ordered})
+        """Reconnect to the index database (used by library restore #14)."""
+        self._db.reconnect()
 
     # -- CRUD ----------------------------------------------------------------
 
     def create(self, session: dict) -> dict:
-        with self._lock:
-            self._sessions[session["id"]] = session
-            self._save()
+        self._db.put_payload(T_COMPARE, session["id"], session.get("created_at", ""), session)
         return dict(session)
 
     def get(self, session_id: str) -> dict | None:
-        with self._lock:
-            session = self._sessions.get(session_id)
-            return dict(session) if session else None
+        return self._db.get_payload(T_COMPARE, session_id)
 
     def list(self, limit: int = 50) -> list[dict]:
-        with self._lock:
-            sessions = sorted(
-                self._sessions.values(),
-                key=lambda s: s.get("created_at", ""),
-                reverse=True,
-            )
-        return [dict(s) for s in sessions[:limit]]
+        return self._db.all_payloads(T_COMPARE)[:limit]
 
     def update(self, session: dict) -> dict:
-        with self._lock:
-            if session["id"] not in self._sessions:
-                raise KeyError(session["id"])
-            self._sessions[session["id"]] = session
-            self._save()
+        if not self._db.get_payload(T_COMPARE, session["id"]):
+            raise KeyError(session["id"])
+        self._db.put_payload(T_COMPARE, session["id"], session.get("created_at", ""), session)
         return dict(session)
 
     def delete(self, session_id: str) -> dict:
-        with self._lock:
-            session = self._sessions.pop(session_id, None)
-            if session is None:
-                raise KeyError(session_id)
-            self._save()
+        session = self.get(session_id)
+        if session is None or not self._db.delete_payload(T_COMPARE, session_id):
+            raise KeyError(session_id)
         return session
 
     # -- scoring --------------------------------------------------------------
@@ -155,8 +116,7 @@ class CompareStore:
         Pure read-side statistics over stored sessions. Nothing here writes
         back or influences any routing/default decision.
         """
-        with self._lock:
-            sessions = [dict(s) for s in self._sessions.values()]
+        sessions = self._db.all_payloads(T_COMPARE)
 
         buckets: dict[tuple[str, str], dict[str, list[int]]] = {}
         for session in sessions:

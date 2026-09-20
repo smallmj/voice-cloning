@@ -49,6 +49,19 @@ export async function downloadWithAuth(url: string, token: string, filename: str
   URL.revokeObjectURL(a.href);
 }
 
+/** Same as downloadWithAuth but issues the request with POST (e.g. the
+ * whole-library backup endpoint returns the zip as a POST response). */
+export async function downloadPostWithAuth(url: string, token: string, filename: string): Promise<void> {
+  const res = await fetch(url, { method: "POST", headers: authHeaders(token) });
+  if (!res.ok) throw new Error(await errorDetail(res, `下载失败（HTTP ${res.status}）`));
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /** Issue #19: fetch the short-TTL, media-scoped token used by <img> /
  * <audio> elements and the log WebSocket. */
 export async function fetchMediaToken(baseUrl: string, token: string): Promise<MediaToken> {

@@ -18,6 +18,18 @@ from ..transcription import (
 from ..voices import VoiceValidationError
 
 
+def _read_all_kv(ctx: AppContext, table: str) -> dict:
+    """Read one kv table (settings / app_state) through a short-lived
+    connection — the same fresh-read path every settings consumer uses."""
+    from ..db import Database, library_db_path
+
+    db = Database(library_db_path(ctx.data_root), migrate=False)
+    try:
+        return db.all_kv(table)
+    finally:
+        db.close()
+
+
 def build_router(ctx: AppContext) -> APIRouter:
     router = APIRouter()
     registry = ctx.registry
@@ -61,6 +73,25 @@ def build_router(ctx: AppContext) -> APIRouter:
             )
         except DiagnosticError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/diagnostics/export", dependencies=[Depends(ctx.require_auth)])
+    async def export_index() -> dict:
+        """Export the whole SQLite index as readable JSON (ADR-0017).
+
+        SQLite replaces the five hand-written JSON indexes, which weakens
+        the "the library is a few readable files" intuition; this endpoint
+        restores that inspectability — the full index, one GET away.
+        """
+        from ..db import T_APP_STATE, T_SETTINGS
+
+        return {
+            "voices": ctx.voice_store.list(),
+            "generations": ctx.generation_store.list(limit=10**9)["records"],
+            "compare_sessions": ctx.compare_store.list(limit=10**9),
+            "regression_sessions": ctx.regression_store.list(limit=10**9),
+            "settings": _read_all_kv(ctx, T_SETTINGS),
+            "app_state": _read_all_kv(ctx, T_APP_STATE),
+        }
 
     @router.get("/transcription/providers", dependencies=[Depends(ctx.require_auth)])
     async def transcription_providers() -> dict:

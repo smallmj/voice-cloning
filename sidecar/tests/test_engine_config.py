@@ -184,6 +184,7 @@ def test_sources_torch_wheels_are_explicit_urls():
 def test_load_engine_settings_uses_the_shared_settings_store(tmp_path):
     """Same <data>/settings.json store as the other app settings — not a
     parallel file nothing writes."""
+    from voiceclone_sidecar.db import T_SETTINGS, library_db_path, read_kv_block, write_kv_block
     from voiceclone_sidecar.engine_config import SETTINGS_KEY, save_engine_settings
 
     assert load_engine_settings(None) == {SETTINGS_KEY: {}}
@@ -192,15 +193,16 @@ def test_load_engine_settings_uses_the_shared_settings_store(tmp_path):
     save_engine_settings(tmp_path, {"qwen3-tts-mlx": {"env": {
         "UV_DEFAULT_INDEX": "https://s/x",
     }}})
-    # the other store keys survive a save
-    (tmp_path / "settings.json").write_text(json.dumps(
-        {"transcription_provider": "local", SETTINGS_KEY: {
-            "qwen3-tts-mlx": {"env": {"UV_DEFAULT_INDEX": "https://s/x"}}}},
-    ))
+    # the other store keys survive a save (separate rows in the settings
+    # table, ADR-0017)
+    write_kv_block(tmp_path, T_SETTINGS, "transcription_provider", "local")
     settings = load_engine_settings(tmp_path)
     env = effective_env("qwen3-tts-mlx", process_env={}, settings=settings)
     assert env["UV_DEFAULT_INDEX"] == "https://s/x"
-    (tmp_path / "settings.json").write_text("{corrupt")
+    assert read_kv_block(tmp_path, T_SETTINGS, "transcription_provider") == "local"
+    # a corrupt database degrades to no overrides instead of unbootable
+    db_path = library_db_path(tmp_path)
+    db_path.write_bytes(b"not a database")
     assert load_engine_settings(tmp_path) == {SETTINGS_KEY: {}}
 
 

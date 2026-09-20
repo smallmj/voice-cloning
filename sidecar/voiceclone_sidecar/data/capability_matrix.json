@@ -509,6 +509,18 @@
           "verification": "measured",
           "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md（RTF 中位 2.22，MPS 峰值 11.7 GB）",
           "date": "2026-09-20"
+        },
+        {
+          "env": "Apple M5 Pro 24GB（端到端口径，17 项回归，每请求独立 worker 含模型加载）",
+          "rtf": 0.176,
+          "rtf_range": [
+            0.111,
+            0.234
+          ],
+          "peak_vram_bytes": null,
+          "verification": "measured",
+          "source": "POST /regression/run 会话 63d3f882…：17/17 成功（RTF=音频秒/端到端墙钟，口径与引擎级 PoC 2.22 不同）",
+          "date": "2026-09-20"
         }
       ],
       "notes": "补丁面（scripts/fireredtts3_poc/patch_fireredtts3.py ↔ voiceclone_sidecar/engines/fireredtts3_patch.py 同源）锚定上游原文，上游漂移即报错（ADR-0019 决策 2）；Windows CUDA 因 flash_attn 零 win_amd64 wheel 不在采纳范围（决策 3）。fasttext 不装；TN 用 wetext（pynini-free）。"
@@ -532,7 +544,7 @@
           "verification": "verified",
           "source": "src/voxcpm/core.py 文档串；github.com/OpenBMB/VoxCPM/issues/232, /issues/301",
           "date": "2026-09-20",
-          "note": "本机 MPS 真机验证进行中（issue #25）"
+          "note": "本机 MPS 真机验证已完成：装机 + 17/17 中文回归集（2026-09-20，回归索引会话 f394f712…）"
         },
         {
           "field": "复刻模式（三种）",
@@ -579,11 +591,15 @@
       ],
       "performance": [
         {
-          "env": "待实测（本机 MPS，issue #25）",
-          "rtf": null,
+          "env": "Apple M5 Pro 24GB（本机 MPS fp32，端到端口径，17 项回归）",
+          "rtf": 0.75,
+          "rtf_range": [
+            0.699,
+            0.758
+          ],
           "peak_vram_bytes": null,
-          "verification": "unverified",
-          "source": "上游 README 宣称 ~8 GB VRAM（vendor 口径）；M4 Pro 上 GGUF 路线 RTF ~1.76 为社区口径，与本项目 PyTorch MPS 路线不可比",
+          "verification": "measured",
+          "source": "POST /regression/run 会话 f394f712…：17/17 成功；docs/evaluation/2026-09-20_issue25_接入验证记录.md",
           "date": "2026-09-20"
         }
       ],

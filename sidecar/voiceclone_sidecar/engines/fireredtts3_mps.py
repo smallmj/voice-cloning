@@ -30,6 +30,7 @@ Install layout under the engine dir:
 from __future__ import annotations
 
 import shutil
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -313,7 +314,7 @@ class FireRedTts3MpsEngine(InstallableEngine):
             )
         out_dir = (self.output_dir or Path.cwd() / "data" / "audio").resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = (out_dir / f"{request.generation_id or __import__('uuid').uuid4().hex}.wav").resolve()
+        out_path = (out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav").resolve()
 
         from .worker_supervisor import WorkerSupervisor
 

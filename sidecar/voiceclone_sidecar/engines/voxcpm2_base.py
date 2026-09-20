@@ -36,7 +36,6 @@ import uuid
 from pathlib import Path
 
 from .. import pronunciation, sources
-from .. import params as params_mod
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine

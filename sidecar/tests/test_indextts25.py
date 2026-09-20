@@ -226,3 +226,59 @@ def test_synthesize_refuses_without_reference_audio(engine):
         engine.synthesize(
             GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None
         )
+
+
+# -- 0-frame output guard (issue #32 regression) ----------------------------
+
+
+def _write_wav(path: Path, frames: bytes) -> None:
+    import wave
+
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(22050)
+        w.writeframes(frames)
+
+
+def test_zero_frame_output_fails(tmp_path):
+    """A synthesized 0-frame WAV must fail the request, not ship as success.
+    The CUDA worker used to deliver it (issue #32)."""
+    from voiceclone_sidecar.engines import indextts25_common_worker
+
+    wav = tmp_path / "empty.wav"
+    _write_wav(wav, b"")
+    with pytest.raises(RuntimeError, match="0 frames"):
+        indextts25_common_worker.verify_wav_output(str(wav), lambda m: None)
+
+
+def test_silent_output_fails(tmp_path):
+    from voiceclone_sidecar.engines import indextts25_common_worker
+
+    wav = tmp_path / "silence.wav"
+    _write_wav(wav, b"\x00\x00" * 2205)
+    with pytest.raises(RuntimeError, match="silence"):
+        indextts25_common_worker.verify_wav_output(str(wav), lambda m: None)
+
+
+def test_verify_wav_output_passes_on_real_audio(tmp_path):
+    from voiceclone_sidecar.engines import indextts25_common_worker
+
+    wav = tmp_path / "audio.wav"
+    _write_wav(wav, b"\x00\x40" * 2205)  # audible DC-ish level
+    checks = indextts25_common_worker.verify_wav_output(str(wav), lambda m: None)
+    assert checks["frames"] == 2205
+    assert checks["peak"] > 0
+    assert checks["clipping"] is False
+
+
+def test_both_workers_delegate_to_shared_runtime():
+    """Structural proof the shims run the shared request loop (issue #32)."""
+    from voiceclone_sidecar.engines import (
+        indextts25_common_worker,
+        indextts25_mps_worker,
+        indextts25_worker,
+    )
+
+    assert indextts25_worker.common is indextts25_common_worker
+    assert indextts25_mps_worker.common is indextts25_common_worker

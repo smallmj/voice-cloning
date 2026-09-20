@@ -1,45 +1,41 @@
-"""IndexTTS-2.5 worker: runs inside the ENGINE'S OWN VENV (never the sidecar's
-environment), because torch+CUDA and the indextts dependency set are the
-engine's private business.
+"""IndexTTS-2.5 worker on Windows + CUDA — the platform shim (issue #32).
 
-Protocol (see worker_supervisor): one JSON request per stdin line
-    {"id": "...", "action": "synthesize"|"unload"|"shutdown",
-     "text": "...", "ref_audio": "...", "lang": "zh", "output": "..."}
-Log lines on stdout are forwarded verbatim; each request answers with exactly
-one ``RESULT: {json}`` or ``WORKER_ERROR: {json}`` line.
+The full worker used to live here verbatim, duplicated for MPS. Now only the
+CUDA-specific deltas remain:
 
-The CUDA gate (spec, issue #4): on boot the worker asserts CUDA is available
-AND ``torch.version.cuda`` is non-empty. Otherwise it refuses to start with an
-actionable message — a silent CPU fallback would produce an "extremely slow"
-result the user cannot distinguish from a healthy one.
+- the CUDA gate (spec, issue #4): on boot the worker asserts CUDA is
+  available AND ``torch.version.cuda`` is non-empty. Otherwise it refuses to
+  start with an actionable message — a silent CPU fallback would produce an
+  "extremely slow" result the user cannot distinguish from a healthy one;
+- precision: bf16 on the NVIDIA rig (the only CUDA path verified end to end);
+- memory telemetry/reclamation: ``torch.cuda.mem_get_info`` / ``empty_cache``.
 
-VRAM contract: the model is loaded lazily on the first synthesize; ``unload``
-drops it, empties the CUDA cache and reports free memory; process exit (idle
-timeout / request threshold / crash) is the final reclamation.
+Everything else — the wire protocol, the load-once model cache, the
+synthesize flow and the peak self-check (which now refuses 0-frame output on
+CUDA too, issue #32) — lives in indextts25_common_worker.py and runs
+unchanged here.
 """
 
 from __future__ import annotations
 
-import json
+import gc
 import os
 import sys
 import time
 
-# Force, not setdefault: a pre-set HF_HUB_OFFLINE=0 in the environment must
-# not silently break the offline guarantee. Everything loads from LOCAL dirs
-# under the runtime root; nothing touches the network at generation time.
-os.environ["HF_HUB_OFFLINE"] = "1"
+try:  # package import when imported as voiceclone_sidecar.engines.*
+    from . import indextts25_common_worker as common
+except ImportError:  # standalone run inside the engine venv
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import indextts25_common_worker as common
 
 CUDA_GATE_EXIT_CODE = 3
 
-
-def log(message: str) -> None:
-    print(message, flush=True)
+_state = {"tts": None}
 
 
-def _reply(kind: str, req_id: str | None, payload: dict) -> None:
-    body = {"id": req_id, **payload}
-    print(f"{kind}: " + json.dumps(body, ensure_ascii=False), flush=True)
+def _fatal(message: str) -> None:
+    common.fatal(CUDA_GATE_EXIT_CODE, message)
 
 
 def check_cuda() -> None:
@@ -64,157 +60,59 @@ def check_cuda() -> None:
                "to CPU — generation would take minutes per sentence.")
 
 
-def _fatal(message: str) -> None:
-    print(
-        "WORKER_ERROR: "
-        + json.dumps({"id": None, "fatal": True, "error": message}, ensure_ascii=False),
-        flush=True,
-    )
-    sys.exit(CUDA_GATE_EXIT_CODE)
-
-
-class _State:
-    tts = None
-    device = "cpu"
-
-
 def _load(model_dir: str):
     import torch
 
-    if _State.tts is not None:
-        return _State.tts
+    if _state["tts"] is not None:
+        return _state["tts"]
     started = time.monotonic()
-    log(f"indextts-2.5: loading model from {model_dir}")
+    common.log(f"indextts-2.5: loading model from {model_dir}")
     # The v2.5 loader class is still named IndexTTS2 in infer_v2_5.py.
     from indextts.infer_v2_5 import IndexTTS2
 
     tts = IndexTTS2(cfg_path=os.path.join(model_dir, "config.yaml"), model_dir=model_dir,
-                      use_bf16=True, use_cuda_kernel=False, use_torch_compile=False)
-    _State.tts = tts
-    log(f"indextts-2.5: model loaded in {time.monotonic() - started:.1f}s")
+                    use_bf16=True, use_cuda_kernel=False, use_torch_compile=False)
+    _state["tts"] = tts
+    common.log(f"indextts-2.5: model loaded in {time.monotonic() - started:.1f}s")
     return tts
 
 
-def _synthesize(request: dict) -> dict:
-    import torch  # noqa: F401 - ensures the CUDA context exists for the stats below
-
-    output = request["output"]
-    model_dir = request["model_dir"]
-    started = time.monotonic()
-    _load(model_dir)
-    # duration_factor (issue #23): the sidecar's canonical speed adapter
-    # maps user speed onto this INVERSE multiplier; only forwarded when set.
-    infer_kwargs = {}
-    duration_factor = request.get("duration_factor")
-    if duration_factor:
-        infer_kwargs["duration_factor"] = duration_factor
-    _State.tts.infer(
-        spk_audio_prompt=request.get("ref_audio"),
-        text=request["text"],
-        output_path=output,
-        lang=request.get("lang", "zh"),
-        verbose=False,
-        **infer_kwargs,
-    )
-    log(f"indextts-2.5: synthesized in {time.monotonic() - started:.1f}s")
-
-    # Peak self-check (ADR-0002 rule 3): catch silent truncation, all-zero
-    # output and clipping instead of shipping a broken WAV.
-    import wave
-
-    with wave.open(output, "rb") as w:
-        sample_rate = w.getframerate()
-        channels = w.getnchannels()
-        frames = w.getnframes()
-        raw = w.readframes(frames)
-    import numpy as np
-
-    audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32767.0
-    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-    if peak == 0.0:
-        raise RuntimeError("synthesis produced silence — refusing to deliver an empty result")
-    clipping = peak > 0.999
-    duration = frames / sample_rate
-    if clipping:
-        log(f"indextts-2.5: WARNING peak {peak:.3f} — output is clipped at full scale")
-    log(f"indextts-2.5: {duration:.2f}s at {sample_rate} Hz, peak {peak:.3f}")
-
-    vram = {}
+def _memory_report() -> dict:
     try:
         import torch
 
         free, total = torch.cuda.mem_get_info()
-        vram = {"free_mb": free // (1024 * 1024), "total_mb": total // (1024 * 1024)}
+        return {"vram": {"free_mb": free // (1024 * 1024), "total_mb": total // (1024 * 1024)}}
     except Exception:  # noqa: BLE001 - VRAM stats are best-effort telemetry
-        pass
-    return {
-        "audio_path": output,
-        "sample_rate": sample_rate,
-        "duration_s": round(duration, 2),
-        "peak": round(peak, 4),
-        "clipping": clipping,
-        "channels": channels,
-        "vram": vram,
-    }
+        return {"vram": {}}
 
 
 def _unload() -> dict:
-    _State.tts = None
-    report = {}
+    _state["tts"] = None
     try:
-        import gc
-
         import torch
 
         gc.collect()
         torch.cuda.empty_cache()
         free, total = torch.cuda.mem_get_info()
         report = {"free_mb": free // (1024 * 1024), "total_mb": total // (1024 * 1024)}
-        log(f"indextts-2.5: model unloaded, VRAM free {report['free_mb']}/{report['total_mb']} MB")
+        common.log(f"indextts-2.5: model unloaded, VRAM free {report['free_mb']}/{report['total_mb']} MB")
     except Exception:  # noqa: BLE001
-        log("indextts-2.5: model unloaded (no CUDA stats available)")
+        report = {}
+        common.log("indextts-2.5: model unloaded (no CUDA stats available)")
     return {"unloaded": True, "vram": report}
 
 
 def main() -> None:
-    check_cuda()
-    log("indextts-2.5: worker ready")
-    # NOTE: iterate with readline(), never `for line in sys.stdin` — the
-    # iterator's read-ahead buffering blocks on pipes until the buffer fills,
-    # stalling every request (observed on macOS and Windows both).
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            break  # parent closed stdin: exit and free everything
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError as exc:
-            _reply("WORKER_ERROR", None, {"error": f"bad request JSON: {exc}"})
-            continue
-        req_id = request.get("id")
-        action = request.get("action", "synthesize")
-        try:
-            if action == "shutdown":
-                _reply("RESULT", req_id, {"bye": True})
-                return
-            if action == "unload":
-                _reply("RESULT", req_id, _unload())
-            elif action == "synthesize":
-                _reply("RESULT", req_id, _synthesize(request))
-            else:
-                _reply("WORKER_ERROR", req_id, {"error": f"unknown action: {action}"})
-        except Exception as exc:  # noqa: BLE001 - surfaced to the sidecar, not swallowed
-            _reply("WORKER_ERROR", req_id, {"error": str(exc)})
+    common.serve(
+        check_boot=check_cuda,
+        exit_code=CUDA_GATE_EXIT_CODE,
+        load=_load,
+        unload=_unload,
+        memory_report=_memory_report,
+        ready_message="indextts-2.5: worker ready",
+    )
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except SystemExit:
-        raise
-    except Exception as exc:  # noqa: BLE001 - boot failures must be visible
-        print(f"WORKER_ERROR: {json.dumps({'id': None, 'fatal': True, 'error': str(exc)})}", flush=True)
-        sys.exit(1)
+    common.run_main(main)

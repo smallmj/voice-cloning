@@ -49,7 +49,7 @@ def fatal(exit_code: int, message: str) -> None:
     sys.exit(exit_code)
 
 
-def verify_wav_output(output: str, log=log) -> dict:
+def verify_wav_output(output: str, log=log, engine_label="indextts-2.5") -> dict:
     """Peak self-check on the freshly written WAV (ADR-0002 rule 3).
 
     Catches silent truncation, empty (0-frame) output, all-zero output and
@@ -83,8 +83,8 @@ def verify_wav_output(output: str, log=log) -> dict:
     clipping = peak > 0.999
     duration = frames / sample_rate
     if clipping:
-        log(f"indextts-2.5: WARNING peak {peak:.3f} — output is clipped at full scale")
-    log(f"indextts-2.5: {duration:.2f}s at {sample_rate} Hz, peak {peak:.3f}")
+        log(f"{engine_label}: WARNING peak {peak:.3f} — output is clipped at full scale")
+    log(f"{engine_label}: {duration:.2f}s at {sample_rate} Hz, peak {peak:.3f}")
     return {
         "sample_rate": sample_rate,
         "channels": channels,
@@ -115,22 +115,29 @@ def run_synthesis(request: dict, load, memory_report, log=log) -> dict:
         verbose=False,
         **infer_kwargs,
     )
-    log(f"indextts-2.5: synthesized in {time.monotonic() - started:.1f}s")
+    log(f"{engine_label}: synthesized in {time.monotonic() - started:.1f}s")
 
-    result = {"audio_path": output, **verify_wav_output(output, log)}
+    result = {"audio_path": output, **verify_wav_output(output, log, engine_label)}
     result.update(memory_report())  # platform telemetry, already fault-isolated
     return result
 
 
 def serve(*, check_boot, exit_code: int, load, unload, memory_report,
-          ready_message: str) -> None:
-    """The request loop every IndexTTS-2.5 worker runs.
+          ready_message: str, synthesis=None, engine_label="indextts-2.5") -> None:
+    """The request loop every local worker built on this runtime runs.
 
     ``check_boot`` is the platform device gate: it must call ``fatal`` and
     exit when the machine cannot run the engine on the intended device —
     a silent CPU fallback would take minutes per sentence and is
     indistinguishable from a hang to the user.
+
+    ``synthesis`` lets a non-IndexTTS engine reuse the whole protocol and
+    substitute only the infer step (issue #25: FireRedTTS3); it receives
+    ``(request, load, memory_report, log)`` and returns the result dict.
+    The default is this module's IndexTTS-2.5 flow.
     """
+    if synthesis is None:
+        synthesis = run_synthesis
     check_boot()
     log(ready_message)
     # NOTE: iterate with readline(), never `for line in sys.stdin` — the
@@ -157,7 +164,7 @@ def serve(*, check_boot, exit_code: int, load, unload, memory_report,
             if action == "unload":
                 reply("RESULT", req_id, unload())
             elif action == "synthesize":
-                reply("RESULT", req_id, run_synthesis(request, load, memory_report))
+                reply("RESULT", req_id, synthesis(request, load, memory_report, log, engine_label))
             else:
                 reply("WORKER_ERROR", req_id, {"fatal": False, "error": f"unknown action: {action}"})
         except Exception as exc:  # noqa: BLE001 - report per-request failures, keep the worker alive

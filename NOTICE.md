@@ -37,7 +37,9 @@
 | └ `nvidia/bigvgan_v2_22khz_80band_256x` | 声码器 | MIT | 可商用 |
 | `mlx-community/whisper-small` | macOS 参考音频本地转写 | Apache-2.0（HF 卡片标注；OpenAI 仓库 LICENSE 为 MIT） | 可商用 |
 | `Systran/faster-whisper-small` | Windows 参考音频本地转写 | MIT | 可商用 |
-| `FireRedTeam/FireRedTTS3`（仅 Base 所需：redae / fireredtts3_base / campp / text_tokenizer） | PoC 验证中（issue #26），尚未接入 | Apache-2.0（HF 卡片标注，与仓库 LICENSE 一致） | ⚠️ 权重许可可商用，但上游 README 另有「零样本复刻仅限学术研究用途」声明（不在 LICENSE 内）；采纳前须评审（见 `docs/evaluation/2026-09-20_FireRedTTS3_PoC.md`）。本仓库为使其在 MPS 运行维护的补丁见 `scripts/fireredtts3_poc/patch_fireredtts3.py` |
+| `FireRedTeam/FireRedTTS3`（仅 Base 所需：redae / fireredtts3_base / campp / text_tokenizer） | 本地引擎（macOS MPS，实验性；issue #25 / ADR-0019） | Apache-2.0（HF 卡片标注，与仓库 LICENSE 一致） | ⚠️ 权重许可可商用，但上游 README 另有「零样本复刻仅限学术研究用途」声明（不在 LICENSE 内）；评审结论见 `docs/adr/0019-adopt-fireredtts3-base-on-mps.md` 决策 4。PoC 证据见 `docs/evaluation/2026-09-20_FireRedTTS3_PoC.md`。本仓库为使其在 MPS 运行维护的补丁唯一真源：`sidecar/voiceclone_sidecar/engines/fireredtts3_patch.py`（PoC CLI 委托于此） |
+| `openbmb/VoxCPM2` | 本地引擎（macOS MPS + Windows CUDA；issue #25） | Apache-2.0（代码 + 权重，HF 卡片标注） | 可商用 |
+| `dots-studio/dots.tts-soar` | 本地引擎（Windows CUDA；issue #25） | Apache-2.0（代码 + 权重，HF 卡片标注） | 可商用。接入不安装其硬依赖 WeTextProcessing/pynini（无 win_amd64 wheel；本仓库归一化在 ADR-0008 层完成）——安装期以锚点校验补丁把 `dots_tts/utils/text.py` 顶层 `tn.*` 导入改为惰性可选（`sidecar/voiceclone_sidecar/engines/dots_tts_patch.py`，证据见 `docs/research/CORRECTIONS.md` C-003） |
 
 云端引擎（DashScope Qwen-TTS 等）不涉及权重下载：许可关系由厂商 API 服务条款约束，见各引擎在设置页展示的计费与数据用途说明。
 

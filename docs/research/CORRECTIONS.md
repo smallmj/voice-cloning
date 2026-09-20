@@ -45,3 +45,18 @@
 | 最新版本 | **tauri-v3.0.0-alpha.1（2026-09-15）**；稳定线 v2.11.5（2026-07-01） | **v44.4.1（2026-09-16）** |
 
 **结论**：技术栈选择**不应**再建立在"Tauri 播不了音频"这个已被关闭的 issue 上。真实的比较维度是：音频波形生态（wavesurfer.js / peaks.js）、参考实现与社区知识存量、打包/签名/自动更新的成熟度，以及两个已知的 Tauri + Python 先例各自的痛点来源（voicebox 的崩溃源于 **PyInstaller 冻结**而非 Tauri；VoiceStudio 正在从 Tauri 迁往 Electron）。
+
+---
+
+## C-003 · dots.tts 依赖 pynini 的「疑云」核实为真（issue #25，2026-09-20，一手证据）
+
+**原结论**（`docs/plan.md` §5 决策 1，2026-09-16）：dots.tts 与 MegaTTS3 依赖 `pynini`（PyPI 上 win_amd64 wheel = 0），`uv pip install` 解析期即失败，故 Windows 侧重型引擎排除 dots.tts。但该判断当时基于社区打包的二手信息，issue #25 的验收要求在接入前用一手来源核实「官方依赖是否引入本仓库明令拒绝的文本归一化族」。
+
+**核实结果（2026-09-20，官方源码一手证据）**：
+
+1. `pyproject.toml`（github.com/studio-dots-ai/dots.tts @ main，tag v0.3.1 一致）`[project].dependencies` **含 `"WeTextProcessing"`，且为无版本钉扎的硬依赖**（不是 extra）：https://raw.githubusercontent.com/rednote-hilab/dots.tts/main/pyproject.toml
+2. `src/dots_tts/utils/text.py` **模块顶层**直接 `from tn.chinese.normalizer import Normalizer as ZhNormalizer` / `from tn.english.normalizer import Normalizer as EnNormalizer` —— 不装 WeTextProcessing 连 `import dots_tts` 都会失败，即使推理默认 `normalize_text=False`（TN 完全关着）。
+3. WeTextProcessing 拉入 **pynini + OpenFst**；pynini 至今**无官方 win_amd64 wheel**（上游 issue wenet-e2e/WeTextProcessing#287 承认 "windows is not fully supported"）。plan §5 的排除理由**被官方依赖证实，二手疑云升级为一手事实**。
+4. 除 WeTextProcessing 外依赖面干净：无 pynini 直依赖、无 nemo/fun_text_processing/num2words；**无 flash-attn**（stock SDPA attention）；官方 OS 声明仅 Linux + macOS（runtime 设备自动选择为 cuda→cpu，无 MPS 路径）。
+
+**对本仓库的实际影响（接入决策）**：本仓库的架构是**文本归一化在进引擎之前由自建归一化层完成**（ADR-0008），引擎内的 TN 是重复层。因此接入 dots.tts 时不安装 pynini/WeTextProcessing，而是沿用 FireRedTTS3（issue #26）的补丁先例：以锚点校验的最小补丁把 `text.py` 顶层的 `tn.*` 导入改为惰性可选，`normalize_text` 保持关闭并声明为不暴露（`breaks-pipeline`——引擎内 TN 与 ADR-0008 层职责重复）。补丁与证据记录于 `NOTICE.md` §3 与能力矩阵。**若未来上游把 TN 导入改为可选依赖，本补丁应收缩。**

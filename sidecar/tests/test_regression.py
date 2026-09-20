@@ -208,6 +208,11 @@ def test_matrix_data_lists_all_shipped_engines():
         "qwen3-tts-mlx",
         "indextts-25-cuda",
         "indextts-25-mps",
+        # issue #25: three new local engine families
+        "fireredtts3-mps",
+        "voxcpm2-mps",
+        "voxcpm2-cuda",
+        "dots-tts-cuda",
     }
 
 

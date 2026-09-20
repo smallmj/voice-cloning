@@ -114,10 +114,22 @@ def to_minimax(text: str, annotations: dict[str, str]) -> str:
 
 def to_dots(text: str, annotations: dict[str, str]) -> str:
     """dots.tts grammar: the annotated character is replaced by tone-marked
-    pinyin written inline: ``号`` + ``hao4`` -> ``hào``."""
+    pinyin written inline: ``号`` + ``hao4`` -> ``hào``. Only accented
+    syllables are recognized upstream — digit forms like ``hao4`` are not."""
     out = text
     for char, pinyin in annotations.items():
         out = out.replace(char, mark_pinyin(pinyin))
+    return out
+
+
+def to_voxcpm(text: str, annotations: dict[str, str]) -> str:
+    """VoxCPM2 grammar: the annotated character is replaced by a braced
+    pinyin syllable with lowercase tone digit: ``你`` + ``ni3`` -> ``{ni3}``
+    (official phoneme-input syntax; only valid while the engine's
+    ``normalize`` stays False, which this engine's adapter guarantees)."""
+    out = text
+    for char, pinyin in annotations.items():
+        out = out.replace(char, f"{{{pinyin}}}")
     return out
 
 
@@ -137,4 +149,6 @@ def rewrite(text: str, spec: str, grammar: str, log=None) -> str:
         return to_minimax(text, annotations)
     if grammar == "dots":
         return to_dots(text, annotations)
+    if grammar == "voxcpm":
+        return to_voxcpm(text, annotations)
     raise ValueError(f"unknown pronunciation grammar: {grammar!r}")

@@ -233,10 +233,30 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
 
         registry.register(IndexTts25MpsEngine(config=config_for(IndexTts25MpsEngine)))
 
+        # Issue #25 (ADR-0019): FireRedTTS3-Base, macOS MPS only (patched).
+        from .engines.fireredtts3_mps import FireRedTts3MpsEngine
+
+        registry.register(FireRedTts3MpsEngine(config=config_for(FireRedTts3MpsEngine)))
+
+        # Issue #25: VoxCPM2, official MPS support.
+        from .engines.voxcpm2_mps import VoxCPM2MpsEngine
+
+        registry.register(VoxCPM2MpsEngine(config=config_for(VoxCPM2MpsEngine)))
+
     if sys.platform == "win32":
         from .engines.indextts25 import IndexTts25CudaEngine
 
         registry.register(IndexTts25CudaEngine(config=config_for(IndexTts25CudaEngine)))
+
+        # Issue #25: VoxCPM2 on Windows CUDA.
+        from .engines.voxcpm2_cuda import VoxCPM2CudaEngine
+
+        registry.register(VoxCPM2CudaEngine(config=config_for(VoxCPM2CudaEngine)))
+
+        # Issue #25: dots.tts on Windows CUDA (pynini-free patched install).
+        from .engines.dots_tts_cuda import DotsTtsCudaEngine
+
+        registry.register(DotsTtsCudaEngine(config=config_for(DotsTtsCudaEngine)))
 
     if os.environ.get("VOICECLONE_TEST_ENGINES") == "1":
         # Contract-test seam only (issue #18): the fake runs the exact same

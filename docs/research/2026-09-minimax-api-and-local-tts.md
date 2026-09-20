@@ -130,7 +130,7 @@ Authorization: Bearer <API_key>
 | 区域 | API base（servers） | 文档站 | 速率限制表 |
 |---|---|---|---|
 | 国际 | `https://api.minimax.io` | platform.minimax.io | 单一档位 |
-| 中国大陆 | `https://api.minimax.cn` | platform.minimaxi.com（302 → platform.minimax.cn） | **分免费/充值两档** |
+| 中国大陆 | `https://api.minimaxi.com`（⚠️ 2026-09-20 实测修正：API 主域是 minimax**i**.com；`api.minimax.cn` 是文档站域名，API 不在该域） | platform.minimaxi.com（302 → platform.minimax.cn） | **分免费/充值两档** |
 
 - 国际备用低延迟地址：`https://api-uw.minimax.io`
 - **中国大陆备用地址：`https://api-bj.minimaxi.com/v1/t2a_v2`**（“备用接口地址”，域名是 `.com`，主域是 `.cn` —— 两个域名都在用）

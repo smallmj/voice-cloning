@@ -143,7 +143,7 @@ voicebox 官方 troubleshooting 对大陆用户的答案原文是「Try using a 
 
 **MiniMax 已核实事实（2026-09-18 调研，证据见 `docs/research/2026-09-minimax-api-and-local-tts.md`）**：
 
-- **两个区域是两套额度**：国际 `api.minimax.io` T2A **60 RPM**（单一档）；大陆 `api.minimax.cn` T2A **免费 10 / 充值 20 RPM**。**大陆付费档只有国际的 1/3**，这直接决定长文本要走异步接口（单请求上限 **100 万字符**）而不是同步分段（同步上限 <10,000 字符）。RPM 是**账号级**，不是 key 级。
+- **两个区域是两套额度**：国际 `api.minimax.io` T2A **60 RPM**（单一档）；大陆 `api.minimaxi.com`（2026-09-20 实测修正，`api.minimax.cn` 仅文档站域）T2A **免费 10 / 充值 20 RPM**。**大陆付费档只有国际的 1/3**，这直接决定长文本要走异步接口（单请求上限 **100 万字符**）而不是同步分段（同步上限 <10,000 字符）。RPM 是**账号级**，不是 key 级。
 - **GroupId 已不再需要**（6 个 OpenAPI 全查过，零命中），鉴权只有 Bearer。区域因此应做成**引擎级可配的 base URL**。
 - **7 天删除规则确认，且带一个陷阱**：官方原文「Previewing during voice_clone does not activate the voice_id」——**复刻后的试听不算"使用"**。适配器必须在复刻成功后**静默合成一句短音频**来激活，否则用户只试听、过几天回来音色已被删。
 - **首次真实合成才触发 $1.50 复刻计费**（复刻本身不计费），所以激活不额外增加成本。

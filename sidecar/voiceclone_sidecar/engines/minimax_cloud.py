@@ -492,10 +492,15 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         speed = params.get("speed")
         if speed not in (None, ""):
             voice_setting["speed"] = float(speed)
-        if params.get("emotion"):
-            voice_setting["emotion"] = params["emotion"]
-        if params.get("language_boost"):
-            body["language_boost"] = params["language_boost"]
+        # "auto" means DO NOT SEND (ADR-0018: what the user sees is not what
+        # the engine receives). The value must also be a vendor-legal enum
+        # member — an unknown value is dropped, never forwarded blindly.
+        emotion = params.get("emotion")
+        if emotion and emotion in EMOTION_CHOICES:
+            voice_setting["emotion"] = emotion
+        language_boost = params.get("language_boost")
+        if language_boost and language_boost in LANGUAGE_BOOST_CHOICES and language_boost != "auto":
+            body["language_boost"] = language_boost
         return body
 
     def _synthesize_sync(self, model: str, text: str, voice_id: str,

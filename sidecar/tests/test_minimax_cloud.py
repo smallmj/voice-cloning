@@ -424,6 +424,36 @@ def test_english_normalization_is_async_only():
     assert "english_normalization" not in json.loads(sync.requests[0].content)
 
 
+def test_auto_params_are_never_sent_to_the_vendor():
+    # "auto" = do not send (ADR-0018). Forwarding it verbatim makes the
+    # vendor reject the whole request with "invalid params: emotion".
+    harness = Harness([
+        httpx.Response(200, json={"data": {"audio": make_wav_bytes(0.1).hex()}, **ok_base()}),
+    ], output_dir=tmp_dir())
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "emotion": "auto", "language_boost": "auto",
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert "emotion" not in body["voice_setting"]
+    assert "language_boost" not in body
+
+
+def test_unknown_emotion_value_is_dropped_not_forwarded():
+    harness = Harness([
+        httpx.Response(200, json={"data": {"audio": make_wav_bytes(0.1).hex()}, **ok_base()}),
+    ], output_dir=tmp_dir())
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "emotion": "whisper",  # 2.8 does not support it
+        }),
+        lambda m: None,
+    )
+    assert "emotion" not in json.loads(harness.requests[0].content)["voice_setting"]
+
+
 def test_1008_maps_to_topup_hint():
     harness = Harness([httpx.Response(200, json=err_base(1008, "insufficient balance"))])
     with pytest.raises(CloudEngineError, match="充值"):

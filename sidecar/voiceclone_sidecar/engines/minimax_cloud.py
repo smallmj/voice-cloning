@@ -290,6 +290,12 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             return CloudEngineError(
                 f"API Key 无效或无权限（{self.vendor_label} 错误码 {code}）：{msg}"
             )
+        if code == 1008:
+            return CloudEngineError(
+                f"{self.vendor_label} 余额不足（错误码 1008）：复刻音色的首次合成会收取 $1.5/音色"
+                "的费用，需要账户有按量付费余额（Coding Plan 订阅额度只覆盖系统音色合成）。"
+                "请到 MiniMax 平台充值后重试，或先用系统音色 ID 测试。"
+            )
         if code == 2038:
             return CloudEngineError(
                 f"{self.vendor_label} 错误码 2038：当前账号没有复刻权限——需要完成实名认证并"
@@ -474,8 +480,11 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             body = self._async_payload(model, text, voice_id)
             # Async-only key (the sync request uses text_normalization in
             # voice_setting instead). Off by default: it rewrites English
-            # normalization behavior, so it only fires when asked for.
-            if params.get("english_normalization"):
+            # normalization behavior, so it only fires when asked for. The
+            # UI may deliver the checkbox as the string "false" — coerce,
+            # never trust truthiness of a string.
+            en = params.get("english_normalization")
+            if en is True or str(en).strip().lower() == "true":
                 body["english_normalization"] = True
         else:
             body = self._sync_payload(model, text, voice_id)

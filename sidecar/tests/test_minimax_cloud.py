@@ -424,6 +424,32 @@ def test_english_normalization_is_async_only():
     assert "english_normalization" not in json.loads(sync.requests[0].content)
 
 
+def test_1008_maps_to_topup_hint():
+    harness = Harness([httpx.Response(200, json=err_base(1008, "insufficient balance"))])
+    with pytest.raises(CloudEngineError, match="充值"):
+        harness.engine.check_voice("v", lambda m: None)
+
+
+def test_boolean_string_false_is_not_truthy(monkeypatch, tmp_path):
+    # The UI may deliver the checkbox as the string "false": the async
+    # payload must NOT include english_normalization in that case.
+    monkeypatch.setattr("voiceclone_sidecar.engines.minimax_cloud.ASYNC_POLL_SECONDS", 0.0)
+    harness = Harness([
+        httpx.Response(200, json={"task_id": "t-4", **ok_base()}),
+        httpx.Response(200, json={"task_id": "t-4", "status": "success",
+                                  "file_id": 6, **ok_base()}),
+        httpx.Response(200, json={"file": {"download_url": "https://cdn/w"}, **ok_base()}),
+        httpx.Response(200, content=make_wav_bytes(0.2)),
+    ], output_dir=tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="字" * 3000, params={
+            "voice_id": "v", "english_normalization": "false",
+        }),
+        lambda m: None,
+    )
+    assert "english_normalization" not in json.loads(harness.requests[0].content)
+
+
 def test_disclosure_note_names_the_tos_language():
     # Issue #21/#27: the ToS "改进算法或增强服务" reservation must be part of
     # the visible data-usage disclosure the settings/generate pages render.

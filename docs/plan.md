@@ -172,7 +172,7 @@ voicebox 官方 troubleshooting 对大陆用户的答案原文是「Try using a 
 | **FireRedTTS3** | Apache-2.0（代码+权重） | ❌ 官方 CUDA 硬编码；社区 MPS PR **未合并**，实测 M4 Max bf16 **RTF 0.73–0.76** | 需自行剥离 `flash_attn` | **`flash_attn` 钉版本且硬编码**（PyPI 全 76 个版本**零 win_amd64 wheel**）；`fasttext` 同样无 win wheel（可移除） | **必需** | 无 | ⚠️ **1 贡献者、15 commit、0 release** |
 
 - **VoxCPM2 是本轮首选**：唯一在两个平台都有官方路径的候选。
-- **FireRedTTS3 走"我们维护补丁"路线 + 有界 PoC 闸门**（补丁内容：设备选择、SDPA 替换、seed 守卫、去掉 fasttext）。中文复刻指标（Seed-TTS-eval avg 3.04/78.8）与 **21 种中文方言**、以及强过现有 Qwen3-TTS-VD 的**文生音色**是它的强项；但**每一个平台能力都还停在未合并的社区 PR 上**，接它等于接下一份上游维护责任——须另立 ADR 记录这个取舍。
+- **FireRedTTS3 走"我们维护补丁"路线 + 有界 PoC 闸门**（补丁内容：设备选择、SDPA 替换、seed 守卫、去掉 fasttext）。中文复刻指标（Seed-TTS-eval avg 3.04/78.8）与 **21 种中文方言**、以及强过现有 Qwen3-TTS-VD 的**文生音色**是它的强项；但**每一个平台能力都还停在未合并的社区 PR 上**，接它等于接下一份上游维护责任——须另立 ADR 记录这个取舍。→ **已采纳（2026-09-20，ADR-0019）**：PoC 20/20 全过 + 听感判定通过；约束（bf16 未验证不发布、补丁自维护、暂限 MPS、合规随接入评审）见 ADR-0019，接入随 #25。
 - **合规两条留待评审**：FireRedTTS3 的 README 有「零样本复刻**仅限学术研究用途**」声明（**不在 LICENSE 内**；Apache-2.0 §2 授予的权利不被该文字收窄，但它是作者意图的明确表述，且明显弱于 VoxCPM2 的 "free for commercial use"）；其 RedAE 训练数据含 10% 音效与 15% 音乐，**训练数据来源问题许可完全不涉及**。
 
 ### ASR

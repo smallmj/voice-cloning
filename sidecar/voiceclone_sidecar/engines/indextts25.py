@@ -170,7 +170,15 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
         if df is not None:
             wire["duration_factor"] = df
     lang = params.get("language") or params.get("lang")
-    wire["lang"] = lang if lang in LANG_CHOICES else "zh"
+    if lang in LANG_CHOICES:
+        wire["lang"] = lang
+    else:
+        # Not silent: an unknown language value is dropped to the engine's
+        # default WITH a log line — never silently substituted (ADR-0018
+        # bans rewriting what the engine receives without saying so).
+        if lang not in (None, ""):
+            log(f"参数：未知语种 {lang!r}，已忽略（使用引擎默认语种 zh）")
+        wire["lang"] = "zh"
     ann = params.get("pronunciation")
     if ann and str(ann).strip():
         text = pronunciation.rewrite(text, str(ann), "indextts", log)

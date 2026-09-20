@@ -34,9 +34,6 @@ def speed_to_duration_factor(value):
     return round(1.0 / rate, 4)
 
 
-# Kept as the canonical adapter under its historical name too.
-_speed_to_duration_factor = speed_to_duration_factor
-
 
 def canonical_speed(engine_id: str, model: str, help: str = "") -> ParamSpec:
     """Canonical speed control.
@@ -58,7 +55,7 @@ def canonical_speed(engine_id: str, model: str, help: str = "") -> ParamSpec:
         layer="canonical",
         help=help or "1.0 为原速；>1 更快，<1 更慢。",
         applies_to=AppliesTo(engine=engine_id, model=model, mode="cloning"),
-        to_wire=_speed_to_duration_factor,
+        to_wire=speed_to_duration_factor,
     )
 
 

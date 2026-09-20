@@ -93,7 +93,8 @@ def mark_pinyin(pinyin: str) -> str:
 def to_indextts(text: str, annotations: dict[str, str]) -> str:
     """IndexTTS grammar: ``行`` + ``xing2`` -> ``<行|XING2>`` (uppercase
     letters, plain tone digit — as upstream ``apply_pronunciation_annotations``
-    expects)."""
+    expects). Neutral tone (digit 5 / absent) emits a digitless tag — that
+    form is UNVERIFIED upstream; all verified examples carry a tone digit."""
     out = text
     for char, pinyin in annotations.items():
         body, tone = _split_tone(pinyin)

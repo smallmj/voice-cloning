@@ -230,11 +230,15 @@ export function GenerateSection({
   );
 }
 
-/** Issue #23 / ADR-0018: renders EXACTLY the exposed specs handed to it —
- * canonical and engine layers just pass different filters. Bool renders as
- * a checkbox, textarea as a multi-line field, number honours min/max/step
- * (open bounds are clamped server-side by the spec; here they only shape
- * the control). Values stay strings — the engine spec converts to wire. */
+/** Issue #23 / ADR-0018: renders the exposed specs handed to it — canonical
+ * and engine layers just pass different filters. Bool renders as a checkbox,
+ * textarea as a multi-line field, number honours min/max/step (open bounds
+ * are clamped server-side by the spec; here they only shape the control).
+ * Values stay strings — the engine spec converts to wire.
+ * NOT yet rendered: kind:"output" (read-only engine values), `items` object
+ * arrays and `group` nesting — no registered engine declares them yet; when
+ * one does, extend the switch BELOW rather than letting one render as a
+ * lying plain input. */
 function ParamFields({
   specs,
   engineParams,

@@ -88,7 +88,7 @@ def _load(payload: dict):
     return tts
 
 
-def _synthesis(request: dict, load, memory_report, log) -> dict:
+def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict:
     import time
 
     import torchaudio

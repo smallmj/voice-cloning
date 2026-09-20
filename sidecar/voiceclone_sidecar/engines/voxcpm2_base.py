@@ -352,7 +352,7 @@ class VoxCPM2EngineBase(InstallableEngine):
             "action": "synthesize",
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
             "text": text,
-            "ref_audio": params["ref_audio"],
+            "ref_audio": str(Path(params["ref_audio"]).resolve()),
             "output": str(out_path),
             **wire,
         }

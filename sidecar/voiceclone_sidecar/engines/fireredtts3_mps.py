@@ -305,7 +305,7 @@ class FireRedTts3MpsEngine(InstallableEngine):
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
             "upstream_dir": str(self._upstream_dir()),
             "text": request.text,
-            "ref_audio": params["ref_audio"],
+            "ref_audio": str(Path(params["ref_audio"]).resolve()),
             "ref_text": params.get("ref_text"),
             "language": "Chinese",  # verified language; matrix records the rest as unverified
             "output": str(out_path),

@@ -128,12 +128,23 @@ VOICE_MISSING_MARKERS = (
 )
 
 
+def voice_missing_blob(blob: str) -> bool:
+    """The dual-tag rule over an already-lowercased ``code + message`` blob:
+    it must mention the voice AND a missing/deleted/expired marker."""
+    if "voice" not in blob and "音色" not in blob:
+        return False
+    return any(marker in blob for marker in VOICE_MISSING_MARKERS)
+
+
 def voice_missing_error(resp: httpx.Response) -> bool:
     """Classify a vendor response as "the cloud voice is gone" (issue #12).
 
     Lives in the vendor-neutral base, not in one adapter: both the cloning
     and the voice-design engines need the same verdict, and the health-check
-    caller must never rebuild a binding on an unrelated failure.
+    caller must never rebuild a binding on an unrelated failure. Engines
+    whose vendor nests the error differently (e.g. MiniMax's ``base_resp``
+    envelope) extract the code+message themselves and call
+    :func:`voice_missing_blob` so the rule stays defined here exactly once.
     """
     try:
         body = resp.json()
@@ -141,10 +152,7 @@ def voice_missing_error(resp: httpx.Response) -> bool:
         return False
     code = str(body.get("code") or "")
     message = str(body.get("message") or body.get("msg") or "")
-    blob = f"{code} {message}".lower()
-    if "voice" not in blob and "音色" not in blob:
-        return False
-    return any(marker in blob for marker in VOICE_MISSING_MARKERS)
+    return voice_missing_blob(f"{code} {message}".lower())
 
 
 def billed_chars(text: str) -> int:

@@ -325,10 +325,11 @@ async def run_generation(
             if k not in {"status", "created_at", "reference_sha256", "error"}
         }
         # Issue #27 (MiniMax): the first REAL synthesis is what activates a
-        # cloned cloud voice and starts its permanent validity. Record that
-        # moment on the binding for every cloud engine that does not
-        # already carry an activated_at (harmless metadata elsewhere).
-        if engine.requires_key:
+        # cloned cloud voice and starts its permanent validity. When the
+        # enrollment could not activate it (binding was "unactivated"), a
+        # successful run IS that activation — record the moment, only on
+        # bindings that were actually waiting for it.
+        if engine.requires_key and previous.get("status") == "unactivated":
             carried.setdefault("activated_at", now_iso())
         ctx.voice_store.bind(
             voice["id"],

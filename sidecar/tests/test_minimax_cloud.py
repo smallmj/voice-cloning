@@ -49,6 +49,14 @@ from voiceclone_sidecar.registry import GenerationRequest
 from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
 
+def tmp_dir():
+    import tempfile
+    return pathlib.Path(tempfile.mkdtemp())
+
+
+import pathlib
+
+
 def make_wav_bytes(seconds: float = 0.5, rate: int = 24000) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -385,3 +393,40 @@ def test_default_base_url_is_international():
 
 def test_pricing_table_covers_all_models():
     assert set(PRICES_PER_M_CHARS) == set(MODEL_CHOICES)
+
+
+def test_english_normalization_is_async_only():
+    harness = Harness([
+        httpx.Response(200, json={"task_id": "t-3", **ok_base()}),
+        httpx.Response(200, json={"task_id": "t-3", "status": "success",
+                                  "file_id": 5, **ok_base()}),
+        httpx.Response(200, json={"file": {"download_url": "https://cdn/z"}, **ok_base()}),
+        httpx.Response(200, content=make_wav_bytes(0.2)),
+    ], output_dir=tmp_dir())
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="字" * 3000, params={
+            "voice_id": "v", "english_normalization": True,
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert body["english_normalization"] is True
+
+    sync = Harness([
+        httpx.Response(200, json={"data": {"audio": make_wav_bytes(0.1).hex()}, **ok_base()}),
+    ], output_dir=tmp_dir())
+    sync.engine.synthesize(
+        GenerationRequest(generation_id="g2", text="hi", params={
+            "voice_id": "v", "english_normalization": True,
+        }),
+        lambda m: None,
+    )
+    assert "english_normalization" not in json.loads(sync.requests[0].content)
+
+
+def test_disclosure_note_names_the_tos_language():
+    # Issue #21/#27: the ToS "改进算法或增强服务" reservation must be part of
+    # the visible data-usage disclosure the settings/generate pages render.
+    engine = MiniMaxCloudEngine(key_store=KeyStore(backend=MemoryBackend()))
+    assert "改进算法" in engine.data_usage_note
+    assert "实名" in engine.data_usage_note  # 2038 limitation is disclosed too

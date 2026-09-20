@@ -133,6 +133,19 @@ export function VoiceCard({
         </button>
       </div>
       {voice.description && <div className="voice-desc">{voice.description}</div>}
+      {Object.values(voice.bindings).some((b) => b.status === "unactivated") && (
+        // Issue #27: a MiniMax cloud voice that could not be activated is
+        // deleted by the vendor after 7 days — this must be prominently
+        // visible on the voice/engine management page, not only on the
+        // generate page.
+        <div className="voice-placeholder-warning">
+          ⚠️ 有引擎绑定尚未激活：云端音色 7 天不使用会被厂商删除，请立即用该引擎生成一次以激活。
+          {Object.entries(voice.bindings)
+            .filter(([, b]) => b.status === "unactivated")
+            .map(([engineId, b]) => `${engineId}${b.activation_error || b.error ? `（${b.activation_error || b.error}）` : ""}`)
+            .join("、")}
+        </div>
+      )}
       {Object.keys(voice.bindings).length > 0 && (
         <div className="voice-bindings">
           绑定：

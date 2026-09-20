@@ -67,7 +67,7 @@ import httpx
 
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
-from .cloud_base import CloudEngineBase, CloudEngineError
+from .cloud_base import CloudEngineBase, CloudEngineError, voice_missing_blob
 
 DEFAULT_BASE_URL = "https://api.minimax.io"
 BASE_URL_ENV = "VOICECLONE_MINIMAX_BASE_URL"
@@ -142,12 +142,12 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         "按量付费（USD）：speech-2.8-hd $100 / 百万字符，speech-2.8-turbo $60 / 百万字符；"
         "复刻 $1.5/音色（复刻本身不计费，首次真实合成时收取——本应用复刻后立即合成一句激活语，"
         "因此该费用在创建音色时即产生）；音色设计 $3/音色（同样首次使用时计费），"
-        "设计预览字符按 $60/百万字符计。克隆音色 7 天未调用会被删除（激活后永久）；"
+        "设计预览字符按 $60/百万字符计。复刻音色 7 天未调用会被删除（激活后永久）；"
         "音色数量受订阅套餐 Voice slots 限制。每次生成的记录中显示估算成本（USD）。"
     )
     data_usage_note = (
         "MiniMax 服务条款明示：其可能将信息用于「改进算法或增强服务」，且该用途不构成保密义务的"
-        "违反；是否提供关闭选项未在公开文档中说明。参考音频会上传至 MiniMax 用于创建克隆音色"
+        "违反；是否提供关闭选项未在公开文档中说明。参考音频会上传至 MiniMax 用于创建复刻音色"
         "（可在平台删除音色）。深度合成标识义务落在应用侧：本应用已在生成记录与导出物上标注 "
         "AI 生成内容。复刻需账号完成实名认证/付费档（错误码 2038）；音色设计拒绝模仿真实人物。"
     )
@@ -234,6 +234,17 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
                 help="提升指定语种的发音表现；auto 时不发送",
             ),
             ParamSpec(
+                name="english_normalization",
+                label="英文规范化（长文本）",
+                kind="bool",
+                default=False,
+                layer="engine",
+                wire_path="english_normalization",
+                applies_to=applies,
+                to_wire=lambda v: bool(v) or None,
+                help="仅长文本异步接口生效（异步键名与同步不同）；对文本中的英文做规范化",
+            ),
+            ParamSpec(
                 name="system_voice",
                 label="系统音色 ID（可选）",
                 kind="text",
@@ -288,20 +299,28 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
 
     @staticmethod
     def _voice_missing(code: int, msg: str) -> bool:
-        """MiniMax variant of the shared "cloud voice is gone" classifier.
-
-        Same dual-tag rule as cloud_base.voice_missing_error: the message
-        must name the voice AND a missing/deleted/expired marker — auth and
-        quota failures must never read as a dead voice.
-        """
-        from .cloud_base import VOICE_MISSING_MARKERS
-
-        blob = f"{code} {msg}".lower()
-        if "voice" not in blob and "音色" not in blob:
-            return False
-        return any(marker in blob for marker in VOICE_MISSING_MARKERS)
+        """The shared "cloud voice is gone" rule (cloud_base) applied to
+        MiniMax's base_resp envelope, whose code/message the engine extracts
+        itself — the rule itself lives in exactly one place."""
+        return voice_missing_blob(f"{code} {msg}".lower())
 
     # -- response plumbing -------------------------------------------------------
+
+    def _ok(self, resp: httpx.Response, action: str) -> dict:
+        """The one shape every MiniMax call is validated with: HTTP 200 AND
+        ``base_resp.status_code == 0``, else the rendered cloud error."""
+        if resp.status_code != 200:
+            raise self._error(resp, action)
+        code, _msg = self._base_error(resp)
+        if code != 0:
+            raise self._error(resp, action)
+        return resp.json()
+
+    def _download(self, url: str) -> bytes:
+        dl = self._http().get(url)
+        if dl.status_code != 200:
+            raise CloudEngineError(f"下载合成音频失败：HTTP {dl.status_code}")
+        return dl.content
 
     def _audio_bytes(self, data: dict) -> bytes:
         """Fetch the synthesis audio: ``data.audio`` is a URL under
@@ -311,10 +330,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         if not audio:
             raise CloudEngineError(f"{self.vendor_label} 合成失败：响应中缺少音频：{str(data)[:200]}")
         if isinstance(audio, str) and audio.startswith("http"):
-            dl = self._http().get(audio)
-            if dl.status_code != 200:
-                raise CloudEngineError(f"下载合成音频失败：HTTP {dl.status_code}")
-            return dl.content
+            return self._download(audio)
         return bytes.fromhex(audio)
 
     def _ensure_wav(self, data: bytes) -> bytes:
@@ -360,28 +376,19 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             files={"purpose": (None, "voice_clone"),
                    "file": (ref.name, data, mime)},
         )
-        if up.status_code != 200:
-            raise self._error(up, "上传参考音频")
-        up_code, _up_msg = self._base_error(up)
-        if up_code != 0:
-            raise self._error(up, "上传参考音频")
-        file_id = ((up.json().get("file") or {}).get("file_id"))
+        file_id = (self._ok(up, "上传参考音频").get("file") or {}).get("file_id")
         if file_id is None:
             raise CloudEngineError(
                 f"{self.vendor_label} 上传失败：响应中缺少 file_id：{up.text[:200]}"
             )
 
-        log(f"cloud: 正在创建克隆音色（{voice_id}）…")
+        log(f"cloud: 正在创建复刻音色（{voice_id}）…")
         clone = self._http().post(
             f"{self.base_url}{CLONE_PATH}",
             headers=self._headers(),
             json={"file_id": int(file_id), "voice_id": voice_id},
         )
-        if clone.status_code != 200:
-            raise self._error(clone, "创建克隆音色")
-        clone_code, _clone_msg = self._base_error(clone)
-        if clone_code != 0:
-            raise self._error(clone, "创建克隆音色")
+        self._ok(clone, "创建复刻音色")
 
         # Activation (issue #27): a cloned voice is inactive until one real
         # T2A synthesis; the voice_clone preview does NOT count. Failure
@@ -465,6 +472,11 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         sync/async payload builders; params decorate on top."""
         if len(text) > SYNC_CHAR_LIMIT:
             body = self._async_payload(model, text, voice_id)
+            # Async-only key (the sync request uses text_normalization in
+            # voice_setting instead). Off by default: it rewrites English
+            # normalization behavior, so it only fires when asked for.
+            if params.get("english_normalization"):
+                body["english_normalization"] = True
         else:
             body = self._sync_payload(model, text, voice_id)
         voice_setting = body["voice_setting"]
@@ -483,13 +495,8 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         resp = self._http().post(
             f"{self.base_url}{SYNC_PATH}", headers=self._headers(), json=payload,
         )
-        if resp.status_code != 200:
-            raise self._error(resp, "合成")
-        code, msg = self._base_error(resp)
-        if code != 0:
-            raise self._error(resp, "合成")
-        body = resp.json()
-        log(f"cloud: 下载合成音频…")
+        body = self._ok(resp, "合成")
+        log("cloud: 下载合成音频…")
         return self._audio_bytes(body.get("data") or {}), body.get("extra_info") or {}
 
     def _synthesize_async(self, model: str, text: str, voice_id: str,
@@ -498,12 +505,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         create = self._http().post(
             f"{self.base_url}{ASYNC_CREATE_PATH}", headers=self._headers(), json=payload,
         )
-        if create.status_code != 200:
-            raise self._error(create, "创建长文本合成任务")
-        code, msg = self._base_error(create)
-        if code != 0:
-            raise self._error(create, "创建长文本合成任务")
-        task_id = create.json().get("task_id")
+        task_id = self._ok(create, "创建长文本合成任务").get("task_id")
         if not task_id:
             raise CloudEngineError(
                 f"{self.vendor_label} 异步合成失败：响应中缺少 task_id：{create.text[:200]}"
@@ -522,12 +524,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
                 headers=self._headers(),
                 params={"task_id": task_id},
             )
-            if query.status_code != 200:
-                raise self._error(query, "查询长文本合成任务")
-            code, msg = self._base_error(query)
-            if code != 0:
-                raise self._error(query, "查询长文本合成任务")
-            task = query.json()
+            task = self._ok(query, "查询长文本合成任务")
             # Case-insensitive on purpose: the docs' example writes
             # "Processing" while the enum says lowercase.
             status = str(task.get("status") or "").lower()
@@ -550,21 +547,14 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             headers=self._headers(),
             params={"file_id": str(file_id)},
         )
-        if retrieve.status_code != 200:
-            raise self._error(retrieve, "获取合成结果文件")
-        code, msg = self._base_error(retrieve)
-        if code != 0:
-            raise self._error(retrieve, "获取合成结果文件")
-        file_info = retrieve.json().get("file") or retrieve.json()
+        body = self._ok(retrieve, "获取合成结果文件")
+        file_info = body.get("file") or body
         url = file_info.get("download_url")
         if not url:
             raise CloudEngineError(
                 f"{self.vendor_label} 获取合成结果失败：缺少 download_url：{retrieve.text[:200]}"
             )
-        dl = self._http().get(url)
-        if dl.status_code != 200:
-            raise CloudEngineError(f"下载合成音频失败：HTTP {dl.status_code}")
-        return dl.content
+        return self._download(url)
 
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
         started = time.monotonic()
@@ -630,12 +620,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             headers=self._headers(),
             json={"prompt": description, "preview_text": preview_text},
         )
-        if resp.status_code != 200:
-            raise self._error(resp, "创建设计音色")
-        code, msg = self._base_error(resp)
-        if code != 0:
-            raise self._error(resp, "创建设计音色")
-        body = resp.json()
+        body = self._ok(resp, "创建设计音色")
         voice_id = body.get("voice_id")
         if not voice_id:
             raise CloudEngineError(

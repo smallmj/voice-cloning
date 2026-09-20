@@ -190,3 +190,40 @@ def test_download_file_skips_already_complete_file(tmp_path, monkeypatch):
     )
     assert result == dest
     assert calls == []  # no transfer happened
+
+
+def test_retry_after_artifact_wipe_reruns_shared_artifact_steps(tmp_path, monkeypatch):
+    """issue #25: a failed engine step wipes the shared venv; the earlier
+    torch step (same artifact) must rerun on retry, not stay 'completed'."""
+    import json
+
+    from voiceclone_sidecar.runtime.installer import (
+        InstallContext,
+        InstallStep,
+        load_state,
+        run_install,
+    )
+
+    ctx = InstallContext(engine_id="e", root=tmp_path)
+    venv = tmp_path / "venv"
+    calls = []
+
+    def make_step(step_id, fail=False):
+        def run(log, progress):
+            calls.append(step_id)
+            venv.mkdir(parents=True, exist_ok=True)
+            if fail:
+                raise RuntimeError("boom")
+        return InstallStep(step_id, step_id, run, artifact=venv)
+
+    with pytest.raises(RuntimeError):
+        run_install(ctx, [make_step("torch"), make_step("engine", fail=True)], lambda m: None)
+
+    state = load_state(ctx)
+    assert state["steps"]["torch"]["status"] == "completed"
+    assert state["steps"]["engine"]["status"] == "failed"
+
+    run_install(ctx, [make_step("torch"), make_step("engine")], lambda m: None)
+    # torch reruns because its artifact (the venv) was wiped by the engine retry
+    assert calls == ["torch", "engine", "torch", "engine"]
+    assert load_state(ctx)["installed"] is True

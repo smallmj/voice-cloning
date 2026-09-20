@@ -39,6 +39,7 @@ from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
 from .fireredtts3_patch import apply_patches
+from .indextts25_base import copy_from_local
 
 REPO = "FireRedTeam/FireRedTTS3"
 PYTHON_SPEC = "3.11"
@@ -65,6 +66,9 @@ WEIGHTS = [
     "text_tokenizer/tokenizer_config.json",
     "text_tokenizer/vocab.json",
 ]
+
+LOCAL_UPSTREAM_ENV = "VOICECLONE_FIREREDTTS3_LOCAL_UPSTREAM"
+LOCAL_WEIGHTS_ENV = "VOICECLONE_FIREREDTTS3_LOCAL_WEIGHTS"
 
 # Instruct/voice-design is deliberately NOT exposed: only Base cloning was
 # verified (PoC scope), and the upstream weight set installed here is Base-only.
@@ -172,6 +176,18 @@ class FireRedTts3MpsEngine(InstallableEngine):
         """The extracted (and patched) upstream source checkout."""
         return self._engine_dir() / "upstream"
 
+    def _local_upstream_root(self) -> Path | None:
+        """Env-named existing FireRedTTS3 checkout to seed the engine step
+        from before touching the network (None = always download)."""
+        override = self.env.get(LOCAL_UPSTREAM_ENV, "")
+        return Path(override).expanduser() if override else None
+
+    def _local_weights_root(self) -> Path | None:
+        """Env-named existing Base-weight tree (e.g. the issue-#26 PoC
+        download) to copy files from before downloading (None = never)."""
+        override = self.env.get(LOCAL_WEIGHTS_ENV, "")
+        return Path(override).expanduser() if override else None
+
     def install_steps(self) -> list[installer.InstallStep]:
         weights_dir = paths.engine_weights_dir(self.root, self.engine_id)
         venv = uvman.engine_venv_dir(self.root, self.engine_id)
@@ -215,30 +231,45 @@ class FireRedTts3MpsEngine(InstallableEngine):
                 env=self.env, log=log,
             )
             zip_path = engine_dir / "fireredtts3-main.zip"
-            downloader.download_file(
-                downloader.DownloadSpec(path="main.zip", dest_name=zip_path.name),
-                zip_path.parent,
-                [
-                    self.env.get("VOICECLONE_FIREREDTTS3_URL", ENGINE_PACKAGE_URL),
-                    self.env.get("VOICECLONE_FIREREDTTS3_URL_FALLBACK", ENGINE_PACKAGE_URL_FALLBACK),
-                ],
-                progress=lambda name, done, total: progress(f"engine:{name}", done, total),
-                log=log,
-            )
-            if upstream.exists():
-                shutil.rmtree(upstream)
-            upstream.parent.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(upstream.parent)
-            extracted = upstream.parent / "FireRedTTS3-main"
-            extracted.rename(upstream)
+            local_upstream = self._local_upstream_root()
+            if local_upstream is not None:
+                # Seed from an existing checkout (PoC tree, prior install)
+                # before touching the network — same precedent as the MPS
+                # local-weights reuse. The patch still runs, so a stale or
+                # drifted local tree fails loudly at the anchors.
+                log(f"engine: reusing local upstream checkout {local_upstream}")
+                if upstream.exists():
+                    shutil.rmtree(upstream)
+                upstream.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(local_upstream, upstream)
+            else:
+                downloader.download_file(
+                    downloader.DownloadSpec(path="main.zip", dest_name=zip_path.name),
+                    zip_path.parent,
+                    [
+                        self.env.get("VOICECLONE_FIREREDTTS3_URL", ENGINE_PACKAGE_URL),
+                        self.env.get("VOICECLONE_FIREREDTTS3_URL_FALLBACK", ENGINE_PACKAGE_URL_FALLBACK),
+                    ],
+                    progress=lambda name, done, total: progress(f"engine:{name}", done, total),
+                    log=log,
+                )
+                if upstream.exists():
+                    shutil.rmtree(upstream)
+                upstream.parent.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(upstream.parent)
+                extracted = upstream.parent / "FireRedTTS3-main"
+                extracted.rename(upstream)
             # Anchor-checked, idempotent, loud on drift (ADR-0019 decision 2).
             for line in apply_patches(upstream):
                 log(f"fireredtts3 patch: {line}")
 
         def step_weights(log, progress):
             chain = sources.weight_sources(REPO, ms_repo=None, preferred=sources.weight_pref(self.env))
+            local = self._local_weights_root()
             for rel in WEIGHTS:
+                if local is not None and copy_from_local(local, rel, weights_dir / rel, log):
+                    continue
                 log(f"weights: downloading {rel}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=rel, dest_name=rel),

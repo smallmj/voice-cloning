@@ -70,14 +70,35 @@ def run_install(ctx: InstallContext, steps: list[InstallStep], log: LogFn, progr
     state = load_state(ctx)
     record = state.setdefault("steps", {})
 
+    # Pre-pass: a failed step's artifact is DELETED before the retry, and
+    # every completed step sharing that artifact is reset to pending — its
+    # artifact was just wiped (observed, issue #25: the torch step shares
+    # the venv artifact with the engine step; a failed engine step wiped
+    # the venv while torch stayed "completed", so the retry produced a venv
+    # without torch). This must happen in a PRE-PASS: within the main loop
+    # the shared earlier step is reached (and skipped) before the failed
+    # step's cleanup runs.
+    for step in steps:
+        entry = record.setdefault(step.id, {"status": "pending"})
+        if entry["status"] == "failed" and step.artifact and step.artifact.exists():
+            log(f"[{step.id}] cleaning artifacts of the failed attempt: {step.artifact}")
+            shutil.rmtree(step.artifact, ignore_errors=True)
+            entry["status"] = "pending"
+            for other in steps:
+                if (
+                    other.id != step.id
+                    and other.artifact is not None
+                    and other.artifact == step.artifact
+                    and record[other.id].get("status") == "completed"
+                ):
+                    record[other.id] = {"status": "pending"}
+                    log(f"[{other.id}] artifact was wiped — rerunning this step on retry")
+
     for step in steps:
         entry = record.setdefault(step.id, {"status": "pending"})
         if entry["status"] == "completed":
             log(f"[{step.id}] already installed, skipping")
             continue
-        if entry["status"] == "failed" and step.artifact and step.artifact.exists():
-            log(f"[{step.id}] cleaning artifacts of the failed attempt: {step.artifact}")
-            shutil.rmtree(step.artifact, ignore_errors=True)
         entry.update(status="running", error=None, started_at=time.time())
         save_state(ctx, state)
         log(f"[{step.id}] {step.description}")

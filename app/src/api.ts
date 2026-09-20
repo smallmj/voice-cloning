@@ -163,8 +163,14 @@ export interface VoiceBinding {
   // Issue #12: when the vendor recycled the cloud voice and the automatic
   // rebuild failed, the binding is marked "unavailable" and `error` holds
   // the user-facing reason.
+  // Issue #27: engines that must ACTIVATE a freshly cloned cloud voice
+  // (MiniMax) record `activated_at` when the first real synthesis ran, and
+  // mark the binding "unactivated" (with `activation_error`) when the
+  // activation synthesis failed.
   voice_id?: string;
   error?: string | null;
+  activated_at?: string | null;
+  activation_error?: string | null;
 }
 
 export interface VoiceAvatar {

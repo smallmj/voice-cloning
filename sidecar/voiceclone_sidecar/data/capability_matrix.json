@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-18",
+  "updated_at": "2026-09-20",
   "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
   "engines": [
     {
@@ -360,6 +360,88 @@
           "date": "2026-09-19"
         }
       ]
+    },
+    {
+      "engine_id": "minimax-speech-cloud",
+      "display_name": "MiniMax speech-2.8 复刻/设计（MiniMax · 云端）",
+      "kind": "cloud",
+      "role": "BYOK 云端复刻/设计档（ADR-0003：永远 BYOK，不内嵌平台 Key）；国际 .io 与大陆 .cn 两区两套账号额度，区域为引擎级 base URL 配置。",
+      "evidence": [
+        {
+          "field": "计费",
+          "value": "speech-2.8-hd $100/百万字符、speech-2.8-turbo $60/百万字符；复刻 $1.5/音色（首次真实合成时收取，本应用复刻后立即合成激活语，费用在创建音色时产生）；音色设计 $3/音色",
+          "verification": "verified",
+          "source": "MiniMax pricing-paygo 官方页；docs/research/2026-09-minimax-api-and-local-tts.md；engines/minimax_cloud.py billing_note",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "数据用途",
+          "value": "ToS 保留将信息用于「改进算法或增强服务」的权利且不构成违反保密义务；是否可关闭未在公开文档说明（upload_used_for_training=true + data_usage_note 披露）",
+          "verification": "verified",
+          "source": "MiniMax Terms of Service 原文（Nanonoble Pte. Ltd.）",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "7 天失效与激活陷阱",
+          "value": "克隆音色 inactive，7 天未正式调用即删；voice_clone 内预览不算激活（官方 FAQ 原文）——适配器在复刻成功后立即静默合成一句激活语并记 activated_at，激活失败绑定标 unactivated 并在生成页提示",
+          "verification": "verified",
+          "source": "voice-cloning-clone + FAQ about-apis 官方原文；engines/minimax_cloud.py bind_reference",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "健康检查",
+          "value": "get_voice 为 POST 且克隆音色仅首次成功合成后可查——check_voice 实现为探测性合成，非列表查询",
+          "verification": "verified",
+          "source": "voice-management-get 官方文档；engines/minimax_cloud.py check_voice",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "限流",
+          "value": "国际 T2A 60 RPM 单档；大陆 T2A 免费 10 / 充值 20 RPM（账号级）。长文本走异步（单请求上限 100 万字符）绕开大陆 20 RPM；错误码 1002/1039 带限流标记进入既有指数退避",
+          "verification": "verified",
+          "source": "两区 rate-limits 官方页；engines/minimax_cloud.py _error / _synthesize_async",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "异步 payload",
+          "value": "t2a_async_v2 键名与同步不同（audio_sample_rate / english_normalization；无 output_format/stream/force_cbr）——独立构造，不复用同步 builder",
+          "verification": "verified",
+          "source": "T2A Async create 官方 OpenAPI；engines/minimax_cloud.py _async_payload",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "复刻门槛",
+          "value": "需账号实名/付费档（错误码 2038）；音色设计拒绝模仿真实人物——错误码已翻译为用户可读提示",
+          "verification": "verified",
+          "source": "voice-cloning-clone 错误码表；engines/minimax_cloud.py _error",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "真实账号端到端",
+          "value": "复刻 → 激活 → 合成端到端尚未用真实 Key 实测；7 天后失效识别与自动重建待实测",
+          "verification": "unverified",
+          "source": "issue #27 验收项，待人工执行（ready-for-human）",
+          "date": "2026-09-20"
+        },
+        {
+          "field": "主观听感 (MOS)",
+          "value": "尚未做过",
+          "verification": "unknown",
+          "source": "issue #16 现状缺口",
+          "date": "2026-09-20"
+        }
+      ],
+      "performance": [
+        {
+          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "云端引擎不适用本地显存口径",
+          "date": "2026-09-20"
+        }
+      ],
+      "notes": "输出强制 WAV（默认 mp3 会破坏峰值自检）；短文本同步 t2a_v2（output_format=url），长文本异步；深度合成的公开标识义务在应用侧，已在生成记录/导出物标注（aigc_watermark 不满足该义务）。"
     }
   ]
 }

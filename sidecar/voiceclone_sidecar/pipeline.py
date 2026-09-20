@@ -175,8 +175,17 @@ async def run_generation(
             # Persist the cloud binding the moment enrollment succeeds —
             # the vendor-side voice now exists regardless of what happens
             # to this synthesis run. Waiting for synthesis would leak an
-            # orphaned cloud voice on every failed run.
-            ctx.voice_store.bind(voice["id"], engine.engine_id, status="ready", extra=binding_extra)
+            # orphaned cloud voice on every failed run. Issue #27: an
+            # engine that could not ACTIVATE the freshly cloned cloud voice
+            # (MiniMax clones stay inactive until one real synthesis)
+            # declares status "unactivated" in its binding extra, and that
+            # status is persisted verbatim instead of the default "ready".
+            ctx.voice_store.bind(
+                voice["id"],
+                engine.engine_id,
+                status=(binding_extra or {}).get("status") or "ready",
+                extra=binding_extra,
+            )
         params["voice_id"] = cloud_voice_id
 
     started_monotonic = time.monotonic()
@@ -315,6 +324,12 @@ async def run_generation(
             k: v for k, v in previous.items()
             if k not in {"status", "created_at", "reference_sha256", "error"}
         }
+        # Issue #27 (MiniMax): the first REAL synthesis is what activates a
+        # cloned cloud voice and starts its permanent validity. Record that
+        # moment on the binding for every cloud engine that does not
+        # already carry an activated_at (harmless metadata elsewhere).
+        if engine.requires_key:
+            carried.setdefault("activated_at", now_iso())
         ctx.voice_store.bind(
             voice["id"],
             engine.engine_id,

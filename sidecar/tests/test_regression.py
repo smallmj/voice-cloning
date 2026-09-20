@@ -204,6 +204,7 @@ def test_matrix_data_lists_all_shipped_engines():
         "fake",
         "qwen3-tts-vc-cloud",
         "qwen3-tts-vd-cloud",
+        "minimax-speech-cloud",
         "qwen3-tts-mlx",
         "indextts-25-cuda",
         "indextts-25-mps",

@@ -113,6 +113,34 @@ export function GenerateSection({
               该引擎需要参考文本：将自动转写所选音色的参考音频，无需手动输入。
             </span>
           )}
+        {(() => {
+          // Issue #27 (MiniMax): a cloned cloud voice that could not be
+          // activated stays "unactivated" — it will be deleted by the
+          // vendor after 7 days unless a real synthesis happens. Surface
+          // it (and the issue-#12 "unavailable" case) prominently here.
+          const binding = voices.find((v) => v.id === selectedVoice)?.bindings?.[
+            selectedEngine ?? ""
+          ];
+          if (!binding) return null;
+          if (binding.status === "unactivated") {
+            return (
+              <span className="hint training-note">
+                ⚠️ 该音色在此引擎上尚未激活：云端音色 7 天不使用会被删除。请立即生成一次以激活；
+                {binding.activation_error || binding.error
+                  ? `原因：${binding.activation_error || binding.error}`
+                  : ""}
+              </span>
+            );
+          }
+          if (binding.status === "unavailable" && binding.error) {
+            return (
+              <span className="hint training-note">
+                ⚠️ 该音色在此引擎上的绑定已失效：{binding.error}
+              </span>
+            );
+          }
+          return null;
+        })()}
         {selectedEngineInfo && (
           <span className="hint training-note">
             上传内容是否用于训练：

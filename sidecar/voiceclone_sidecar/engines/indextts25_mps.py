@@ -30,7 +30,7 @@ import uuid
 from pathlib import Path
 
 from .. import sources
-from ..capabilities import Capabilities
+from ..capabilities import Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
@@ -40,6 +40,8 @@ from .indextts25 import (
     ENGINE_PACKAGE_URL_FALLBACK,
     MAIN_WEIGHTS_FILES,
     REPO,
+    param_specs_for,
+    prepare_synthesis,
 )
 from .indextts25_mps_worker import MPS_GATE_EXIT_CODE  # noqa: F401 - re-exported for tests
 from .worker_supervisor import WorkerDegradedError, WorkerSupervisor
@@ -107,6 +109,11 @@ class IndexTts25MpsEngine(InstallableEngine):
             requires_reference_text=True,  # the sidecar auto-fills ref_text from the transcript
             max_chars_per_request=500,  # unified-memory ceiling; keep requests small (issue #13)
         )
+
+    def param_specs(self) -> list[ParamSpec]:
+        # Same model as the CUDA sibling — the shared declaration (including
+        # the pronunciation entry, issue #23) lives on indextts25.
+        return param_specs_for(self.engine_id)
 
     # -- install surface ----------------------------------------------------
 
@@ -258,12 +265,13 @@ class IndexTts25MpsEngine(InstallableEngine):
         out_path = (out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav").resolve()
 
         params = request.params or {}
+        text, wire = prepare_synthesis(request.text, params, log)
         payload = {
             "action": "synthesize",
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
-            "text": request.text,
+            "text": text,
             "output": str(out_path),
-            "lang": params.get("lang", "zh"),
+            **wire,
         }
         if params.get("ref_audio"):
             payload["ref_audio"] = params["ref_audio"]

@@ -111,3 +111,67 @@ describe("log stream", () => {
     expect(parseLogEvent("null")).toBeNull();
   });
 });
+
+// --- issue #23 / ADR-0018: parameter layers -----------------------------------
+
+import { sendableParams, splitParamLayers } from "./ui";
+import type { ParamSpecInfo } from "./api";
+
+function spec(overrides: Partial<ParamSpecInfo>): ParamSpecInfo {
+  return {
+    name: "p",
+    label: "P",
+    kind: "text",
+    layer: "engine",
+    group: "",
+    wire_path: "",
+    default: null,
+    choices: [],
+    help: "",
+    unit: "",
+    min: null,
+    max: null,
+    step: null,
+    integer: false,
+    min_open: false,
+    max_open: false,
+    max_from: null,
+    max_length: null,
+    max_items: null,
+    items: [],
+    exposed: true,
+    not_exposed_reason: null,
+    applies_to: { engine: "e", model: "m", mode: "cloning" },
+    ignored_when: [],
+    wire_map: false,
+    ...overrides,
+  };
+}
+
+describe("parameter layers (issue #23 / ADR-0018)", () => {
+  it("splits canonical, engine-specific and hidden specs", () => {
+    const layers = splitParamLayers([
+      spec({ name: "speed", layer: "canonical" }),
+      spec({ name: "fake_mode" }),
+      spec({ name: "speed_dead", exposed: false, not_exposed_reason: "no-op" }),
+      spec({ name: "pronunciation", layer: "canonical", kind: "textarea" }),
+    ]);
+    expect(layers.canonical.map((p) => p.name)).toEqual(["speed", "pronunciation"]);
+    expect(layers.engine.map((p) => p.name)).toEqual(["fake_mode"]);
+    expect(layers.hidden.map((p) => p.name)).toEqual(["speed_dead"]);
+  });
+
+  it("tolerates a missing params list", () => {
+    expect(splitParamLayers(undefined)).toEqual({ canonical: [], engine: [], hidden: [] });
+  });
+
+  it("only sends exposed, declared parameters", () => {
+    const params = [
+      spec({ name: "speed" }),
+      spec({ name: "speed_dead", exposed: false, not_exposed_reason: "no-op" }),
+    ];
+    expect(
+      sendableParams(params, { speed: "1.2", speed_dead: "3", gone: "x" }),
+    ).toEqual({ speed: "1.2" });
+  });
+});

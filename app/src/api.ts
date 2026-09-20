@@ -31,10 +31,42 @@ export interface Capabilities {
 export interface ParamSpecInfo {
   name: string;
   label: string;
-  kind: "select" | "text" | "number";
-  default: string | number | null;
+  // Issue #23 / ADR-0018: canonical | engine layers plus the expanded
+  // control surface (bool, textarea, ranges, units, not-exposed data).
+  kind: "select" | "text" | "textarea" | "number" | "bool" | "output";
+  layer: "canonical" | "engine";
+  group: string;
+  wire_path: string;
+  default: string | number | boolean | null;
   choices: string[];
   help: string;
+  unit: string;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  integer: boolean;
+  min_open: boolean;
+  max_open: boolean;
+  max_from: string | null;
+  max_length: number | null;
+  max_items: number | null;
+  items: {
+    name: string;
+    label: string;
+    kind: string;
+    min: number | null;
+    max: number | null;
+    choices: string[];
+  }[];
+  exposed: boolean;
+  not_exposed_reason: string | null;
+  applies_to: {
+    engine: string | null;
+    model: string | null;
+    mode: string | null;
+  } | null;
+  ignored_when: string[];
+  wire_map: boolean;
 }
 
 export interface EngineInfo {

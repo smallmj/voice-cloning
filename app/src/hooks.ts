@@ -16,15 +16,36 @@ import { appendLog, isThemePref, parseLogEvent, type ThemePref } from "./ui";
 
 export type { ThemePref };
 
+function sanitizeEngineParams(raw: unknown): Record<string, Record<string, string>> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, Record<string, string>> = {};
+  for (const [engine, params] of Object.entries(raw as Record<string, unknown>)) {
+    if (!params || typeof params !== "object") continue;
+    out[engine] = Object.fromEntries(
+      Object.entries(params as Record<string, unknown>)
+        .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+        .map(([k, v]) => [k, String(v)]),
+    );
+  }
+  return out;
+}
+
 export interface UiPrefs {
   theme: ThemePref;
   engine_id: string | null;
+  // Issue #23 / ADR-0018 decision 6: per-engine last-used generation
+  // parameters, remembered with the library (backup/restore covers them).
+  engine_params: Record<string, Record<string, string>>;
 }
 
 /** GET/PUT /settings/ui — theme + engine selection persist with the library
  * (ADR-0013 §6, ADR-0014 §7), not in localStorage. */
 export function useUiPrefs(baseUrl: string | null, token: string | null) {
-  const [prefs, setPrefs] = useState<UiPrefs>({ theme: "system", engine_id: null });
+  const [prefs, setPrefs] = useState<UiPrefs>({
+    theme: "system",
+    engine_id: null,
+    engine_params: {},
+  });
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -36,6 +57,7 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
         setPrefs({
           theme: isThemePref(p.theme) ? p.theme : "system",
           engine_id: typeof p.engine_id === "string" ? p.engine_id : null,
+          engine_params: sanitizeEngineParams(p.engine_params),
         });
         setReady(true);
       })
@@ -61,6 +83,7 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
             theme: isThemePref(p.theme) ? p.theme : prev.theme,
             engine_id:
               typeof p.engine_id === "string" && p.engine_id ? p.engine_id : null,
+            engine_params: sanitizeEngineParams(p.engine_params),
           }));
         })
         .catch(() => {

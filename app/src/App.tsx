@@ -15,7 +15,7 @@ import { GenerateSection } from "./sections/GenerateSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { VoicesSection } from "./sections/VoicesSection";
 import { apiJson, authHeaders } from "./client";
-import { resolveTheme, SECTION_IDS, SECTION_LABELS, buildRerunState, type SectionId } from "./ui";
+import { resolveTheme, SECTION_IDS, SECTION_LABELS, buildRerunState, sendableParams, type SectionId } from "./ui";
 import { useActiveJobCount, useConsent, useEngines, useInstallStatuses, useLogStream, useMediaToken, useUiPrefs, useVoices } from "./hooks";
 
 const DEFAULT_TEXT = "你好，世界。这是一次端到端生成测试。Hello, world!";
@@ -112,16 +112,18 @@ export default function App() {
   );
 
   // Re-derive parameter state from the selected engine's spec; parameters the
-  // spec does not declare are simply not present here.
+  // spec does not declare are simply not present here. ADR-0018 decision 6:
+  // the engine's last-used values (remembered in the settings store) win over
+  // spec defaults, so each engine picks up where the user left off.
   useEffect(() => {
     const spec = selectedEngineInfo?.params ?? [];
-    setEngineParams(
-      Object.fromEntries(
-        spec.filter((p) => p.default != null).map((p) => [p.name, String(p.default)]),
-      ),
+    const defaults = Object.fromEntries(
+      spec.filter((p) => p.exposed && p.default != null).map((p) => [p.name, String(p.default)]),
     );
+    const remembered = (selectedEngine && prefs.engine_params[selectedEngine]) || {};
+    setEngineParams({ ...defaults, ...remembered });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEngine, engines]);
+  }, [selectedEngine, engines, prefs.engine_params]);
 
   // Startup: sidecar handshake + consent is handled by hooks; surface hard
   // connection failures from the electron bridge.
@@ -308,19 +310,26 @@ export default function App() {
     setRecord(null);
     setGenerateError(null);
     setJobHint(null);
+    // ADR-0018 decision 6: remember the values actually used, per engine.
+    if (Object.keys(engineParams).length > 0) {
+      updatePrefs({
+        engine_params: { ...prefs.engine_params, [selectedEngine]: engineParams },
+      });
+    }
+    const sendable = sendableParams(selectedEngineInfo?.params, engineParams);
     const payload = {
       engine_id: selectedEngine,
       text,
       ...(selectedVoice ? { voice_id: selectedVoice } : {}),
-      ...(rerunParams || Object.keys(engineParams).length > 0
+      ...(rerunParams || Object.keys(sendable).length > 0
         ? {
             params: {
-              ...engineParams,
-              // Rerun carries only parameters the engine still declares —
-              // undeclared parameters are never sent, only not rendered.
+              // Only parameters the engine still declares AND exposes are
+              // ever sent (ADR-0018: exposed:false is data, not rendering).
+              ...sendable,
               ...Object.fromEntries(
                 Object.entries(rerunParams ?? {}).filter(([k]) =>
-                  (selectedEngineInfo?.params ?? []).some((p) => p.name === k),
+                  (selectedEngineInfo?.params ?? []).some((p) => p.name === k && p.exposed),
                 ),
               ),
             },

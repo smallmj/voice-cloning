@@ -26,7 +26,8 @@ import uuid
 from pathlib import Path
 
 from .. import sources
-from ..capabilities import Capabilities
+from .. import pronunciation, params as params_mod
+from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
@@ -98,6 +99,83 @@ AUX_WEIGHTS = [
 IDLE_TIMEOUT_S = 300.0  # release GPU memory after five idle minutes
 MAX_REQUESTS_PER_WORKER = 20  # recycle the worker to bound slow VRAM leaks
 
+LANG_CHOICES = ("zh", "en", "ja", "es", "ar")
+
+
+def param_specs_for(engine_id: str) -> list[ParamSpec]:
+    """Shared parameter declaration for both IndexTTS adapters (issue #23).
+
+    They run the same model — only the torch device differs — so the specs,
+    including the pronunciation entry the capability flag always promised
+    but the UI never had, are declared once and shared.
+    """
+    return [
+        # Canonical speed: user sees a rate (1.0 = normal); the adapter maps
+        # it onto the engine's INVERSE duration_factor so "更快" can never
+        # mean slower (ADR-0018 decision 1).
+        params_mod.canonical_speed(
+            engine_id, REPO,
+            help="1.0 为原速；>1 更快，<1 更慢。IndexTTS 的原生参数是时长倍率（方向相反），已自动换算。",
+        ),
+        params_mod.canonical_language(
+            engine_id, REPO, LANG_CHOICES, wire_name="lang", default="zh",
+        ),
+        # The pronunciation entry: capability declared True, model supports
+        # it, UI had no entry — the exact gap ADR-0018 closes.
+        params_mod.canonical_pronunciation(
+            engine_id, REPO,
+            grammar_help=(
+                "每行一条「汉字=拼音」（小写声调数字，如 行=xing2），将改写为 "
+                "IndexTTS 的 <行|XING2> 语法后送入引擎。"
+            ),
+        ),
+        # "不支持是数据"（ADR-0018 decision 3）：上游另有 8 维情感向量 /
+        # 情感文本等参数，但需要构造期 QwenEmotion 开关，未在锁定的引擎
+        # 版本上验证 —— 暴露即撒谎，先以数据声明不暴露。
+        ParamSpec(
+            name="emo_vector",
+            label="8 维情感向量",
+            kind="text",
+            exposed=False,
+            not_exposed_reason="unverified",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="上游支持（[高兴,愤怒,悲伤,害怕,厌恶,忧郁,惊讶,平静]），但需构造期情感模型开关，本版本未验证，暂不暴露。",
+        ),
+        # The sidecar injects reference audio itself (voice resolution);
+        # declaring it keeps the wire contract honest instead of invisible.
+        ParamSpec(
+            name="ref_audio",
+            label="参考音频",
+            kind="text",
+            exposed=False,
+            not_exposed_reason="server-injected",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="由音色解析自动注入，不作为用户参数。",
+        ),
+    ]
+
+
+def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
+    """Canonical -> wire adaptation shared by both IndexTTS adapters.
+
+    Returns the (possibly pronunciation-rewritten) text and the extra worker
+    payload keys. This is the per-engine adapter the canonical layer
+    requires: user-visible values never reach the engine unconverted.
+    """
+    params = params or {}
+    wire: dict = {}
+    speed = params.get("speed")
+    if speed not in (None, ""):
+        df = params_mod.speed_to_duration_factor(speed)
+        if df is not None:
+            wire["duration_factor"] = df
+    lang = params.get("language") or params.get("lang")
+    wire["lang"] = lang if lang in LANG_CHOICES else "zh"
+    ann = params.get("pronunciation")
+    if ann and str(ann).strip():
+        text = pronunciation.rewrite(text, str(ann), "indextts", log)
+    return text, wire
+
 
 class IndexTts25CudaEngine(InstallableEngine):
     """Local engine. Also carries the InstallableEngine surface."""
@@ -135,6 +213,9 @@ class IndexTts25CudaEngine(InstallableEngine):
             requires_reference_text=True,  # the sidecar auto-fills ref_text from the transcript
             max_chars_per_request=500,  # local VRAM ceiling; keep requests small (issue #13)
         )
+
+    def param_specs(self) -> list[ParamSpec]:
+        return param_specs_for(self.engine_id)
 
     # -- install surface ----------------------------------------------------
 
@@ -292,12 +373,13 @@ class IndexTts25CudaEngine(InstallableEngine):
         out_path = (out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav").resolve()
 
         params = request.params or {}
+        text, wire = prepare_synthesis(request.text, params, log)
         payload = {
             "action": "synthesize",
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
-            "text": request.text,
+            "text": text,
             "output": str(out_path),
-            "lang": params.get("lang", "zh"),
+            **wire,
         }
         if params.get("ref_audio"):
             payload["ref_audio"] = params["ref_audio"]

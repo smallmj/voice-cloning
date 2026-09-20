@@ -630,3 +630,17 @@ code {
   .side-nav-footer { margin-top: 0; }
   .content { padding: var(--sp-4); }
 }
+
+/* Issue #23 / ADR-0018: engine-specific parameter layer — fixed position,
+ * collapsed by default, visually secondary to the canonical layer. */
+details.engine-params {
+  margin: 0.5rem 0;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+}
+details.engine-params > summary {
+  cursor: pointer;
+  font-weight: 600;
+  opacity: 0.85;
+}

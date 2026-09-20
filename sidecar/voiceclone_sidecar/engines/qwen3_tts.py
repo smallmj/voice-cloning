@@ -16,10 +16,11 @@ import threading
 import uuid
 from pathlib import Path
 
-from ..capabilities import Capabilities
+from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
+from .. import params as params_mod
 from .. import sources
 
 REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
@@ -77,6 +78,39 @@ class Qwen3TtsMlxEngine(InstallableEngine):
             requires_reference_text=True,  # the sidecar auto-fills ref_text from the transcript
             max_chars_per_request=500,  # local VRAM ceiling; keep requests small (issue #13)
         )
+
+    # Languages the Qwen3-TTS model itself speaks; the worker already sends
+    # the canonical `language` value verbatim.
+    LANGUAGE_CHOICES = ("Chinese", "English", "Japanese", "Korean", "German", "French")
+
+    def param_specs(self) -> list[ParamSpec]:
+        specs = [
+            params_mod.canonical_language(
+                self.engine_id, REPO, self.LANGUAGE_CHOICES,
+                wire_name="language", default="Chinese",
+            ),
+        ]
+        # ADR-0018 decision 3 — "不支持是数据": mlx-audio ACCEPTS a speed
+        # argument, prints `Speed: {speed}x`, and never uses it (audit §4,
+        # verified 2026-09-18 on our pinned mlx-audio). Declaring it as
+        # no-op data is exactly what stops the UI from offering a slider
+        # that silently lies.
+        specs.append(
+            ParamSpec(
+                name="speed",
+                label="语速",
+                kind="number",
+                min=0.5,
+                max=2.0,
+                step=0.05,
+                unit="x",
+                exposed=False,
+                not_exposed_reason="no-op",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+                help="mlx-audio 接受 speed 参数但从不使用（实测证实）；暴露即撒谎，故不暴露。",
+            )
+        )
+        return specs
 
     # -- install surface ----------------------------------------------------
 

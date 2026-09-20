@@ -39,7 +39,7 @@ def test_engines_expose_issue9_metadata(client):
     assert "汉字" in cloud["billing_note"]  # the Chinese unit-price rule
     assert "训练" in cloud["data_usage_note"]
     param_names = [p["name"] for p in cloud["params"]]
-    assert param_names == ["language_type"]
+    assert param_names == ["language"]  # canonical name; wire key is language_type (issue #23)
 
     fake = engines["fake"]
     assert fake["requires_key"] is False

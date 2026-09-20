@@ -100,12 +100,19 @@ def _synthesize(request: dict) -> dict:
     model_dir = request["model_dir"]
     started = time.monotonic()
     _load(model_dir)
+    # duration_factor (issue #23): the sidecar's canonical speed adapter
+    # maps user speed onto this INVERSE multiplier; only forwarded when set.
+    infer_kwargs = {}
+    duration_factor = request.get("duration_factor")
+    if duration_factor:
+        infer_kwargs["duration_factor"] = duration_factor
     _State.tts.infer(
         spk_audio_prompt=request.get("ref_audio"),
         text=request["text"],
         output_path=output,
         lang=request.get("lang", "zh"),
         verbose=False,
+        **infer_kwargs,
     )
     log(f"indextts-2.5: synthesized in {time.monotonic() - started:.1f}s")
 

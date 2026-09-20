@@ -68,6 +68,21 @@
           "verification": "unknown",
           "source": "issue #16 现状缺口",
           "date": "2026-09-18"
+        },
+        {
+          "field": "发音控制",
+          "value": "不支持（pronunciation_control=False）",
+          "verification": "measured",
+          "source": "voiceclone_sidecar/engines/qwen3_tts.py；mlx-audio 无发音标注入口",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "语速参数",
+          "value": "上游参数 speed 为 no-op：被接受、被打印、从不使用",
+          "verification": "measured",
+          "source": "docs/audit/2026-09-18-代码审计与优化点.md §4；mlx-audio 源码串明写 \"not directly supported yet\"",
+          "date": "2026-09-18",
+          "note": "issue #23：以 ParamSpec exposed=False / notExposedReason=no-op 固化为数据"
         }
       ],
       "performance": [
@@ -136,6 +151,22 @@
           "verification": "unknown",
           "source": "issue #16 现状缺口",
           "date": "2026-09-18"
+        },
+        {
+          "field": "发音控制",
+          "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
+          "verification": "verified",
+          "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
+          "date": "2026-09-18",
+          "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
+        },
+        {
+          "field": "语速参数",
+          "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
+          "verification": "verified",
+          "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
+          "date": "2026-09-18",
+          "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
         }
       ],
       "performance": [
@@ -198,6 +229,13 @@
           "value": "尚未做过",
           "verification": "unknown",
           "source": "issue #16 现状缺口",
+          "date": "2026-09-18"
+        },
+        {
+          "field": "语种参数",
+          "value": "language_type 10 值，auto=不发送；暴露为 canonical language",
+          "verification": "verified",
+          "source": "阿里百炼 Qwen-TTS 文档；voiceclone_sidecar/engines/qwen_tts_cloud.py",
           "date": "2026-09-18"
         }
       ],
@@ -286,6 +324,22 @@
           "verification": "unknown",
           "source": "issue #16 现状缺口",
           "date": "2026-09-19"
+        },
+        {
+          "field": "发音控制",
+          "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
+          "verification": "verified",
+          "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
+          "date": "2026-09-18",
+          "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
+        },
+        {
+          "field": "语速参数",
+          "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
+          "verification": "verified",
+          "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
+          "date": "2026-09-18",
+          "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
         }
       ],
       "performance": [

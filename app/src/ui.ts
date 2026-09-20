@@ -125,3 +125,49 @@ export function parseLogEvent(raw: string): LogEvent | null {
     return null;
   }
 }
+
+// --- issue #23 / ADR-0018: two-layer parameter surface -----------------------
+
+import type { ParamSpecInfo } from "./api";
+
+export interface ParamLayers {
+  canonical: ParamSpecInfo[];
+  engine: ParamSpecInfo[];
+  hidden: ParamSpecInfo[];
+}
+
+/** Split an engine's declared specs into the canonical layer (primary
+ * surface), the engine-specific layer (fixed position, collapsed), and the
+ * not-exposed set — "不支持"是数据，渲染时必须连同原因一起可见。 */
+export function splitParamLayers(params: ParamSpecInfo[] | undefined | null): ParamLayers {
+  const all = params ?? [];
+  return {
+    canonical: all.filter((p) => p.exposed && p.layer === "canonical"),
+    engine: all.filter((p) => p.exposed && p.layer === "engine"),
+    hidden: all.filter((p) => !p.exposed),
+  };
+}
+
+/** Only exposed, still-declared parameters may ride a generate request —
+ * remembered values (ADR-0018 decision 6) or rerun state must never leak a
+ * parameter the engine no longer exposes. */
+export function sendableParams(
+  params: ParamSpecInfo[] | undefined | null,
+  values: Record<string, string>,
+): Record<string, string> {
+  const exposed = new Set((params ?? []).filter((p) => p.exposed).map((p) => p.name));
+  return Object.fromEntries(Object.entries(values).filter(([k]) => exposed.has(k)));
+}
+
+/** User-facing wording for the closed not-exposed vocabulary (ADR-0018). */
+export function reasonLabel(reason: string | null): string {
+  const labels: Record<string, string> = {
+    "no-op": "引擎接受但不使用",
+    "server-injected": "由应用自动注入",
+    "wrong-mode": "当前模式不适用",
+    "paid-tier": "需要付费档位",
+    "breaks-pipeline": "会破坏本应用管线",
+    unverified: "未经验证",
+  };
+  return labels[reason ?? ""] ?? "未暴露";
+}

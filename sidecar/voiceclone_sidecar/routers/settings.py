@@ -28,7 +28,23 @@ def _sanitize(raw: dict) -> dict:
     return {
         "theme": theme if theme in ALLOWED_THEMES else "system",
         "engine_id": engine_id if isinstance(engine_id, str) and engine_id else None,
+        # Issue #23 / ADR-0018 decision 6: per-engine last-used generation
+        # parameters. Values are stored as strings (the renderer's state is
+        # stringly typed); the engine spec validates/converts at generate.
+        "engine_params": _sanitize_engine_params(raw.get("engine_params")),
     }
+
+
+def _sanitize_engine_params(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    clean: dict = {}
+    for engine_id, params in raw.items():
+        if isinstance(engine_id, str) and isinstance(params, dict):
+            clean[engine_id] = {
+                k: str(v) for k, v in params.items() if isinstance(k, str)
+            }
+    return clean
 
 
 def build_router(ctx: AppContext) -> APIRouter:
@@ -54,8 +70,15 @@ def build_router(ctx: AppContext) -> APIRouter:
             if engine_id is not None and (not isinstance(engine_id, str) or not engine_id):
                 raise HTTPException(status_code=422, detail="engine_id 必须为非空字符串或 null")
             update["engine_id"] = engine_id
+        if "engine_params" in body:
+            raw = body["engine_params"]
+            if raw is not None and not isinstance(raw, dict):
+                raise HTTPException(
+                    status_code=422, detail="engine_params 必须是「引擎 → 参数名 → 值」的对象"
+                )
+            update["engine_params"] = _sanitize_engine_params(raw)
         if not update:
-            raise HTTPException(status_code=422, detail="至少提供 theme 或 engine_id 之一")
+            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id 或 engine_params 之一")
         ctx.write_ui_prefs(update)
         return _sanitize(ctx.read_ui_prefs())
 

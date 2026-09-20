@@ -207,8 +207,15 @@ def test_synthesize_requires_cloud_voice_id():
 
 def test_param_specs_drive_the_ui_contract():
     specs = Qwen3TtsVcCloudEngine().param_specs()
-    assert [s.to_dict()["name"] for s in specs] == ["language_type"]
-    assert specs[0].to_dict()["choices"][0] == "auto"
+    # Issue #23 / ADR-0018: the canonical name is `language`; the wire key
+    # stays the vendor's `language_type`, and "auto" maps to "send nothing".
+    assert [s.to_dict()["name"] for s in specs] == ["language"]
+    spec = specs[0]
+    assert spec.to_dict()["choices"][0] == "auto"
+    assert spec.to_dict()["wire_path"] == "language_type"
+    assert spec.to_dict()["layer"] == "canonical"
+    assert spec.to_wire("auto") is None
+    assert spec.to_wire("Japanese") == "Japanese"
 
 
 # --- voice health check (issue #12) -----------------------------------------

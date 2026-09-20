@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 
 
-from ..capabilities import Capabilities, ParamSpec
+from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .cloud_base import (
     CloudEngineBase,
@@ -122,13 +122,25 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
         )
 
     def param_specs(self) -> list[ParamSpec]:
+        # Canonical language (ADR-0018): the wire key is the vendor's
+        # `language_type`; "auto" maps to "do not send" — what the user sees
+        # (auto) is not what the engine receives (nothing).
+        def to_wire(value):
+            if value in (None, "", "auto"):
+                return None
+            return value if value in LANGUAGE_CHOICES else None
+
         return [
             ParamSpec(
-                name="language_type",
+                name="language",
                 label="发音语种",
                 kind="select",
                 default="auto",
                 choices=("auto",) + LANGUAGE_CHOICES,
+                layer="canonical",
+                wire_path="language_type",
+                applies_to=AppliesTo(engine=self.engine_id, model=TARGET_MODEL, mode="cloning"),
+                to_wire=to_wire,
                 help="建议与文本语种一致以获得自然发音；auto 时不向引擎发送该参数",
             ),
         ]
@@ -212,7 +224,9 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
             )
 
         body: dict = {"text": request.text, "voice": voice_id}
-        language = params.get("language_type")
+        # Canonical `language` (ADR-0018) with the legacy wire key as
+        # fallback for reruns of old records; "auto"/empty sends nothing.
+        language = params.get("language", params.get("language_type"))
         if language and language in LANGUAGE_CHOICES:
             body["language_type"] = language
 

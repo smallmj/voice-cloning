@@ -4,9 +4,11 @@ import type {
   GenerationRecord,
   LogEvent,
   NormalizeResult,
+  ParamSpecInfo,
   Voice,
 } from "../api";
 import { CompareSection } from "../components/CompareSection";
+import { reasonLabel, splitParamLayers } from "../ui";
 import { LogDrawer } from "../components/LogDrawer";
 import { Waveform } from "../components/Waveform";
 import { JumpLink } from "../components/bits";
@@ -130,32 +132,41 @@ export function GenerateSection({
         </label>
         <JumpLink target="engines" label="更换引擎" onNavigate={onNavigate} />
       </div>
-      {(selectedEngineInfo?.params ?? []).map((p) => (
-        <div className="param-row" key={p.name}>
-          <label>
-            {p.label}：
-            {p.kind === "select" ? (
-              <select
-                value={engineParams[p.name] ?? String(p.default ?? "")}
-                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
-              >
-                {p.choices.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type={p.kind === "number" ? "number" : "text"}
-                value={engineParams[p.name] ?? String(p.default ?? "")}
-                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
-              />
+      {(() => {
+        const layers = splitParamLayers(selectedEngineInfo?.params);
+        return (
+          <>
+            <ParamFields
+              specs={layers.canonical}
+              engineParams={engineParams}
+              onEngineParamChange={onEngineParamChange}
+            />
+            {layers.engine.length > 0 && (
+              // ADR-0018 decision 1: the engine-specific layer has a FIXED
+              // position and starts COLLAPSED — the canonical layer stays
+              // the primary surface.
+              <details className="engine-params">
+                <summary>引擎专属参数（{layers.engine.length}）</summary>
+                <ParamFields
+                  specs={layers.engine}
+                  engineParams={engineParams}
+                  onEngineParamChange={onEngineParamChange}
+                />
+              </details>
             )}
-          </label>
-          {p.help && <span className="hint">{p.help}</span>}
-        </div>
-      ))}
+            {layers.hidden.length > 0 && (
+              // ADR-0018 decision 3: "not supported" is data — hidden
+              // parameters are disclosed with their reason instead of
+              // vanishing silently.
+              <span className="hint">
+                另有 {layers.hidden.length} 个参数未暴露：
+                {layers.hidden.map((p) => `${p.label}（${reasonLabel(p.not_exposed_reason)}）`).join("、")}
+                。
+              </span>
+            )}
+          </>
+        );
+      })()}
 
       <textarea value={text} onChange={(e) => onTextChange(e.target.value)} rows={4} />
 
@@ -218,3 +229,70 @@ export function GenerateSection({
     </section>
   );
 }
+
+/** Issue #23 / ADR-0018: renders EXACTLY the exposed specs handed to it —
+ * canonical and engine layers just pass different filters. Bool renders as
+ * a checkbox, textarea as a multi-line field, number honours min/max/step
+ * (open bounds are clamped server-side by the spec; here they only shape
+ * the control). Values stay strings — the engine spec converts to wire. */
+function ParamFields({
+  specs,
+  engineParams,
+  onEngineParamChange,
+}: {
+  specs: ParamSpecInfo[];
+  engineParams: Record<string, string>;
+  onEngineParamChange: (name: string, value: string) => void;
+}) {
+  if (specs.length === 0) return null;
+  return (
+    <>
+      {specs.map((p) => (
+        <div className="param-row" key={p.name}>
+          <label>
+            {p.label}
+            {p.unit ? `（${p.unit}）` : ""}：
+            {p.kind === "select" ? (
+              <select
+                value={engineParams[p.name] ?? String(p.default ?? "")}
+                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+              >
+                {p.choices.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            ) : p.kind === "bool" ? (
+              <input
+                type="checkbox"
+                checked={(engineParams[p.name] ?? String(p.default ?? "false")) === "true"}
+                onChange={(e) =>
+                  onEngineParamChange(p.name, e.target.checked ? "true" : "false")
+                }
+              />
+            ) : p.kind === "textarea" ? (
+              <textarea
+                rows={3}
+                maxLength={p.max_length ?? undefined}
+                value={engineParams[p.name] ?? String(p.default ?? "")}
+                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+              />
+            ) : (
+              <input
+                type={p.kind === "number" ? "number" : "text"}
+                min={p.min ?? undefined}
+                max={p.max ?? undefined}
+                step={p.step ?? (p.integer ? 1 : undefined)}
+                value={engineParams[p.name] ?? String(p.default ?? "")}
+                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+              />
+            )}
+          </label>
+          {p.help && <span className="hint">{p.help}</span>}
+        </div>
+      ))}
+    </>
+  );
+}
+

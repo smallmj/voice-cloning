@@ -146,7 +146,7 @@ class FakeKeyEngine(FakeEngine):
         return Capabilities(**{**caps.to_dict(), "requires_reference_text": False})
 
     def param_specs(self):
-        from ..capabilities import ParamSpec
+        from ..capabilities import AppliesTo, ParamSpec
 
         return [
             ParamSpec(
@@ -155,6 +155,7 @@ class FakeKeyEngine(FakeEngine):
                 kind="select",
                 default="auto",
                 choices=("auto", "fast"),
+                applies_to=AppliesTo(engine=self.engine_id, model="fake-1.0"),
                 help="仅用于测试的参数",
             )
         ]

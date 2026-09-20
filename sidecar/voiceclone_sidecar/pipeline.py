@@ -106,12 +106,22 @@ async def run_generation(
             # a MiniMax engine must never be told it needs 阿里百炼.
             raise HTTPException(status_code=409, detail=engine.key_missing_hint())
         if voice is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"云端引擎 {engine.engine_id} 必须使用音色生成"
-                "（复刻模型需要一个已绑定的云端音色）",
+            # Issue #27: engines that expose a system-voice override param
+            # can synthesize WITHOUT a voice record — the user's vendor
+            # system voice id replaces the bound cloud voice entirely. The
+            # requirement only binds when no system voice was given.
+            uses_system_voice = bool(
+                (params.get("system_voice") or "").strip()
+                if isinstance(params.get("system_voice"), str)
+                else params.get("system_voice")
             )
-        cloud_voice_id = (voice["bindings"].get(engine.engine_id) or {}).get("voice_id")
+            if not uses_system_voice:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"云端引擎 {engine.engine_id} 必须使用音色生成"
+                    "（复刻模型需要一个已绑定的云端音色；或在引擎参数中填写系统音色 ID）",
+                )
+        cloud_voice_id = (voice["bindings"].get(engine.engine_id) or {}).get("voice_id") if voice else None
 
         # Issue #12: cloud vendors silently recycle enrolled voices. A
         # binding that says "ready" is only a cache — probe the vendor
@@ -141,7 +151,10 @@ async def run_generation(
                 )
                 cloud_voice_id = None  # fall through to re-enrollment
 
-        if not cloud_voice_id:
+        if not cloud_voice_id and voice is not None:
+            # voice is None + system-voice override never reaches here (the
+            # engine synthesizes the system voice directly); only a real
+            # voice record enters enrollment/re-enrollment.
             ref_path = ctx.voice_store.reference_path(voice["id"])
             transcript = params.get("ref_text") or (voice.get("reference") or {}).get("transcript")
 

@@ -37,6 +37,7 @@
 | └ `nvidia/bigvgan_v2_22khz_80band_256x` | 声码器 | MIT | 可商用 |
 | `mlx-community/whisper-small` | macOS 参考音频本地转写 | Apache-2.0（HF 卡片标注；OpenAI 仓库 LICENSE 为 MIT） | 可商用 |
 | `Systran/faster-whisper-small` | Windows 参考音频本地转写 | MIT | 可商用 |
+| `FireRedTeam/FireRedTTS3`（仅 Base 所需：redae / fireredtts3_base / campp / text_tokenizer） | PoC 验证中（issue #26），尚未接入 | Apache-2.0（HF 卡片标注，与仓库 LICENSE 一致） | ⚠️ 权重许可可商用，但上游 README 另有「零样本复刻仅限学术研究用途」声明（不在 LICENSE 内）；采纳前须评审（见 `docs/evaluation/2026-09-20_FireRedTTS3_PoC.md`）。本仓库为使其在 MPS 运行维护的补丁见 `scripts/fireredtts3_poc/patch_fireredtts3.py` |
 
 云端引擎（DashScope Qwen-TTS 等）不涉及权重下载：许可关系由厂商 API 服务条款约束，见各引擎在设置页展示的计费与数据用途说明。
 

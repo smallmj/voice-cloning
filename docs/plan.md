@@ -280,7 +280,7 @@ voicebox 官方 troubleshooting 对大陆用户的答案原文是「Try using a 
    - **情感枚举两两不同**：MiniMax 9 值（缺 `melancholic`、多 `fluent`/`whisper`）、dots.tts 8 值带 level 1–3、IndexTTS 是 8 维向量 + alpha + 独立的音频/文本提示。**不得共用一个枚举。**
    - **六个引擎合计 30+ 个参数是条件性或无条件失效的** —— 典型两例：mlx-audio 的 `speed` 被接受、被打印、**从不使用**（而我们正在用它）；FireRedTTS3 的 `max_text_len` 声明了但正文从不引用。
    - **语种方案有六套且一套都没有**：MiniMax 41 值、DashScope 合成 11 值（`Auto`+10，**无方言成员**）、DashScope 登记/设计 10 个小写码（无 `Auto`）、mlx-audio 11 个小写+`auto`、IndexTTS 5 个、dots.tts `[CODE]` 约 110+6、FireRedTTS3 `<|Tag|>` 24+21，而 VoxCPM2 **根本没有这个参数**。
-7. **FireRedTTS3 的 PoC 结论**：限定在本机 M5 Pro + torch/MPS + 仅 Base 复刻，须回答 MPS RTF、17 项回归集表现、以及剥离 `flash_attn`/`fasttext` 后是否仍可用。过了才采纳。
+7. **FireRedTTS3 的 PoC 结论**：限定在本机 M5 Pro + torch/MPS + 仅 Base 复刻，须回答 MPS RTF、17 项回归集表现、以及剥离 `flash_attn`/`fasttext` 后是否仍可用。过了才采纳。→ **已跑通（2026-09-20）：补丁后 20/20 全过，fp32 RTF 中位 2.22、MPS 峰值 11.7 GB；采纳与否待人工听感判定**，证据见 `docs/evaluation/2026-09-20_FireRedTTS3_PoC.md` 与 `scripts/fireredtts3_poc/`。
 8. **MiniMax 待办与待核**：异步接口的 payload **键名与同步不同**（`audio_sample_rate` 而非 `sample_rate`、`english_normalization` 而非 `text_normalization`；没有 `force_cbr` / `timbre_weights` / `subtitle_*` / `output_format` / `stream`；`opus` 只接受 8/12/16/24/48k，否则**任务失败**）——因为长文本要走异步，这条必须单独构造 payload 而不能复用同步的。待核：单把 API key 能否跨 `.io`/`.cn` 两区（官方未说明）；异步接口是否支持复刻音色、返回格式是否为可用 WAV。另已确认：**复刻需要账号实名/付费档**（错误码 `2038` = 无复刻权限），且**音色设计拒绝模仿真实人物**。
 9. **本地转写工具的云端提供方**：决策 #15 的云端那半需要一个真实提供方，而当前唯一可选项是测试替身。**在补上真实提供方之前，测试替身必须先下线**（它会往音色库写入写死的测试文本，再被 `requires_reference_text` 的引擎当作参考文本使用，静默劣化复刻）。
 

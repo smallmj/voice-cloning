@@ -5,8 +5,10 @@ from __future__ import annotations
 import time
 import wave
 
+import httpx
 import pytest
 
+from .test_contract import auth_headers
 from voiceclone_sidecar.regression import (
     REGRESSION_CATEGORIES,
     REGRESSION_ITEMS,
@@ -328,3 +330,107 @@ def test_regression_run_serializes_concurrent_sessions(client):
     r3 = client.post("/regression/run", json={"engine_ids": ["fake"]})
     assert r3.status_code == 200, r3.text
     client.delete(f"/regression/{r3.json()['id']}")
+
+
+def test_regression_run_keeps_logs_ws_and_jobs_responsive(client, sidecar, ws_url):
+    """验收（issue #28）：回归运行期间 /ws/logs 实时且 /jobs 响应。
+
+    旧实现里回归 worker 在第二个事件循环上运行，重活期间会拖住主循环；
+    现在它是主循环上的一个任务 + executor，所以运行中这两个通道必须活着。
+    """
+    import asyncio
+    import json as jsonlib
+
+    import websockets
+
+    async def run():
+        async with websockets.connect(
+            ws_url, additional_headers=auth_headers(sidecar)
+        ) as ws:
+            r = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: client.post("/regression/run", json={"engine_ids": ["fake"]})
+            )
+            assert r.status_code == 200, r.text
+            session_id = r.json()["id"]
+
+            # 运行期间 /jobs 必须及时响应（旧架构下会被重活拖住）。
+            loop = asyncio.get_running_loop()
+            jobs = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: client.get("/jobs")), timeout=5
+            )
+            assert jobs.status_code == 200
+
+            # 日志必须实时流到 /ws/logs（回归 item 走 run_generation 管线）。
+            saw_log = False
+            deadline = asyncio.get_running_loop().time() + 30
+            while asyncio.get_running_loop().time() < deadline:
+                event = jsonlib.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+                if event.get("type") == "log":
+                    saw_log = True
+                    break
+            assert saw_log, "回归运行期间没有日志实时流出 /ws/logs"
+
+            deadline = time.monotonic() + 60
+            while client.get(f"/regression/{session_id}").json()["status"] != "completed":
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.3)
+
+    asyncio.run(asyncio.wait_for(run(), timeout=90))
+
+
+def test_regression_run_clean_under_asyncio_debug(tmp_path_factory):
+    """验收（issue #28）：asyncio debug 下回归运行无跨线程/跨循环告警。
+
+    旧实现在 daemon 线程里 asyncio.run 起第二个 loop，对主 loop 创建的
+    LogBus 队列 put_nowait；debug 模式会记 Non-thread-safe / cross-loop
+    告警。现在 worker 就在主循环上，起一个 PYTHONASYNCIODEBUG=1 的真实
+    sidecar 跑一遍回归，stderr 必须干净。
+    """
+    import json as jsonlib
+    import os
+    import secrets
+    import socket
+    import subprocess
+    import sys
+    import time as time_mod
+
+    SIDECAR_DIR = tmp_path_factory.mktemp("sidecar-root")
+    token = secrets.token_urlsafe(16)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "voiceclone_sidecar", "--port", "0", "--token", token,
+         "--audio-dir", str(SIDECAR_DIR / "audio")],
+        env={**os.environ, "PYTHONASYNCIODEBUG": "1", "VOICECLONE_TEST_ENGINES": "1",
+             "VOICECLONE_KEY_BACKEND": "memory"},
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        handshake = jsonlib.loads(proc.stdout.readline())
+        assert handshake["event"] == "ready"
+        base = f"http://127.0.0.1:{handshake['port']}"
+        deadline = time_mod.monotonic() + 15
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", handshake["port"]), timeout=0.5).close()
+                break
+            except OSError:
+                assert time_mod.monotonic() < deadline
+                time_mod.sleep(0.1)
+        with httpx.Client(base_url=base, headers={"Authorization": f"Bearer {token}"}) as c:
+            r = c.post("/regression/run", json={"engine_ids": ["fake"]})
+            assert r.status_code == 200, r.text
+            sid = r.json()["id"]
+            deadline = time_mod.monotonic() + 60
+            while c.get(f"/regression/{sid}").json()["status"] != "completed":
+                assert time_mod.monotonic() < deadline
+                time_mod.sleep(0.3)
+        proc.terminate()
+        _, stderr = proc.communicate(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    low = stderr.lower()
+    for marker in ("non-thread-safe", "call_soon_threadsafe was not called",
+                   "took ", "execute took"):
+        assert marker not in low, f"asyncio debug 告警：{marker!r} 出现在 stderr"

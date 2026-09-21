@@ -662,9 +662,9 @@ code {
   padding: 0 2px;
 }
 .score-star.on { color: var(--warning); }
-.pref-block { margin-top: var(--sp-5); }
-.pref-cell { margin-top: var(--sp-3); }
-.pref-cell-title { font-weight: 600; margin-bottom: var(--sp-1); }
+/* Issue #45: 偏好画像降级为盲听结果页内的一行只读汇总 */
+.pref-summary { margin-top: var(--sp-3); }
+/* .pref-table 仍被能力矩阵区块使用 */
 .pref-table { border-collapse: collapse; font-size: var(--fs-md); }
 .pref-table th, .pref-table td {
   border: 1px solid var(--border-strong);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { CompareSession, EngineInfo, PreferenceProfile, Voice } from "../api";
 import { apiJson } from "../client";
 
@@ -13,6 +13,25 @@ const COMPARE_TEXT_TYPES = [
 const TEXT_TYPE_LABELS: Record<string, string> = Object.fromEntries(
   COMPARE_TEXT_TYPES.map((t) => [t.value, t.label]),
 );
+
+// Issue #45: 偏好画像降级为盲听结果页内的一行只读汇总（按语种 × 文本类型 × 引擎）。
+function profileSummary(profile: PreferenceProfile | null, engines: EngineInfo[]): string {
+  if (!profile) return "";
+  return profile.cells
+    .map((cell) => {
+      const rows = cell.engines
+        .map((row) => {
+          const name =
+            engines.find((x) => x.id === row.engine_id)?.display_name ?? row.engine_id;
+          return `${name} 平均 ${row.average_score}（${row.score_count} 次）`;
+        })
+        .join("、");
+      return `${cell.language === "zh" ? "中文" : "英文"}·${
+        TEXT_TYPE_LABELS[cell.text_type] ?? cell.text_type
+      }：${rows}`;
+    })
+    .join("；");
+}
 
 export function CompareSection({
   baseUrl,
@@ -56,6 +75,7 @@ export function CompareSection({
       });
       setSession(data);
       setScores(Object.fromEntries(data.entries.map((e) => [e.label, e.score ?? 0])));
+      await refreshProfile();
     } catch (err) {
       setError(`创建对比失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -103,11 +123,6 @@ export function CompareSection({
       /* keep the last profile */
     }
   }
-
-  useEffect(() => {
-    void refreshProfile();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const allScored = !!session && session.scored;
   const canReveal = !!session && !allScored;
@@ -234,52 +249,18 @@ export function CompareSection({
               {session.failed.map((f) => `${f.engine_id}：${f.error}`).join("；")}
             </div>
           )}
+          <div className="pref-summary hint">
+            {profile && profile.cells.length > 0 ? (
+              <>
+                <strong>偏好画像（只读）：</strong>
+                {profileSummary(profile, engines)}。
+              </>
+            ) : (
+              "偏好画像（只读）：暂无评分数据。完成一次对比盲听并评分后，会在此按语种 × 文本类型 × 引擎汇总平均分与次数。它仅作参考，不改变默认引擎，也不参与任何自动路由。"
+            )}
+          </div>
         </div>
       )}
-
-      <div className="pref-block">
-        <div className="compare-head">
-          <strong>偏好画像</strong>
-          <button onClick={() => void refreshProfile()}>刷新</button>
-        </div>
-        <div className="hint">
-          只读统计：按语种与文本类型汇总你的盲听评分。它不改变默认引擎，也不参与任何自动路由。
-        </div>
-        {!profile || profile.cells.length === 0 ? (
-          <div className="hint">暂无评分数据。完成一次对比盲听并评分后，画像会出现在这里。</div>
-        ) : (
-          profile.cells.map((cell) => (
-            <div className="pref-cell" key={`${cell.language}-${cell.text_type}`}>
-              <div className="pref-cell-title">
-                {cell.language === "zh" ? "中文" : "英文"} ·{" "}
-                {TEXT_TYPE_LABELS[cell.text_type] ?? cell.text_type}
-              </div>
-              <table className="pref-table">
-                <thead>
-                  <tr>
-                    <th>引擎</th>
-                    <th>平均分</th>
-                    <th>评分次数</th>
-                    <th>5 分次数</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cell.engines.map((row) => (
-                    <tr key={row.engine_id}>
-                      <td>
-                        {engines.find((x) => x.id === row.engine_id)?.display_name ?? row.engine_id}
-                      </td>
-                      <td>{row.average_score}</td>
-                      <td>{row.score_count}</td>
-                      <td>{row.wins}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))
-        )}
-      </div>
     </div>
   );
 }

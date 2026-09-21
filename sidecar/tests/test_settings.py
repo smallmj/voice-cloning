@@ -39,7 +39,9 @@ def test_engines_expose_issue9_metadata(client):
     assert "汉字" in cloud["billing_note"]  # the Chinese unit-price rule
     assert "训练" in cloud["data_usage_note"]
     param_names = [p["name"] for p in cloud["params"]]
-    assert param_names == ["language"]  # canonical name; wire key is language_type (issue #23)
+    # canonical `language` (issue #23) + the issue #38 emotion DATA annotation
+    # (exposed=False, no-op): emotion is a text-embedded vendor convention.
+    assert param_names == ["language", "emotion"]
 
     fake = engines["fake"]
     assert fake["requires_key"] is False

@@ -31,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ..capabilities import Capabilities
+from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .cloud_base import CloudEngineError, voice_missing_error
 from .qwen_tts_cloud import BASE_URL, DashScopeEngine
@@ -78,6 +78,37 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
             api_closed_loop=True,
             max_chars_per_request=2000,  # same cap as the VC engine (issue #13)
         )
+
+    def param_specs(self) -> list[ParamSpec]:
+        # Issue #38 gap audit (docs/audit/issue-38-cloud-param-gap-audit.md):
+        # the qwen3-tts-vd synthesis request documents the same three input
+        # knobs as the VC model (text / voice / language_type). language_type
+        # is plausibly accepted for the vd model too, but it is NOT verified
+        # for this pinned version — per ADR-0018 an unverified parameter is
+        # declared as DATA (exposed=False + reason), never exposed on a
+        # guess. Verify once with a real key, wire it in synthesize, flip
+        # exposed.
+        return [
+            ParamSpec(
+                name="language",
+                label="发音语种",
+                kind="select",
+                default="auto",
+                choices=("auto", "Chinese", "English", "German", "Italian",
+                         "Portuguese", "Spanish", "Japanese", "Korean",
+                         "French", "Russian"),
+                layer="canonical",
+                wire_path="language_type",
+                exposed=False,
+                not_exposed_reason="unverified",
+                applies_to=AppliesTo(engine=self.engine_id, model=TARGET_MODEL, mode="cloning"),
+                to_wire=lambda v: v if v not in (None, "", "auto") else None,
+                help=(
+                    "VC 模型支持 language_type；vd 模型大概率同样支持但未实测——"
+                    "用真实 Key 验证一次后即可翻为 exposed"
+                ),
+            ),
+        ]
 
     # -- voice design ----------------------------------------------------------
 

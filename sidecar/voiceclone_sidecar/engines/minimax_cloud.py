@@ -167,7 +167,14 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             languages=("zh", "en", "ja", "ko", "fr", "de", "it", "es", "pt", "ru"),
             voice_cloning=True,
             voice_design=True,
-            pronunciation_control=False,  # pronunciation_dict exists but is not exposed yet
+            # pronunciation_dict exists upstream but the wire shape is NOT
+            # verifiable from the pinned research doc (it documents only
+            # pronunciation_dict.tone[] "原文/替换" entries; the inline
+            # `(chu3)(li3)` grammar of pronunciation.to_minimax has no cited
+            # vendor source) — issue #38 therefore declares it as DATA, not
+            # a claim. Flip pronunciation_control=True only after one real
+            # synthesis proves the wire shape.
+            pronunciation_control=False,
             emotion=True,
             commercial_license=True,  # integrated-application use is permitted by ToS
             cross_device_use=True,  # the voice lives in the cloud account
@@ -184,7 +191,37 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
 
     def param_specs(self) -> list[ParamSpec]:
         applies = AppliesTo(engine=self.engine_id, model=TARGET_MODEL, mode="cloning")
+        # Issue #38 gap audit (traceable checklist:
+        # docs/audit/issue-38-cloud-param-gap-audit.md): every t2a_v2 request
+        # field from docs/research/2026-09-minimax-api-and-local-tts.md is
+        # either exposed below or declared exposed=False with a reason from
+        # the ADR-0018 closed vocabulary. "不支持即数据" — nothing is left
+        # as an absence a reviewer has to remember.
         return [
+            # Issue #38 / code review: pronunciation_dict exists upstream,
+            # but the pinned research doc documents ONLY the
+            # `pronunciation_dict.tone[]` "原文/替换" shape — the inline
+            # `(chu3)(li3)` grammar of pronunciation.to_minimax has no cited
+            # vendor source, and ADR-0018 forbids exposing an unverified
+            # wire. Declared as DATA; expose after one real synthesis
+            # proves which wire shape the vendor accepts.
+            ParamSpec(
+                name="pronunciation",
+                label="发音标注（pronunciation_dict）",
+                kind="textarea",
+                max_length=2000,
+                exposed=False,
+                not_exposed_reason="unverified",
+                layer="canonical",
+                wire_path="pronunciation_dict.tone",
+                applies_to=applies,
+                to_wire=lambda value: value or "",
+                help=(
+                    "vendor 有发音词典（tone[]「原文/替换」，支持带调拼音/IPA/假名），"
+                    "但其确切 wire 形态未经真实合成验证——验证后即可按既有"
+                    "「汉字=拼音」规范块翻为 exposed"
+                ),
+            ),
             ParamSpec(
                 name="speed",
                 label="语速",
@@ -256,6 +293,160 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
                 help=(
                     "填写 MiniMax 系统音色 ID（如 male-qn-qingse）后本次生成直接使用该系统"
                     "音色，覆盖当前音色的云端绑定"
+                ),
+            ),
+            # -- issue #38: newly exposed gaps (verified against the t2a_v2
+            #    request schema; ranges verbatim from the vendor docs) -------
+            ParamSpec(
+                name="vol",
+                label="音量",
+                kind="number",
+                default=1.0,
+                min=0.0, max=10.0, step=0.1,
+                min_open=True,  # vendor range is the OPEN interval (0, 10]
+                unit="x",
+                layer="engine",
+                wire_path="voice_setting.vol",
+                applies_to=applies,
+                help="MiniMax voice_setting.vol，开区间 (0, 10]，1 为原始音量",
+            ),
+            ParamSpec(
+                name="pitch",
+                label="音调",
+                kind="number",
+                default=0,
+                min=-12.0, max=12.0, step=1.0,
+                integer=True,
+                unit="semitone",
+                layer="engine",
+                wire_path="voice_setting.pitch",
+                applies_to=applies,
+                help="MiniMax voice_setting.pitch，[-12, 12] 半音，0 为原调",
+            ),
+            ParamSpec(
+                name="latex_read",
+                label="朗读 LaTeX 公式",
+                kind="bool",
+                default=False,
+                layer="engine",
+                wire_path="voice_setting.latex_read",
+                applies_to=applies,
+                help="同步接口 voice_setting.latex_read；开启后文本中的 LaTeX 公式会被朗读",
+            ),
+            ParamSpec(
+                name="channel",
+                label="声道 audio_setting.channel",
+                kind="select",
+                exposed=False,
+                not_exposed_reason="breaks-pipeline",
+                layer="engine",
+                help=(
+                    "ADR-0018 决策 4：声道与采样率/格式同属管线固定的输出规格"
+                    "（峰值自检与分段拼接依赖 24 kHz 单声道 WAV），不可调"
+                ),
+            ),
+            # -- issue #38: documented-but-NOT-exposed fields ("不支持即数据") --
+            ParamSpec(
+                name="stream",
+                label="流式输出 stream",
+                kind="bool",
+                exposed=False,
+                not_exposed_reason="breaks-pipeline",
+                layer="engine",
+                help=(
+                    "vendor 支持 SSE 流式，但本应用管线消费整段 WAV 文件（峰值自检、"
+                    "历史播放、导出），流式分块无消费方，永不发送"
+                ),
+            ),
+            ParamSpec(
+                name="sample_rate",
+                label="采样率 audio_setting.sample_rate",
+                kind="number",
+                exposed=False,
+                not_exposed_reason="server-injected",
+                layer="engine",
+                help="管线固定请求 24000 Hz WAV（峰值自检与全引擎一致的输出规格），不可调",
+            ),
+            ParamSpec(
+                name="format",
+                label="音频格式 audio_setting.format",
+                kind="select",
+                exposed=False,
+                not_exposed_reason="breaks-pipeline",
+                layer="engine",
+                help="固定 wav：默认 mp3+hex 会破坏管线的 WAV 峰值自检（issue #27）",
+            ),
+            ParamSpec(
+                name="bitrate",
+                label="码率 audio_setting.bitrate",
+                kind="number",
+                exposed=False,
+                not_exposed_reason="breaks-pipeline",
+                layer="engine",
+                help="仅对压缩格式有意义；管线固定请求 WAV，无码率概念",
+            ),
+            ParamSpec(
+                name="force_cbr",
+                label="强制 CBR force_cbr",
+                kind="bool",
+                exposed=False,
+                not_exposed_reason="no-op",
+                layer="engine",
+                help="只影响 mp3 CBR/VBR；请求 wav 时该字段无效果",
+            ),
+            ParamSpec(
+                name="output_format",
+                label="响应格式 output_format",
+                kind="select",
+                exposed=False,
+                not_exposed_reason="server-injected",
+                layer="engine",
+                help="引擎固定请求 url（默认 hex 会破坏管线下载路径；issue #27）",
+            ),
+            ParamSpec(
+                name="subtitle_enable",
+                label="字幕 subtitle_enable/subtitle_type",
+                kind="bool",
+                exposed=False,
+                not_exposed_reason="no-op",
+                layer="engine",
+                help="vendor 可返回句/词级字幕文件，但本应用只消费音频，字幕无消费方",
+            ),
+            ParamSpec(
+                name="timbre_weights",
+                label="音色混合 timbre_weights",
+                kind="text",
+                exposed=False,
+                not_exposed_reason="unverified",
+                layer="engine",
+                help=(
+                    "vendor 标记的 legacy 字段（≤4 个 {voice_id, weight[1,100]}）；与复刻"
+                    "音色绑定的实际效果未实测，验证后可翻 exposed"
+                ),
+            ),
+            ParamSpec(
+                name="voice_modify",
+                label="音色修饰 voice_modify",
+                kind="text",
+                exposed=False,
+                not_exposed_reason="unverified",
+                layer="engine",
+                help=(
+                    "pitch/intensity/timbre 各 [-100,100] + sound_effects（四选一）；文档"
+                    "存在但对复刻音色的效果未实测，且 pitch 与 voice_setting.pitch 语义"
+                    "重叠，验证后再决定暴露哪个"
+                ),
+            ),
+            ParamSpec(
+                name="text_normalization",
+                label="文本规范化 voice_setting.text_normalization",
+                kind="bool",
+                exposed=False,
+                not_exposed_reason="unverified",
+                layer="engine",
+                help=(
+                    "同步接口字段，与异步接口顶层的 english_normalization 语义重叠；"
+                    "实际效果未实测（长文本路由才是本应用的主路径，已暴露）"
                 ),
             ),
         ]
@@ -492,6 +683,35 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
         speed = params.get("speed")
         if speed not in (None, ""):
             voice_setting["speed"] = float(speed)
+        # vol: vendor range is the open interval (0, 10]; the default 1.0 is
+        # NOT sent (the vendor default is 1 — user-visible default, not a
+        # wire key). An unknown/garbage value is dropped, never forwarded.
+        vol = params.get("vol")
+        if vol not in (None, ""):
+            try:
+                vol_f = float(vol)
+            except (TypeError, ValueError):
+                vol_f = None
+            if vol_f is not None and 0 < vol_f <= 10 and vol_f != 1.0:
+                voice_setting["vol"] = vol_f
+        # pitch: [-12, 12] semitones; 0 (default) is not sent.
+        pitch = params.get("pitch")
+        if pitch not in (None, ""):
+            try:
+                pitch_i = int(pitch)
+            except (TypeError, ValueError):
+                pitch_i = None
+            if pitch_i is not None and -12 <= pitch_i <= 12 and pitch_i != 0:
+                voice_setting["pitch"] = pitch_i
+        # latex_read: sync voice_setting only — the async request schema in
+        # the research doc does not list it, and inventing a wire key for the
+        # async route would be an unverified claim (issue #38).
+        latex_read = params.get("latex_read")
+        if (latex_read is True or str(latex_read).strip().lower() == "true") \
+                and len(text) <= SYNC_CHAR_LIMIT:
+            voice_setting["latex_read"] = True
+        # channel: ADR-0018 decision 4 — the pipeline pins 24 kHz mono WAV
+        # (peak self-check, segmented concat); the field is never sent.
         # "auto" means DO NOT SEND (ADR-0018: what the user sees is not what
         # the engine receives). The value must also be a vendor-legal enum
         # member — an unknown value is dropped, never forwarded blindly.
@@ -585,18 +805,20 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
                 "或在引擎参数中填写系统音色 ID"
             )
 
-        log(f"cloud: 调用 {model} 合成 {len(request.text)} 字符…")
-        if len(request.text) > SYNC_CHAR_LIMIT:
+        text = request.text
+
+        log(f"cloud: 调用 {model} 合成 {len(text)} 字符…")
+        if len(text) > SYNC_CHAR_LIMIT:
             log("cloud: 长文本走异步接口（绕开大陆 20 RPM 限制）…")
-            data = self._synthesize_async(model, request.text, voice_id, params, log)
+            data = self._synthesize_async(model, text, voice_id, params, log)
             extra_info = {}
         else:
-            data, extra_info = self._synthesize_sync(model, request.text, voice_id, params, log)
+            data, extra_info = self._synthesize_sync(model, text, voice_id, params, log)
 
         path, sample_rate = self._write_wav(data, request.generation_id)
 
         usage = extra_info.get("usage_characters")
-        billed = int(usage) if usage else len(request.text)
+        billed = int(usage) if usage else len(text)
         cost = round(billed / 1_000_000 * PRICES_PER_M_CHARS[model], 6)
 
         log(

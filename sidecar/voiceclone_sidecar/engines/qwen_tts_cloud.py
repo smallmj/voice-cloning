@@ -163,6 +163,26 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
                 to_wire=to_wire,
                 help="建议与文本语种一致以获得自然发音；auto 时不向引擎发送该参数",
             ),
+            # Issue #38 gap audit (docs/audit/issue-38-cloud-param-gap-audit.md):
+            # the qwen3-tts synthesis request has exactly three input knobs —
+            # text / voice / language_type — so besides `language` above there
+            # are no unexposed API parameters. Emotion exists only as
+            # text-embedded tags, which is a text convention, not a wire
+            # parameter; it is declared here as data so the audit is visible
+            # in the UI instead of living in a reviewer's memory.
+            ParamSpec(
+                name="emotion",
+                label="情感",
+                kind="select",
+                exposed=False,
+                not_exposed_reason="no-op",
+                layer="engine",
+                applies_to=AppliesTo(engine=self.engine_id, model=TARGET_MODEL, mode="cloning"),
+                help=(
+                    "qwen3-tts 没有情感 API 参数：情感通过在文本中直接嵌入情感标签/情感词"
+                    "表达，把情绪描述写进文本即可"
+                ),
+            ),
         ]
 
     # -- transcription (issue #33) ---------------------------------------------

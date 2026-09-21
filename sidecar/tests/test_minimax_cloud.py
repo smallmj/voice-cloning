@@ -484,3 +484,127 @@ def test_disclosure_note_names_the_tos_language():
     engine = MiniMaxCloudEngine(key_store=KeyStore(backend=MemoryBackend()))
     assert "改进算法" in engine.data_usage_note
     assert "实名" in engine.data_usage_note  # 2038 limitation is disclosed too
+
+
+# --- issue #38: parameter gap audit -----------------------------------------
+
+
+def sync_harness(tmp_path):
+    return Harness([
+        httpx.Response(200, json={"data": {"audio": make_wav_bytes(0.1).hex()}, **ok_base()}),
+    ], output_dir=tmp_path)
+
+
+def test_vol_pitch_wire_into_payload(tmp_path):
+    harness = sync_harness(tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "vol": 2.5, "pitch": -3,
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert body["voice_setting"]["vol"] == 2.5
+    assert body["voice_setting"]["pitch"] == -3
+
+
+def test_param_defaults_are_never_sent(tmp_path):
+    # The vendor defaults (vol=1, pitch=0, mono, latex_read off) must not
+    # become wire keys: what the user sees as default is not what the
+    # engine receives (ADR-0018).
+    harness = sync_harness(tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "vol": 1.0, "pitch": 0, "latex_read": False,
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert "vol" not in body["voice_setting"]
+    assert "pitch" not in body["voice_setting"]
+    assert "latex_read" not in body["voice_setting"]
+
+
+def test_out_of_range_vol_and_pitch_are_dropped(tmp_path):
+    # Vendor range (0, 10] / [-12, 12]: an illegal value is dropped, never
+    # forwarded blindly (same rule as unknown emotion values).
+    harness = sync_harness(tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "vol": 0, "pitch": 13,
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert "vol" not in body["voice_setting"]
+    assert "pitch" not in body["voice_setting"]
+
+
+def test_latex_read_is_sync_only(monkeypatch, tmp_path):
+    # latex_read is documented in the SYNC voice_setting; the async request
+    # schema does not list it — sending it there would be an unverified
+    # claim (issue #38), so the long-text route must not carry it.
+    monkeypatch.setattr("voiceclone_sidecar.engines.minimax_cloud.ASYNC_POLL_SECONDS", 0.0)
+    harness = Harness([
+        httpx.Response(200, json={"task_id": "t-5", **ok_base()}),
+        httpx.Response(200, json={"task_id": "t-5", "status": "success",
+                                  "file_id": 7, **ok_base()}),
+        httpx.Response(200, json={"file": {"download_url": "https://cdn/w"}, **ok_base()}),
+        httpx.Response(200, content=make_wav_bytes(0.2)),
+    ], output_dir=tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="字" * 3000, params={
+            "voice_id": "v", "latex_read": True,
+        }),
+        lambda m: None,
+    )
+    body = json.loads(harness.requests[0].content)
+    assert "latex_read" not in body["voice_setting"]
+
+
+def test_param_specs_cover_the_documented_request_surface():
+    # The traceable gap checklist (issue #38): every t2a_v2 request field
+    # from docs/research/2026-09-minimax-api-and-local-tts.md is either
+    # exposed or declared exposed=False with an ADR-0018 reason. No absence
+    # a reviewer has to remember.
+    engine = MiniMaxCloudEngine(key_store=KeyStore(backend=MemoryBackend()))
+    specs = {s.name: s for s in engine.param_specs()}
+    # pronunciation_dict is real but unverified wire-wise (issue #38 review):
+    # declared as DATA, capability stays False until one synthesis proves it.
+    assert engine.capabilities().pronunciation_control is False
+    assert specs["pronunciation"].exposed is False
+    assert specs["pronunciation"].not_exposed_reason == "unverified"
+    for name in ("speed", "vol", "pitch", "latex_read", "emotion",
+                 "language_boost", "model"):
+        assert specs[name].exposed, name
+        assert specs[name].applies_to is not None
+    # Documented-but-not-exposed fields, each with its closed-vocabulary reason.
+    expected_hidden = {
+        "stream": "breaks-pipeline",
+        "sample_rate": "server-injected",
+        "format": "breaks-pipeline",
+        "bitrate": "breaks-pipeline",
+        "force_cbr": "no-op",
+        "output_format": "server-injected",
+        "subtitle_enable": "no-op",
+        "timbre_weights": "unverified",
+        "voice_modify": "unverified",
+        "text_normalization": "unverified",
+    }
+    for name, reason in expected_hidden.items():
+        assert specs[name].exposed is False, name
+        assert specs[name].not_exposed_reason == reason, name
+
+
+def test_channel_is_never_sent_even_if_requested(tmp_path):
+    # ADR-0018 decision 4: channel/采样率/格式 are pipeline-pinned (24 kHz
+    # mono WAV for the peak self-check) — never-exposed, never-sent, even
+    # if a stale param memory still carries a value.
+    harness = sync_harness(tmp_path)
+    harness.engine.synthesize(
+        GenerationRequest(generation_id="g1", text="hi", params={
+            "voice_id": "v", "channel": "stereo",
+        }),
+        lambda m: None,
+    )
+    assert "channel" not in json.loads(harness.requests[0].content)["audio_setting"]

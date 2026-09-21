@@ -212,6 +212,13 @@
       "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）；兼任真实云端转写提供方（issue #33，qwen3-asr-flash，同密钥）。",
       "evidence": [
         {
+          "field": "参数缺口核对（issue #38）",
+          "value": "合成请求仅 text/voice/language_type 三个旋钮：language 已暴露（11 取值=10 语种+Auto，与厂商枚举一致）；情感为文本内嵌标签而非 API 参数，已数据化披露（exposed=False, no-op）。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+          "verification": "verified",
+          "source": "Qwen-TTS API 请求 schema（docs/research/cloud-api/2026-09-16_中国大陆云端API.md）；engines/qwen_tts_cloud.py param_specs",
+          "date": "2026-09-21"
+        },
+        {
           "field": "计费",
           "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费；1 万字符免费额度（90 天）",
           "verification": "verified",
@@ -272,6 +279,13 @@
       "kind": "cloud",
       "role": "BYOK 云端音色设计档（文字描述造音色，无需参考音频）。",
       "evidence": [
+        {
+          "field": "参数缺口核对（issue #38）",
+          "value": "与 vc 同构（text/voice/language_type）：language_type 未实测，按 ADR-0018 数据化（exposed=False, unverified），真实 Key 验证后翻 exposed。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+          "verification": "verified",
+          "source": "Qwen-TTS API 请求 schema；engines/qwen_tts_vd_cloud.py param_specs",
+          "date": "2026-09-21"
+        },
         {
           "field": "音色设计",
           "value": "支持（描述 → 音色，preview sample 即参考样本，ADR-0010）",
@@ -390,6 +404,13 @@
       "kind": "cloud",
       "role": "BYOK 云端复刻/设计档（ADR-0003：永远 BYOK，不内嵌平台 Key）；国际 .io 与大陆 .cn 两区两套账号额度，区域为引擎级 base URL 配置。",
       "evidence": [
+        {
+          "field": "参数缺口核对（issue #38）",
+          "value": "t2a_v2/async 请求面全量声明：vol/pitch/latex_read 本次补齐暴露；channel（ADR-0018 决策 4）与 pronunciation_dict（wire 形态未验证）经 code review 回退为 not_exposed 数据；stream/format/bitrate=breaks-pipeline、sample_rate/output_format=server-injected、force_cbr/subtitle=no-op、timbre_weights/voice_modify/text_normalization=unverified。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+          "verification": "verified",
+          "source": "t2a_v2 请求 schema（docs/research/2026-09-minimax-api-and-local-tts.md）；engines/minimax_cloud.py param_specs",
+          "date": "2026-09-21"
+        },
         {
           "field": "计费",
           "value": "speech-2.8-hd $100/百万字符、speech-2.8-turbo $60/百万字符；复刻 $1.5/音色（首次真实合成时收取，本应用复刻后立即合成激活语，费用在创建音色时产生）；音色设计 $3/音色",

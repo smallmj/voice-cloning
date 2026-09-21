@@ -180,3 +180,20 @@ def test_check_voice_unrelated_failure_raises():
     )
     with pytest.raises(CloudEngineError, match="健康检查"):
         harness.engine.check_voice("vd-abc", lambda m: None)
+
+
+# --- issue #38: parameter gap audit -----------------------------------------
+
+
+def test_language_is_declared_but_not_exposed_until_verified():
+    # The qwen3-tts-vd request schema has the same three input knobs as the
+    # VC model (text / voice / language_type), but language_type is not
+    # verified for the pinned vd version — per ADR-0018 an unverified
+    # parameter is DATA (exposed=False + reason), never exposed on a guess.
+    specs = Qwen3TtsVdCloudEngine(key_store=KeyStore(backend=MemoryBackend())).param_specs()
+    assert [s.name for s in specs] == ["language"]
+    spec = specs[0]
+    assert spec.exposed is False
+    assert spec.not_exposed_reason == "unverified"
+    assert spec.to_wire("English") == "English"
+    assert spec.to_wire("auto") is None

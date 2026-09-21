@@ -209,13 +209,18 @@ def test_param_specs_drive_the_ui_contract():
     specs = Qwen3TtsVcCloudEngine().param_specs()
     # Issue #23 / ADR-0018: the canonical name is `language`; the wire key
     # stays the vendor's `language_type`, and "auto" maps to "send nothing".
-    assert [s.to_dict()["name"] for s in specs] == ["language"]
+    # Issue #38: emotion is declared as DATA (exposed=False, reason no-op) —
+    # the vendor expresses emotion via text-embedded tags, not an API param.
+    assert [s.to_dict()["name"] for s in specs] == ["language", "emotion"]
     spec = specs[0]
     assert spec.to_dict()["choices"][0] == "auto"
     assert spec.to_dict()["wire_path"] == "language_type"
     assert spec.to_dict()["layer"] == "canonical"
     assert spec.to_wire("auto") is None
     assert spec.to_wire("Japanese") == "Japanese"
+    emotion = specs[1]
+    assert emotion.to_dict()["exposed"] is False
+    assert emotion.to_dict()["not_exposed_reason"] == "no-op"
 
 
 # --- voice health check (issue #12) -----------------------------------------

@@ -3,8 +3,9 @@
 // extraResource (issue #29: uv must ship with the app, referenced by
 // absolute path — never resolved from PATH at launch time).
 //
-// UV_VERSION here MUST stay in sync with
-// sidecar/voiceclone_sidecar/runtime/uvman.py (both reference issue #29).
+// UV_VERSION + UV_SHA256 here MUST stay in sync with
+// sidecar/voiceclone_sidecar/runtime/uvman.py (both reference issue #29;
+// app/tests/version-sync.test.mjs enforces the version half).
 //
 // Usage: node scripts/fetch-uv.mjs [darwin-arm64 darwin-x64 win32-x64 ...]
 //        (no args = current platform+arch)
@@ -14,12 +15,24 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { createHash } from "crypto";
 import * as path from "path";
-import * as os from "os";
 import { execFileSync } from "child_process";
 
 const UV_VERSION = "0.12.10";
 const BASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
-const MIRROR_ENV = "VOICECLONE_UV_DOWNLOAD_URL"; // str.format(path=) template
+// Same semantics as uvman.py: the env var is a FULL URL of the archive (not
+// a {path} template). Mirrors must serve the exact pinned archive.
+const MIRROR_ENV = "VOICECLONE_UV_DOWNLOAD_URL";
+// Official sha256 digests of uv-<triple>.tar.gz for UV_VERSION (from
+// astral-sh/versions uv.ndjson). Every download is verified against these —
+// a tampered or mis-mirrored archive fails the fetch.
+const UV_SHA256 = {
+  "aarch64-apple-darwin": "51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179",
+  "x86_64-apple-darwin": "5296d5aa2b9143360405eea866f8ef4d5dc8986b164eb0dc35e8f876a9304d30",
+  "x86_64-pc-windows-msvc": "f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2",
+  "aarch64-pc-windows-msvc": "ee985c51c0c9c1f82267a5d80f959b34a7ff888c109182bd3b2b35c4661bbcde",
+  "x86_64-unknown-linux-gnu": "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b",
+  "aarch64-unknown-linux-gnu": "9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e",
+};
 
 const MACHINES = { arm64: "aarch64", x64: "x86_64" };
 const OSES = {
@@ -70,13 +83,19 @@ async function fetchUv(target) {
   mkdirSync(outDir, { recursive: true });
   const archiveName = `uv-${triple}.tar.gz`;
   const archive = path.join(outDir, archiveName);
-  const template = process.env[MIRROR_ENV];
-  const urls = template
-    ? [template.replace("{path}", archiveName), `${BASE}/${archiveName}`]
-    : [`${BASE}/${archiveName}`];
+  const mirror = process.env[MIRROR_ENV];
+  const urls = mirror ? [mirror, `${BASE}/${archiveName}`] : [`${BASE}/${archiveName}`];
   await download(urls, archive);
   const hash = createHash("sha256").update(await readFile(archive)).digest("hex");
-  console.log(`  sha256 ${hash}`);
+  const expected = UV_SHA256[triple];
+  if (!expected) throw new Error(`no pinned sha256 for ${triple}; add it to UV_SHA256`);
+  if (hash !== expected) {
+    execFileSync("rm", ["-f", archive]);
+    throw new Error(
+      `sha256 mismatch for ${archiveName}: got ${hash}, expected ${expected} (mirror serving a tampered or wrong archive?)`,
+    );
+  }
+  console.log(`  sha256 verified ${hash}`);
   // Extract just the uv binary from the tar.gz.
   const tmp = path.join(outDir, "_extract");
   mkdirSync(tmp, { recursive: true });

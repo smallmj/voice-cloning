@@ -28,6 +28,10 @@
         "voiceclone_sidecar/**/*",
         "pyproject.toml",
         "uv.lock",
+        // Read-only seed data (capability matrix). Mutable runtime state
+        // (venvs, downloads, user data) is redirected to userData via
+        // VOICECLONE_RUNTIME_ROOT / UV_PROJECT_ENVIRONMENT in main.ts —
+        // nothing may write inside the signed bundle.
         "data/**/*",
       ],
     },

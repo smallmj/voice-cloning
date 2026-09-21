@@ -73,26 +73,14 @@ function runtimeDir(): string {
 function bundledUvPath(): string | null {
   // Absolute path to the pinned uv binary fetched by scripts/fetch-uv.mjs
   // (same UV_VERSION pin as sidecar/voiceclone_sidecar/runtime/uvman.py).
-  const triple =
-    (process.arch === "arm64" ? "aarch64" : "x86_64") +
-    "-" +
-    (process.platform === "darwin"
-      ? "apple-darwin"
-      : process.platform === "win32"
-        ? "pc-windows-msvc"
-        : "unknown-linux-gnu");
   const exe = process.platform === "win32" ? "uv.exe" : "uv";
-  const candidates = [
-    path.join(resourcesDir(), "uv", `${process.platform}-${process.arch}`, exe),
-    path.join(resourcesDir(), "uv", triple, exe),
-    path.join(resourcesDir(), "bin", exe),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch {
-      // unreachable in practice; fall through
-    }
+  // Layout produced by scripts/fetch-uv.mjs and wired via
+  // electron-builder extraResources: Resources/uv/<platform>-<arch>/uv.
+  const candidate = path.join(resourcesDir(), "uv", `${process.platform}-${process.arch}`, exe);
+  try {
+    if (fs.existsSync(candidate)) return candidate;
+  } catch {
+    // unreachable in practice; fall through
   }
   return null;
 }
@@ -220,8 +208,11 @@ ipcMain.handle("sidecar:info", async () => waitForSidecar());
 app.whenReady().then(() => {
   if (gotLock) {
     startSidecar();
+    createWindow();
+  } else {
+    // Another instance owns the sidecar; quit without flashing a window.
+    app.quit();
   }
-  createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

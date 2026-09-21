@@ -8,7 +8,7 @@ unreproducible and GitHub-dependent (plan §3: GitHub unavailable in CN).
 
 from __future__ import annotations
 
-import builtins
+import os
 import sys
 from pathlib import Path
 
@@ -17,9 +17,8 @@ from voiceclone_sidecar.runtime import uvman
 
 def _without_os_uname(monkeypatch):
     """Simulate a platform without os.uname (i.e. Windows)."""
-    saved = getattr(__import__("os"), "uname", None)
-    if saved is not None:
-        monkeypatch.delattr(__import__("os"), "uname")
+    if hasattr(os, "uname"):
+        monkeypatch.delattr(os, "uname")
 
 
 def test_uv_triple_windows_does_not_touch_os_uname(monkeypatch):

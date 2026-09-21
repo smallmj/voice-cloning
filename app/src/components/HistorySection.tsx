@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { EngineInfo, GenerationListResult, GenerationRecord } from "../api";
+import type { EngineInfo, GenerationBatchDeleteResult, GenerationListResult, GenerationRecord } from "../api";
 import { authHeaders } from "../client";
 import { fmtCost, fmtDuration, fmtTime } from "../ui";
 
@@ -28,6 +28,15 @@ export function HistorySection({
   const [data, setData] = useState<GenerationListResult | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Issue #39: batch selection. Two modes — an explicit set of checked ids
+  // (persists across pages), or "select all matching the current filter",
+  // tracked as an exclusion set so paging never changes the scope silently.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [allMatching, setAllMatching] = useState(false);
+  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+  const [localRefresh, setLocalRefresh] = useState(0);
 
   // Debounce the search box so typing doesn't hammer the sidecar.
   useEffect(() => {
@@ -37,6 +46,13 @@ export function HistorySection({
 
   useEffect(() => {
     setOffset(0);
+  }, [debounced, status, engineFilter]);
+
+  // Changing the filter changes what "全选当前筛选结果" means — leave
+  // select-all mode, but keep explicitly checked records (with a hint).
+  useEffect(() => {
+    setAllMatching(false);
+    setDeselected(new Set());
   }, [debounced, status, engineFilter]);
 
   useEffect(() => {
@@ -65,7 +81,40 @@ export function HistorySection({
       }
     })();
     return () => controller.abort();
-  }, [baseUrl, token, debounced, status, engineFilter, offset, refreshKey]);
+  }, [baseUrl, token, debounced, status, engineFilter, offset, refreshKey, localRefresh]);
+
+  function isChecked(id: string): boolean {
+    return allMatching ? !deselected.has(id) : selected.has(id);
+  }
+
+  function toggle(id: string) {
+    if (allMatching) {
+      setDeselected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      return;
+    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllMatching() {
+    setAllMatching(true);
+    setDeselected(new Set());
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    setAllMatching(false);
+    setDeselected(new Set());
+  }
 
   async function remove(id: string) {
     if (!window.confirm("删除该生成记录？其音频文件也会被一并删除。")) return;
@@ -78,11 +127,50 @@ export function HistorySection({
       return;
     }
     setDetailId((prev) => (prev === id ? null : prev));
-    setData((prev) =>
-      prev
-        ? { records: prev.records.filter((r) => r.id !== id), total: prev.total - 1 }
-        : prev,
+    setLocalRefresh((n) => n + 1);
+  }
+
+  const filterCount = data?.total ?? 0;
+  const batchCount = allMatching
+    ? Math.max(0, filterCount - deselected.size)
+    : selected.size;
+
+  async function batchRemove() {
+    const target = allMatching ? "当前筛选结果" : "已选记录";
+    if (
+      !window.confirm(
+        `删除${target}中的 ${batchCount} 条生成记录？对应音频文件也会被一并删除。`,
+      )
+    ) {
+      return;
+    }
+    const body = allMatching
+      ? {
+          all_matching: true,
+          q: debounced.trim(),
+          status: status || undefined,
+          engine_id: engineFilter || undefined,
+          exclude: [...deselected],
+        }
+      : { ids: [...selected] };
+    const res = await fetch(`${baseUrl}/generations/batch-delete`, {
+      method: "POST",
+      headers: authHeaders(token, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      setError(`批量删除失败（HTTP ${res.status}）`);
+      return;
+    }
+    const result = (await res.json()) as GenerationBatchDeleteResult;
+    setNotice(
+      result.missing.length > 0
+        ? `已删除 ${result.count} 条记录（${result.missing.length} 条此前已不存在）。`
+        : `已删除 ${result.count} 条记录及对应音频文件。`,
     );
+    clearSelection();
+    setDetailId(null);
+    setLocalRefresh((n) => n + 1);
   }
 
   const total = data?.total ?? 0;
@@ -113,7 +201,36 @@ export function HistorySection({
           <option value="failed">失败</option>
         </select>
       </div>
+      {total > 0 && (
+        <div className="history-batchbar">
+          <button className="ghost" onClick={selectAllMatching} disabled={allMatching}>
+            全选当前筛选结果（{filterCount} 条）
+          </button>
+          <button
+            className="danger"
+            disabled={batchCount === 0}
+            onClick={() => void batchRemove()}
+          >
+            批量删除{batchCount > 0 ? `（${batchCount} 条）` : ""}
+          </button>
+          {(selected.size > 0 || allMatching) && (
+            <button className="ghost" onClick={clearSelection}>
+              清除选择
+            </button>
+          )}
+          {allMatching ? (
+            <span className="hint">
+              已按当前筛选全选，翻页范围不变；取消勾选任意条目将从本次删除中排除。
+            </span>
+          ) : selected.size > 0 ? (
+            <span className="hint">
+              已选 {selected.size} 条（跨页保留，可能包含其他筛选下的记录）。
+            </span>
+          ) : null}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
+      {notice && <div className="hint">{notice}</div>}
       {!data ? (
         <div className="hint">加载中…</div>
       ) : total === 0 ? (
@@ -123,6 +240,13 @@ export function HistorySection({
           {data.records.map((rec) => (
             <div key={rec.id} className={`history-item history-${rec.status}`}>
               <div className="history-row">
+                <label className="history-select">
+                  <input
+                    type="checkbox"
+                    checked={isChecked(rec.id)}
+                    onChange={() => toggle(rec.id)}
+                  />
+                </label>
                 <span className="history-time">{fmtTime(rec.created_at)}</span>
                 <span className={`badge ${rec.status === "succeeded" ? "badge-on" : "badge-off"}`}>
                   {rec.status === "succeeded" ? "成功" : rec.status === "failed" ? "失败" : "进行中"}

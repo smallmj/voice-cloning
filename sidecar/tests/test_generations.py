@@ -88,6 +88,43 @@ def test_store_delete_removes_record_and_audio_file(tmp_path):
     assert not (tmp_path / "generations.json.tmp").exists()
 
 
+def test_store_delete_many_batch_reuses_unlink_and_reports_missing(tmp_path):
+    """Issue #39: batch delete removes each record + its audio file; a
+    pre-deleted / missing file is not an error and an unknown id lands in
+    ``missing`` instead of aborting the batch."""
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    wav1 = audio_dir / "g1.wav"
+    _write_wav(wav1)
+    store = GenerationStore(tmp_path, audio_dir)
+    store.persist(_record("g1"))
+    store.persist(_record("g2"))
+    store.persist(_record("g3"))  # its file never existed on disk
+    (audio_dir / "g3.wav").unlink(missing_ok=True)
+
+    result = store.delete_many(["g1", "g2", "g3", "no-such-id"])
+
+    assert result["deleted"] == ["g1", "g2", "g3"]
+    assert result["missing"] == ["no-such-id"]
+    assert store.get("g1") is None and store.get("g2") is None and store.get("g3") is None
+    assert not wav1.exists()
+
+
+def test_store_delete_matching_uses_filters_and_exclude(tmp_path):
+    store = GenerationStore(tmp_path, tmp_path / "audio")
+    store.persist(_record("a1", text="关于春天的广播稿"))
+    store.persist(_record("a2", text="关于秋天的广播稿"))
+    store.persist(_record("a3", text="spring special", engine_id="other"))
+    store.persist(_record("a4", text="关于冬天的广播稿", status="failed"))
+
+    deleted = store.delete_matching(q="关于")
+    assert sorted(deleted) == ["a1", "a2", "a4"]
+    assert store.get("a3") is not None
+
+    assert store.delete_matching(engine_id="other", exclude=["excluded"]) == ["a3"]
+    assert store.get("a3") is None
+
+
 def test_torn_legacy_index_fails_loudly(tmp_path):
     """ADR-0017 kills "parse-failure = empty library": a corrupt legacy JSON
     index aborts the migration loudly instead of degrading to empty history."""
@@ -156,6 +193,45 @@ def test_delete_generation_removes_record_and_audio_file(client, sidecar):
 
 def test_delete_missing_generation_is_404(client):
     assert client.delete("/generations/no-such-id").status_code == 404
+
+
+def test_batch_delete_by_ids_reports_missing_and_tolerates_lost_files(client, sidecar):
+    """Issue #39 contract: explicit-id batch delete, empty selection rejected,
+    missing ids reported, audio files removed with their rows."""
+    created = [
+        client.post("/generations", json={"engine_id": "fake", "text": f"批量删除测试{i}"}).json()
+        for i in range(3)
+    ]
+    r = client.post("/generations/batch-delete", json={"ids": [c["id"] for c in created] + ["no-such-id"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3
+    assert sorted(body["deleted"]) == sorted(c["id"] for c in created)
+    assert body["missing"] == ["no-such-id"]
+    for c in created:
+        assert client.get(f"/generations/{c['id']}").status_code == 404
+        assert client.get(c["audio_url"]).status_code == 404
+
+
+def test_batch_delete_empty_selection_is_422(client):
+    assert client.post("/generations/batch-delete", json={"ids": []}).status_code == 422
+    assert client.post("/generations/batch-delete", json={}).status_code == 422
+    assert client.post("/generations/batch-delete", json={"ids": ["", 1]}).status_code == 422
+
+
+def test_batch_delete_all_matching_with_exclude(client):
+    keep = client.post("/generations", json={"engine_id": "fake", "text": "排除专用保留XYZZY"}).json()
+    drop = client.post("/generations", json={"engine_id": "fake", "text": "筛选全选专用XYZZY"}).json()
+    r = client.post(
+        "/generations/batch-delete",
+        json={"all_matching": True, "q": "XYZZY", "exclude": [keep["id"]]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert drop["id"] in body["deleted"]
+    assert keep["id"] not in body["deleted"]
+    assert client.get(f"/generations/{keep['id']}").status_code == 200
+    assert client.get(f"/generations/{drop['id']}").status_code == 404
 
 
 def test_failed_generation_is_recorded(client, sidecar):

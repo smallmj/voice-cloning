@@ -139,6 +139,12 @@ export interface GenerationListResult {
   total: number;
 }
 
+export interface GenerationBatchDeleteResult {
+  deleted: string[];
+  missing: string[];
+  count: number;
+}
+
 export interface NormalizeResult {
   normalized: string;
   changed: boolean;

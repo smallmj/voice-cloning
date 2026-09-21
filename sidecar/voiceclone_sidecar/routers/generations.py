@@ -89,6 +89,32 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise HTTPException(status_code=404, detail="generation not found") from None
         return {"deleted": generation_id}
 
+    @router.post("/generations/batch-delete", dependencies=[Depends(ctx.require_auth)])
+    async def batch_delete_generations(body: dict) -> dict:
+        """Batch delete (issue #39). Either an explicit ``ids`` list, or
+        ``all_matching: true`` with the same filter knobs as GET /generations
+        (plus ``exclude`` for records the user unchecked). Each deleted record
+        takes its audio file with it; missing ids / pre-deleted files are not
+        errors."""
+        if body.get("all_matching"):
+            deleted = generation_store.delete_matching(
+                q=str(body.get("q") or ""),
+                engine_id=body.get("engine_id") or None,
+                voice_id=body.get("voice_id") or None,
+                status=body.get("status") or None,
+                exclude=body.get("exclude") if isinstance(body.get("exclude"), list) else None,
+            )
+            return {"deleted": deleted, "missing": [], "count": len(deleted)}
+        ids = body.get("ids")
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or not all(isinstance(i, str) and i for i in ids)
+        ):
+            raise HTTPException(status_code=422, detail="ids must be a non-empty list of strings")
+        result = generation_store.delete_many(ids)
+        return {"deleted": result["deleted"], "missing": result["missing"], "count": len(result["deleted"])}
+
     @router.get("/audio/{filename}", dependencies=[Depends(ctx.require_media_auth)])
     async def audio(filename: str) -> FileResponse:
         path = (audio_dir / filename).resolve()

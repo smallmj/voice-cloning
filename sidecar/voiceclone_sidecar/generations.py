@@ -71,16 +71,14 @@ class GenerationStore:
     def get(self, generation_id: str) -> dict | None:
         return self._db.get_payload(T_GENERATIONS, generation_id)
 
-    def list(
+    def _filter_where(
         self,
         q: str = "",
         engine_id: str | None = None,
         voice_id: str | None = None,
         status: str | None = None,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> dict:
-        """Search + filter + paginate in SQL. ``q`` matches text, voice name or id."""
+    ) -> tuple[str, list]:
+        """Shared WHERE clause for list() and delete_matching() (issue #39)."""
         where: list[str] = []
         params: list = []
         needle = q.strip().lower()
@@ -100,6 +98,19 @@ class GenerationStore:
             where.append("status = ?")
             params.append(status)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
+        return clause, params
+
+    def list(
+        self,
+        q: str = "",
+        engine_id: str | None = None,
+        voice_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        """Search + filter + paginate in SQL. ``q`` matches text, voice name or id."""
+        clause, params = self._filter_where(q, engine_id, voice_id, status)
         total = self._db.execute(
             f"SELECT COUNT(*) AS n FROM {T_GENERATIONS} {clause}", tuple(params)
         ).fetchone()["n"]
@@ -119,6 +130,39 @@ class GenerationStore:
         if audio_name:
             with contextlib.suppress(OSError):
                 (self.audio_dir / audio_name).unlink()
+
+    def delete_many(self, generation_ids: list[str]) -> dict:
+        """Batch delete (issue #39). Reuses the single-delete path so each
+        record's audio artifact is unlinked with it; a file already removed
+        externally is not an error (unlink failures are suppressed), and an
+        unknown id is reported in ``missing`` instead of aborting the batch."""
+        deleted: list[str] = []
+        missing: list[str] = []
+        for generation_id in generation_ids:
+            try:
+                self.delete(generation_id)
+                deleted.append(generation_id)
+            except KeyError:
+                missing.append(generation_id)
+        return {"deleted": deleted, "missing": missing}
+
+    def delete_matching(
+        self,
+        q: str = "",
+        engine_id: str | None = None,
+        voice_id: str | None = None,
+        status: str | None = None,
+        exclude: list[str] | None = None,
+    ) -> list[str]:
+        """Delete every record matching the filter (issue #39 「按筛选全选」).
+        ``exclude`` lets the UI hand back the records the user unchecked."""
+        clause, params = self._filter_where(q, engine_id, voice_id, status)
+        excluded = set(exclude or [])
+        rows = self._db.execute(
+            f"SELECT id FROM {T_GENERATIONS} {clause}", tuple(params)
+        ).fetchall()
+        targets = [r["id"] for r in rows if r["id"] not in excluded]
+        return self.delete_many(targets)["deleted"]
 
 
 def now_iso() -> str:

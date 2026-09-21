@@ -600,6 +600,21 @@ code {
 }
 .history-pager button { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-3); background: none; }
 .history-pager button:disabled { opacity: 0.4; }
+.history-batchbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.history-batchbar button { font-size: var(--fs-sm); padding: var(--sp-1) var(--sp-3); background: none; }
+.history-batchbar button.danger:hover:not(:disabled) {
+  border-color: var(--tint-danger-fg);
+  color: var(--tint-danger-fg);
+}
+.history-select { display: flex; align-items: center; }
+.history-select input { accent-color: var(--accent); cursor: pointer; }
 .rerun-params {
   font-size: var(--fs-sm);
   color: var(--tint-warning-fg);

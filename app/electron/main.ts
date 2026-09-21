@@ -1,5 +1,12 @@
 // Electron main process: spawn the Python sidecar, read its JSON handshake
 // line from stdout, and expose connection info to the renderer via IPC.
+//
+// Issue #29:
+// - uv is resolved to an absolute path (bundled under Resources/uv/<platform>
+//   in packaged builds); we never rely on a Finder-inherited minimal PATH.
+// - Single-instance lock: a second launch focuses the existing window instead
+//   of starting a second sidecar (per-user dataDir + full-memory JSON stores
+//   mean two sidecars silently lose data).
 import { app, BrowserWindow, ipcMain } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
@@ -16,9 +23,35 @@ interface SidecarInfo {
 let sidecarInfo: SidecarInfo | null = null;
 let pendingWaiters: ((info: SidecarInfo | null) => void)[] = [];
 
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // Another instance owns the sidecar; quitting lets its focus handler run.
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
+  });
+}
+
+function isPackaged(): boolean {
+  return app.isPackaged;
+}
+
+function resourcesDir(): string {
+  return isPackaged() ? process.resourcesPath! : path.resolve(app.getAppPath());
+}
+
 function sidecarDir(): string {
-  // Dev: ../sidecar next to the app. Packaged builds will bundle the runtime
-  // per ADR-0002; that lands in a later ticket.
+  // Packaged: the sidecar Python project is copied into Resources/sidecar by
+  // electron-builder extraResources (ADR-0002 "内嵌运行时", issue #29).
+  if (isPackaged()) {
+    return path.join(process.resourcesPath!, "sidecar");
+  }
+  // Dev: ../sidecar next to the app.
   return path.resolve(app.getAppPath(), "..", "sidecar");
 }
 
@@ -28,8 +61,58 @@ function dataDir(): string {
   return dir;
 }
 
+function runtimeDir(): string {
+  // Mutable runtime (engine venvs, uv-hosted pythons) must live in userData:
+  // inside a packaged .app Resources is code-signed content, and per-user
+  // state must survive updates.
+  const dir = path.join(app.getPath("userData"), "runtime");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function bundledUvPath(): string | null {
+  // Absolute path to the pinned uv binary fetched by scripts/fetch-uv.mjs
+  // (same UV_VERSION pin as sidecar/voiceclone_sidecar/runtime/uvman.py).
+  const triple =
+    (process.arch === "arm64" ? "aarch64" : "x86_64") +
+    "-" +
+    (process.platform === "darwin"
+      ? "apple-darwin"
+      : process.platform === "win32"
+        ? "pc-windows-msvc"
+        : "unknown-linux-gnu");
+  const exe = process.platform === "win32" ? "uv.exe" : "uv";
+  const candidates = [
+    path.join(resourcesDir(), "uv", `${process.platform}-${process.arch}`, exe),
+    path.join(resourcesDir(), "uv", triple, exe),
+    path.join(resourcesDir(), "bin", exe),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // unreachable in practice; fall through
+    }
+  }
+  return null;
+}
+
+function resolveUv(): string {
+  const override = process.env.VOICECLONE_UV_PATH;
+  if (override && fs.existsSync(override)) return override;
+  const bundled = bundledUvPath();
+  if (bundled) return bundled;
+  // Dev fallback only: in a packaged build this would repeat the minimal
+  // launchd-PATH failure, so warn loudly.
+  if (isPackaged()) {
+    console.warn("[main] bundled uv not found; falling back to PATH 'uv'");
+  }
+  return "uv";
+}
+
 function startSidecar(): void {
   const token = crypto.randomBytes(24).toString("base64url");
+  const uv = resolveUv();
   const args = [
     "run",
     "--project",
@@ -43,11 +126,19 @@ function startSidecar(): void {
     dataDir(),
   ];
 
-  console.log("[main] starting sidecar: uv", args.join(" "));
+  console.log("[main] starting sidecar:", uv, args.join(" "));
   // Token goes through the environment, not argv (argv is readable via ps).
-  sidecar = spawn("uv", args, {
+  // The sidecar reuses the same bundled uv for engine venvs, and keeps all
+  // mutable runtime state under userData (never inside the .app bundle).
+  sidecar = spawn(uv, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, SIDECAR_TOKEN: token },
+    env: {
+      ...process.env,
+      SIDECAR_TOKEN: token,
+      VOICECLONE_UV_PATH: uv === "uv" ? process.env.VOICECLONE_UV_PATH ?? "" : uv,
+      VOICECLONE_RUNTIME_ROOT: runtimeDir(),
+      UV_PROJECT_ENVIRONMENT: path.join(runtimeDir(), "sidecar-venv"),
+    },
   });
 
   let buffer = "";
@@ -127,7 +218,9 @@ function createWindow(): void {
 ipcMain.handle("sidecar:info", async () => waitForSidecar());
 
 app.whenReady().then(() => {
-  startSidecar();
+  if (gotLock) {
+    startSidecar();
+  }
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

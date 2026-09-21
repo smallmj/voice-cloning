@@ -14,3 +14,7 @@ app/dist-electron/
 /sidecar/data/
 *.log
 .DS_Store
+
+# Packaging artifacts (issue #29)
+app/release/
+app/build/

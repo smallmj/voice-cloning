@@ -1,0 +1,52 @@
+// electron-builder configuration (issue #29).
+//
+// Bundled into every target:
+// - Resources/sidecar: the Python project (sources + pyproject.toml +
+//   uv.lock). No node_modules-style install happens at build time; the
+//   sidecar venv is created on first run by the bundled uv into userData
+//   (UV_PROJECT_ENVIRONMENT), per ADR-0002 "内嵌运行时".
+// - Resources/uv/<platform>-<arch>/uv: pinned uv binary fetched by
+//   scripts/fetch-uv.mjs (run before electron-builder).
+//
+// dist path is set to "release" so the artifact tree doesn't collide with
+// the vite renderer output in "dist".
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  appId: "com.smallmj.voiceclone",
+  productName: "VoiceClone",
+  directories: {
+    output: "release",
+    buildResources: "build",
+  },
+  files: ["dist/**/*", "dist-electron/**/*"],
+  asar: true,
+  extraResources: [
+    {
+      from: "../sidecar",
+      to: "sidecar",
+      filter: [
+        "voiceclone_sidecar/**/*",
+        "pyproject.toml",
+        "uv.lock",
+        "data/**/*",
+      ],
+    },
+  ],
+  mac: {
+    category: "public.app-category.productivity",
+    target: [{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] }],
+    extraResources: [
+      { from: "build/uv/darwin-arm64", to: "uv/darwin-arm64" },
+    ],
+  },
+  win: {
+    target: [{ target: "nsis", arch: ["x64"] }],
+    extraResources: [
+      { from: "build/uv/win32-x64", to: "uv/win32-x64" },
+    ],
+  },
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+  },
+}

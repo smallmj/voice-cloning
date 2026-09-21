@@ -12,7 +12,11 @@
     "dev:main": "npm run build:main && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "typecheck": "tsc --noEmit",
     "start": "npm run build && electron .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fetch:uv": "node scripts/fetch-uv.mjs",
+    "dist:mac": "npm run build && node scripts/fetch-uv.mjs darwin-arm64 && electron-builder --mac",
+    "dist:win": "npm run build && node scripts/fetch-uv.mjs win32-x64 && electron-builder --win",
+    "pack": "npm run build && node scripts/fetch-uv.mjs && electron-builder --dir"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -25,6 +29,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "cross-env": "^7.0.3",
     "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.3",
     "vite": "^6.0.3",

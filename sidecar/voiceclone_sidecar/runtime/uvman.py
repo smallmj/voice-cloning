@@ -8,6 +8,7 @@ engine gets its own venv so dependency sets never cross-contaminate.
 from __future__ import annotations
 
 import os
+import platform as _platform
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,15 @@ from . import downloader
 from .downloader import download_file
 from .paths import engine_venv_dir
 DEFAULT_PYTHON = "3.12"
+# Pinned uv version (issue #29): releases/latest is not reproducible and the
+# GitHub host is the very one plan §3 flagged as unavailable in CN. Bump via
+# one deliberate change, and let VOICECLONE_UV_DOWNLOAD_URL override mirrors.
+UV_VERSION = "0.12.10"
+
+
+def platform_machine() -> str:
+    """Windows-safe machine probe (os.uname() does not exist on win32)."""
+    return _platform.machine()
 
 
 class RuntimeCommandError(RuntimeError):
@@ -41,12 +51,16 @@ def _run(cmd: list[str], env: dict | None = None, log=None) -> str:
 
 
 def uv_triple() -> str:
-    machine = {"arm64": "aarch64", "x86_64": "x86_64"}.get(
-        os.uname().machine, os.uname().machine
-    )
-    return f"{machine}-apple-darwin" if sys.platform == "darwin" else (
-        f"{machine}-pc-windows-msvc" if sys.platform == "win32" else f"{machine}-unknown-linux-gnu"
-    )
+    # platform.machine() works on every OS; the previous os.uname() call was
+    # evaluated before the win32 branch and crashed on clean Windows (issue
+    # #29 / plan §10 risk #1). Normalize common spellings per-OS.
+    raw = platform_machine().lower()
+    machine = {"arm64": "aarch64", "amd64": "x86_64"}.get(raw, raw)
+    if sys.platform == "win32":
+        return f"{machine}-pc-windows-msvc"
+    if sys.platform == "darwin":
+        return f"{machine}-apple-darwin"
+    return f"{machine}-unknown-linux-gnu"
 
 
 def find_uv(root: Path, env: dict | None = None, log=None) -> Path:
@@ -77,7 +91,7 @@ def find_uv(root: Path, env: dict | None = None, log=None) -> Path:
     archive_name = f"uv-{uv_triple()}.tar.gz"
     url = env.get(
         "VOICECLONE_UV_DOWNLOAD_URL",
-        f"https://github.com/astral-sh/uv/releases/latest/download/{archive_name}",
+        f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{archive_name}",
     )
     if log:
         log(f"uv not found on this machine; downloading from {url}")

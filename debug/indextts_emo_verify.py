@@ -7,7 +7,6 @@ prepare_synthesis adapter + the real worker protocol:
   run A — baseline (same-as-reference, no emotion overrides)
   run B — emo_mode=情感向量, emo_vector angry=1.0, emo_weight=0.65
   run C — emo_mode=情感描述文本, emo_text, no random
-  run D — sampling params: do_sample=false vs default
 
 Pass criteria: every run produces a non-empty, non-silent WAV (the worker's
 peak self-check already refuses those), and B/C/D outputs differ from their
@@ -78,10 +77,8 @@ def main() -> int:
         {"emo_mode": "情感描述文本", "emo_text": "非常愤怒，大声呵斥"},
         logs,
     )
-    greedy = run(engine, "D-greedy", {"do_sample": "false"}, logs)
-
     ok = True
-    for label, info in (("B", vec), ("C", text), ("D", greedy)):
+    for label, info in (("B", vec), ("C", text)):
         if info["sha1"] == base["sha1"]:
             print(f"FAIL: run {label} is byte-identical to baseline — parameter had no effect")
             ok = False

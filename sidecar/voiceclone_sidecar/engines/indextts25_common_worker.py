@@ -132,8 +132,6 @@ def run_synthesis(request: dict, load, memory_report, log=log,
             infer_kwargs["emo_text"] = str(request["emo_text"])
     if request.get("use_random"):
         infer_kwargs["use_random"] = True
-    if request.get("do_sample") is not None:
-        infer_kwargs["do_sample"] = bool(request["do_sample"])
     tts.infer(
         spk_audio_prompt=request.get("ref_audio"),
         text=request["text"],

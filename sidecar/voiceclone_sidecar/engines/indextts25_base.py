@@ -355,14 +355,17 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
             help="官方默认 1500；超出会截断并告警。",
         ),
+        # 「不支持是数据」（ADR-0018 decision 3）：上游 infer_v2_5.py 弹出
+        # do_sample 后从未使用——inference_speech 调用点硬编码 do_sample=True。
+        # 暴露即撒谎，以数据声明不暴露。
         ParamSpec(
             name="do_sample",
             label="随机采样",
             kind="bool",
-            default=True,
-            layer="engine",
+            exposed=False,
+            not_exposed_reason="no-op",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
-            help="关闭后走贪心解码（temperature/top_p/top_k 不生效）。",
+            help="上游在 inference_speech 调用点硬编码 do_sample=True，该参数实际不生效。",
         ),
         # The sidecar injects reference audio itself (voice resolution);
         # declaring it keeps the wire contract honest instead of invisible.
@@ -486,10 +489,6 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
     for key, value in num_wire.items():
         if value is not None:
             wire[key] = value
-    do_sample = _bool(params, "do_sample")
-    if do_sample is not None:
-        wire["do_sample"] = do_sample
-
     return text, wire
 
 

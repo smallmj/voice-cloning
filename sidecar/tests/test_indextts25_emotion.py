@@ -43,7 +43,10 @@ def test_sampling_params_exposed_with_official_defaults():
         assert spec.exposed and spec.layer == "engine", name
         assert spec.default == default, name
         assert spec.min == lo and spec.max == hi, name
-    assert specs["do_sample"].exposed and specs["do_sample"].default is True
+    # do_sample is a verified NO-OP upstream (inference_speech hardcodes
+    # do_sample=True) — declared as data, never a slider (ADR-0018 decision 3).
+    assert specs["do_sample"].exposed is False
+    assert specs["do_sample"].not_exposed_reason == "no-op"
 
 
 def test_emotion_specs_exposed_and_mode_gated():
@@ -142,7 +145,8 @@ def test_sampling_params_forwarded_when_set():
     )
     assert wire["temperature"] == 1.2
     assert wire["top_k"] == 40
-    assert wire["do_sample"] is False
+    # do_sample is a no-op upstream — never forwarded.
+    assert "do_sample" not in wire
     # Unset values stay out: upstream defaults stay authoritative.
     assert "top_p" not in wire and "num_beams" not in wire
 

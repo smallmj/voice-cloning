@@ -202,6 +202,109 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 /* ==========================================================================
+   右侧共享侧边栏：上窗日志 + 下窗任务队列（issue #36 / ADR-0013 2026 修订）
+   ========================================================================== */
+
+.side-panel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  min-width: 0;
+}
+
+/* Hidden ≠ unmounted: job polling and the settle callback keep running. */
+.side-panel.closed { display: none; }
+
+.panel-drag {
+  width: 5px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+}
+
+.panel-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.panel-logs { flex: 3; border-bottom: 1px solid var(--border); }
+.panel-jobs { flex: 2; overflow: auto; }
+
+.pane-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.log-level { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+
+.log-keyword {
+  flex: 1;
+  min-width: 90px;
+  font-size: var(--fs-xs);
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--field-bg);
+  color: var(--text);
+}
+
+.pane-log-list {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line .log-level-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+}
+.log-line-info .log-level-tag { background: var(--tint-accent-bg); color: var(--tint-accent-fg); }
+.log-line-warn .log-level-tag { background: var(--tint-warning-bg); color: var(--tint-warning-fg); }
+.log-line-error .log-level-tag { background: var(--tint-danger-bg, #fdd); color: var(--tint-danger-fg, #a00); }
+.log-line-error { color: var(--text); }
+
+.panel-empty { color: var(--text-muted); }
+
+/* ==========================================================================
    通用元件
    ========================================================================== */
 
@@ -318,27 +421,6 @@ code {
 .normalize-title { font-size: var(--fs-sm); color: var(--text-muted); margin-bottom: var(--sp-2); }
 .normalize-text { font-size: var(--fs-base); line-height: 1.6; white-space: pre-wrap; }
 
-.log-drawer { margin-top: var(--sp-5); border-top: 1px solid var(--border); padding-top: var(--sp-2); }
-.log-toggle {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: var(--fs-md);
-  padding: var(--sp-1) 0;
-}
-.logs {
-  max-height: 220px;
-  overflow: auto;
-  background: var(--field-bg);
-  padding: var(--sp-3);
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  margin: var(--sp-2) 0 0;
-  font-variant-numeric: tabular-nums;
-}
 
 /* --- 引擎区 --- */
 .engine-list { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
@@ -633,6 +715,13 @@ code {
   .side-nav-title { border-bottom: none; }
   .side-nav-footer { margin-top: 0; }
   .content { padding: var(--sp-4); }
+  /* Issue #36: on narrow screens the shared sidebar flows below the content
+     at full width; resizing is meaningless there. */
+  .shell { flex-direction: column; }
+  .side-panel { width: 100% !important; height: auto; position: static; border-left: none; border-top: 1px solid var(--border); }
+  .panel-drag { display: none; }
+  .panel-logs { flex: none; }
+  .pane-log-list { max-height: 220px; }
 }
 
 /* Issue #23 / ADR-0018: engine-specific parameter layer — fixed position,

@@ -19,6 +19,12 @@ from ..context import AppContext
 
 ALLOWED_THEMES = ("system", "dark", "light")
 
+# Issue #36: the shared right sidebar's persisted geometry. The range matches
+# the drag clamp on the renderer side; stored values outside it are clamped.
+SIDEBAR_MIN_WIDTH = 260
+SIDEBAR_MAX_WIDTH = 640
+SIDEBAR_DEFAULT_WIDTH = 360
+
 
 def _sanitize(raw: dict) -> dict:
     """Coerce stored values into the public shape; unknown/corrupt values
@@ -32,7 +38,16 @@ def _sanitize(raw: dict) -> dict:
         # parameters. Values are stored as strings (the renderer's state is
         # stringly typed); the engine spec validates/converts at generate.
         "engine_params": _sanitize_engine_params(raw.get("engine_params")),
+        # Issue #36: shared right sidebar (logs + job queue) state.
+        "sidebar_open": raw.get("sidebar_open", True) is True,
+        "sidebar_width": _clamp_sidebar_width(raw.get("sidebar_width")),
     }
+
+
+def _clamp_sidebar_width(value) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return SIDEBAR_DEFAULT_WIDTH
+    return max(SIDEBAR_MIN_WIDTH, min(SIDEBAR_MAX_WIDTH, value))
 
 
 def _sanitize_engine_params(raw) -> dict:
@@ -77,8 +92,19 @@ def build_router(ctx: AppContext) -> APIRouter:
                     status_code=422, detail="engine_params 必须是「引擎 → 参数名 → 值」的对象"
                 )
             update["engine_params"] = _sanitize_engine_params(raw)
+        if "sidebar_open" in body:
+            # Issue #36: explicit boolean — a truthy string is a corrupt
+            # payload, not a preference.
+            if not isinstance(body["sidebar_open"], bool):
+                raise HTTPException(status_code=422, detail="sidebar_open 必须是布尔值")
+            update["sidebar_open"] = body["sidebar_open"]
+        if "sidebar_width" in body:
+            width = body["sidebar_width"]
+            if not isinstance(width, int) or isinstance(width, bool):
+                raise HTTPException(status_code=422, detail="sidebar_width 必须是整数")
+            update["sidebar_width"] = _clamp_sidebar_width(width)
         if not update:
-            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id 或 engine_params 之一")
+            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id、engine_params、sidebar_open 或 sidebar_width 之一")
         ctx.write_ui_prefs(update)
         return _sanitize(ctx.read_ui_prefs())
 

@@ -158,6 +158,7 @@ async def run_generation(
                 ctx.log_bus.publish(
                     generation_id,
                     f"云端音色已失效（{engine.engine_id}），正在用本地参考音频自动重建绑定…",
+                    level="warn",
                 )
                 cloud_voice_id = None  # fall through to re-enrollment
 
@@ -323,7 +324,7 @@ async def run_generation(
             finished_at=now_iso(),
             duration_seconds=round(time.monotonic() - started_monotonic, 3),
         )
-        ctx.log_bus.publish(generation_id, f"generation failed: {exc}")
+        ctx.log_bus.publish(generation_id, f"generation failed: {exc}", level="error")
         ctx.generation_store.persist(record)
         raise HTTPException(status_code=500, detail="generation failed") from exc
 

@@ -144,11 +144,16 @@ export interface NormalizeResult {
   changed: boolean;
 }
 
+export type LogLevel = "info" | "warn" | "error";
+
 export interface LogEvent {
   type: "log";
   generation_id: string;
   message: string;
   ts: number;
+  /** Issue #36: classified at the publish site; frames without a valid
+   * level parse as "info". */
+  level: LogLevel;
 }
 
 export interface VoiceReference {

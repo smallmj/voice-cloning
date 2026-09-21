@@ -51,7 +51,7 @@ class JobWorker:
                 seg["status"] = "failed"
                 seg["error"] = str(getattr(exc, "detail", exc))
                 failure = seg["error"]
-                ctx.log_bus.publish(job["id"], f"分段 {seg['index'] + 1} 失败：{failure}")
+                ctx.log_bus.publish(job["id"], f"分段 {seg['index'] + 1} 失败：{failure}", level="error")
                 break
             seg["status"] = "succeeded"
             seg["generation_id"] = record["id"]
@@ -106,6 +106,7 @@ class JobWorker:
                 "failed": "任务失败",
                 "succeeded": "任务完成",
             }.get(job["status"], f"任务 {job['status']}"),
+            level={"failed": "error", "cancelled": "warn"}.get(job["status"], "info"),
         )
 
     async def _drain(self) -> None:
@@ -121,7 +122,7 @@ class JobWorker:
                 # Cancelled before it started: no segment ever runs.
                 job["status"] = "cancelled"
                 job["finished_at"] = now_iso()
-                ctx.log_bus.publish(job["id"], "任务已取消（尚未开始）")
+                ctx.log_bus.publish(job["id"], "任务已取消（尚未开始）", level="warn")
                 continue
             try:
                 await self._run_job(job)
@@ -129,7 +130,7 @@ class JobWorker:
                 job["status"] = "failed"
                 job["error"] = str(exc)
                 job["finished_at"] = now_iso()
-                ctx.log_bus.publish(job["id"], f"任务失败：{exc}")
+                ctx.log_bus.publish(job["id"], f"任务失败：{exc}", level="error")
 
     def ensure(self) -> None:
         if self._task is None or self._task.done():
@@ -216,7 +217,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             if ctx.job_store.get(job_id) is None:
                 raise HTTPException(status_code=404, detail="job not found")
             raise HTTPException(status_code=409, detail="任务已结束，无法取消")
-        ctx.log_bus.publish(job_id, "收到取消请求，将在当前分段结束后停止…")
+        ctx.log_bus.publish(job_id, "收到取消请求，将在当前分段结束后停止…", level="warn")
         return public_view(job)
 
     return router

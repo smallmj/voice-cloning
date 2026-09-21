@@ -8,13 +8,21 @@ import type {
   Voice,
 } from "./api";
 import { HistorySection } from "./components/HistorySection";
-import { JobsSection } from "./components/JobsSection";
+import { SidePanel } from "./components/SidePanel";
 import { EnginesSection } from "./sections/EnginesSection";
 import { GenerateSection } from "./sections/GenerateSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { VoicesSection } from "./sections/VoicesSection";
 import { apiJson, authHeaders } from "./client";
-import { resolveTheme, SECTION_IDS, SECTION_LABELS, buildRerunState, sendableParams, type SectionId } from "./ui";
+import {
+  buildRerunState,
+  clampSidebarWidth,
+  resolveTheme,
+  SECTION_IDS,
+  SECTION_LABELS,
+  sendableParams,
+  type SectionId,
+} from "./ui";
 import { useActiveJobCount, useConsent, useEngines, useInstallStatuses, useLogStream, useMediaToken, useUiPrefs, useVoices } from "./hooks";
 
 const DEFAULT_TEXT = "你好，世界。这是一次端到端生成测试。Hello, world!";
@@ -49,7 +57,10 @@ export default function App() {
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);
   const [text, setText] = useState(DEFAULT_TEXT);
   const [record, setRecord] = useState<GenerationRecord | null>(null);
-  const [logsOpen, setLogsOpen] = useState(true);
+  // Issue #36: the log drawer is gone — logs live in the shared right
+  // sidebar; its open state and width persist via /settings/ui. While the
+  // user drags the divider, dragWidth shadows the stored value.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [jobHint, setJobHint] = useState<string | null>(null);
@@ -192,9 +203,10 @@ export default function App() {
     setInstalling((p) => ({ ...p, [id]: true }));
     installingRef.current[id] = true;
     installWatcher.watch(id);
-    // ADR-0013 §5: the install log surfaces in the 生成 section's drawer;
-    // opening it from the 引擎 section is an explicit cross-section action.
-    setLogsOpen(true);
+    // ADR-0013 2026 修订: the install log surfaces in the shared right
+    // sidebar; opening it from the 引擎 section is an explicit cross-section
+    // action (and the choice persists).
+    updatePrefs({ sidebar_open: true });
     try {
       await fetch(`${baseUrl}/engines/${id}/install`, {
         method: "POST",
@@ -349,20 +361,39 @@ export default function App() {
       if (longText) {
         const job = data as GenerationJob;
         setJobHint(
-          `全文 ${text.length} 字符，超过单次上限 ${maxChars}，已自动分段为 ${job.segment_count} 段并加入任务队列，可在「历史」区查看进度或取消。`,
+          `全文 ${text.length} 字符，超过单次上限 ${maxChars}，已自动分段为 ${job.segment_count} 段并加入任务队列，可在右侧「任务队列」窗格查看进度或取消。`,
         );
         setRerunParams(null);
         return;
       }
       setRecord(data as GenerationRecord);
       setRerunParams(null);
-      setLogsOpen(true);
+      updatePrefs({ sidebar_open: true });
       setHistoryRefreshKey((k) => k + 1);
     } catch (err) {
       setGenerateError(`生成请求失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerating(false);
     }
+  }
+
+  // Issue #36: drag-resize the shared sidebar. While dragging, dragWidth
+  // shadows the stored width; on release the final width persists via
+  // /settings/ui so the geometry survives a restart.
+  function startSidebarDrag(e: React.PointerEvent, startWidth: number) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const onMove = (ev: PointerEvent) =>
+      setDragWidth(clampSidebarWidth(startWidth + (startX - ev.clientX)));
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragWidth(null);
+      const width = clampSidebarWidth(startWidth + (startX - ev.clientX));
+      if (width !== prefs.sidebar_width) updatePrefs({ sidebar_width: width });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   // ADR-0013 §5: rerun loads the record back into the 生成 panel and jumps
@@ -446,6 +477,15 @@ export default function App() {
             ))}
           </ul>
           <div className="side-nav-footer">
+            {/* Issue #36: explicit show/hide for the shared right sidebar. */}
+            <button
+              className={`sidebar-toggle ${prefs.sidebar_open ? "active" : ""}`}
+              aria-pressed={prefs.sidebar_open}
+              title="显示/隐藏侧边栏（实时日志与任务队列）"
+              onClick={() => updatePrefs({ sidebar_open: !prefs.sidebar_open })}
+            >
+              <span aria-hidden="true">◧</span> 侧边栏
+            </button>
             <span className={`status ${info ? "ok" : "down"}`}>
               {connectionError ?? (info ? "sidecar 已连接" : "sidecar 连接中…")}
             </span>
@@ -487,9 +527,6 @@ export default function App() {
               rerunParams={rerunParams}
               onClearRerunParams={() => setRerunParams(null)}
               onGenerate={() => void generate()}
-              logs={logs}
-              logsOpen={logsOpen}
-              onToggleLogs={() => setLogsOpen((o) => !o)}
               onNavigate={navigate}
             />
           ) : active === "engines" ? (
@@ -531,21 +568,16 @@ export default function App() {
               designError={designError}
             />
           ) : active === "history" ? (
-            <>
-              <HistorySection
-                baseUrl={commonSectionProps.baseUrl}
-                token={commonSectionProps.token}
-                mediaToken={mediaToken}
-                engines={engines}
-                onRerun={rerun}
-                refreshKey={historyRefreshKey}
-              />
-              <JobsSection
-                baseUrl={commonSectionProps.baseUrl}
-                token={commonSectionProps.token}
-                onSettled={() => setHistoryRefreshKey((k) => k + 1)}
-              />
-            </>
+            // Issue #36: the inline job queue moved to the shared right
+            // sidebar; the history section is the record list only.
+            <HistorySection
+              baseUrl={commonSectionProps.baseUrl}
+              token={commonSectionProps.token}
+              mediaToken={mediaToken}
+              engines={engines}
+              onRerun={rerun}
+              refreshKey={historyRefreshKey}
+            />
           ) : (
             <SettingsSection
               baseUrl={commonSectionProps.baseUrl}
@@ -557,6 +589,21 @@ export default function App() {
             />
           )}
         </main>
+
+        {/* Issue #36: five tabs share one right sidebar — logs on top, job
+        queue below. It stays mounted while hidden so job polling and the
+        history-refresh callback keep running. */}
+        {commonSectionProps && (
+          <SidePanel
+            className={prefs.sidebar_open ? "" : "closed"}
+            width={dragWidth ?? prefs.sidebar_width}
+            baseUrl={commonSectionProps.baseUrl}
+            token={commonSectionProps.token}
+            logs={logs}
+            onSettled={() => setHistoryRefreshKey((k) => k + 1)}
+            onDragStart={(e) => startSidebarDrag(e, dragWidth ?? prefs.sidebar_width)}
+          />
+        )}
       </div>
     </div>
   );

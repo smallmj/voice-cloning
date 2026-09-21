@@ -19,12 +19,16 @@ class LogBus:
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._subscribers.discard(q)
 
-    def publish(self, generation_id: str, message: str) -> None:
+    def publish(self, generation_id: str, message: str, level: str = "info") -> None:
+        """Broadcast one log line. ``level`` is one of info/warn/error —
+        issue #36: the sidebar's log pane filters on it client-side, so the
+        classification happens where the failure is known."""
         event = {
             "type": "log",
             "generation_id": generation_id,
             "message": message,
             "ts": asyncio.get_running_loop().time(),
+            "level": level if level in ("info", "warn", "error") else "info",
         }
         for q in list(self._subscribers):
             q.put_nowait(event)

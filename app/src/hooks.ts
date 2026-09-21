@@ -12,7 +12,14 @@ import type {
   Voice,
 } from "./api";
 import { apiJson, fetchMediaToken } from "./client";
-import { appendLog, isThemePref, parseLogEvent, type ThemePref } from "./ui";
+import {
+  appendLog,
+  clampSidebarWidth,
+  isThemePref,
+  parseLogEvent,
+  SIDEBAR_DEFAULT_WIDTH,
+  type ThemePref,
+} from "./ui";
 
 export type { ThemePref };
 
@@ -36,6 +43,15 @@ export interface UiPrefs {
   // Issue #23 / ADR-0018 decision 6: per-engine last-used generation
   // parameters, remembered with the library (backup/restore covers them).
   engine_params: Record<string, Record<string, string>>;
+  // Issue #36: shared right sidebar (logs + job queue) persisted state.
+  sidebar_open: boolean;
+  sidebar_width: number;
+}
+
+function sanitizeSidebarWidth(raw: unknown): number {
+  // Mirrors the server clamp; a corrupt value falls back to the default.
+  const width = typeof raw === "number" ? raw : NaN;
+  return Number.isFinite(width) ? clampSidebarWidth(width) : SIDEBAR_DEFAULT_WIDTH;
 }
 
 /** GET/PUT /settings/ui — theme + engine selection persist with the library
@@ -45,6 +61,8 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
     theme: "system",
     engine_id: null,
     engine_params: {},
+    sidebar_open: true,
+    sidebar_width: SIDEBAR_DEFAULT_WIDTH,
   });
   const [ready, setReady] = useState(false);
 
@@ -58,6 +76,8 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
           theme: isThemePref(p.theme) ? p.theme : "system",
           engine_id: typeof p.engine_id === "string" ? p.engine_id : null,
           engine_params: sanitizeEngineParams(p.engine_params),
+          sidebar_open: p.sidebar_open !== false,
+          sidebar_width: sanitizeSidebarWidth(p.sidebar_width),
         });
         setReady(true);
       })
@@ -84,6 +104,8 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
             engine_id:
               typeof p.engine_id === "string" && p.engine_id ? p.engine_id : null,
             engine_params: sanitizeEngineParams(p.engine_params),
+            sidebar_open: p.sidebar_open !== false,
+            sidebar_width: sanitizeSidebarWidth(p.sidebar_width),
           }));
         })
         .catch(() => {

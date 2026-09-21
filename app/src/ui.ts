@@ -2,7 +2,7 @@
 // vitest net can test the cross-section behaviours and API-shape parsing
 // without a renderer.
 
-import type { GenerationRecord, JobStatus, LogEvent } from "./api";
+import type { GenerationRecord, JobStatus, LogEvent, LogLevel } from "./api";
 
 // --- five sections + left navigation (ADR-0013) ----------------------------
 
@@ -108,7 +108,8 @@ export function appendLog(prev: LogEvent[], event: LogEvent): LogEvent[] {
 }
 
 /** The log WebSocket delivers untrusted text; a malformed frame must be
- * dropped, never crash the stream. */
+ * dropped, never crash the stream. A missing/unknown level reads as "info"
+ * (frames from a pre-#36 sidecar carry none). */
 export function parseLogEvent(raw: string): LogEvent | null {
   try {
     const j = JSON.parse(raw) as Partial<LogEvent> | null;
@@ -118,12 +119,58 @@ export function parseLogEvent(raw: string): LogEvent | null {
         generation_id: j.generation_id,
         message: j.message,
         ts: typeof j.ts === "number" ? j.ts : 0,
+        level: isLogLevel(j.level) ? j.level : "info",
       };
     }
     return null;
   } catch {
     return null;
   }
+}
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return value === "info" || value === "warn" || value === "error";
+}
+
+export const LOG_LEVELS: readonly LogLevel[] = ["info", "warn", "error"];
+
+export const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
+  info: "信息",
+  warn: "警告",
+  error: "错误",
+};
+
+export interface LogFilter {
+  /** Empty set = every level passes. */
+  levels: ReadonlySet<LogLevel>;
+  /** Case-insensitive substring match on the message. */
+  keyword: string;
+}
+
+/** Issue #36: pure log filtering for the sidebar's log pane — level toggle
+ * plus keyword substring, both applied client-side over the buffered stream. */
+export function filterLogs(logs: LogEvent[], filter: LogFilter): LogEvent[] {
+  const kw = filter.keyword.trim().toLowerCase();
+  return logs.filter((l) => {
+    if (filter.levels.size > 0 && !filter.levels.has(l.level)) return false;
+    if (kw !== "" && !l.message.toLowerCase().includes(kw)) return false;
+    return true;
+  });
+}
+
+// --- issue #36: shared right sidebar geometry ---------------------------------
+
+export const SIDEBAR_MIN_WIDTH = 260;
+export const SIDEBAR_MAX_WIDTH = 640;
+export const SIDEBAR_DEFAULT_WIDTH = 360;
+
+/** Drag clamp — mirrors the server-side clamp on /settings/ui so a stored
+ * corrupt value can never pin the divider off-screen. */
+export function clampSidebarWidth(width: number): number {
+  if (Number.isNaN(width)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.round(
+    Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width)),
+  );
 }
 
 // --- issue #23 / ADR-0018: two-layer parameter surface -----------------------

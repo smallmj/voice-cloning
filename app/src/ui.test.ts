@@ -90,7 +90,7 @@ describe("cross-section: job settle → history refresh", () => {
 });
 
 describe("log stream", () => {
-  const ev: LogEvent = { type: "log", generation_id: "abc123", message: "hi", ts: 1 };
+  const ev: LogEvent = { type: "log", generation_id: "abc123", message: "hi", ts: 1, level: "info" };
 
   it("caps the buffer at 500 entries", () => {
     let logs: LogEvent[] = [];
@@ -109,6 +109,66 @@ describe("log stream", () => {
     expect(parseLogEvent("not json")).toBeNull();
     expect(parseLogEvent(JSON.stringify({ type: "log" }))).toBeNull();
     expect(parseLogEvent("null")).toBeNull();
+  });
+
+  it("parses the level, defaulting unknown/missing levels to info (issue #36)", () => {
+    expect(parseLogEvent(JSON.stringify({ ...ev, level: "error" }))?.level).toBe("error");
+    expect(parseLogEvent(JSON.stringify(ev))?.level).toBe("info");
+    expect(parseLogEvent(JSON.stringify({ ...ev, level: "bogus" }))?.level).toBe("info");
+  });
+});
+
+// --- issue #36: log filtering + sidebar geometry -------------------------------
+
+import { clampSidebarWidth, filterLogs, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "./ui";
+
+function logEv(level: LogEvent["level"], message: string): LogEvent {
+  return { type: "log", generation_id: "abc123", message, ts: 1, level };
+}
+
+describe("log filtering (issue #36)", () => {
+  const logs = [
+    logEv("info", "分段 1 完成"),
+    logEv("warn", "云端音色已失效，正在重建绑定"),
+    logEv("error", "generation failed: timeout"),
+  ];
+
+  it("passes everything when no level is selected and no keyword given", () => {
+    expect(filterLogs(logs, { levels: new Set(), keyword: "" })).toHaveLength(3);
+  });
+
+  it("filters by level", () => {
+    const only = filterLogs(logs, { levels: new Set(["error"]), keyword: "" });
+    expect(only.map((l) => l.level)).toEqual(["error"]);
+  });
+
+  it("matches the keyword case-insensitively across levels", () => {
+    const hits = filterLogs(logs, { levels: new Set(), keyword: "FAILED" });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].level).toBe("error");
+  });
+
+  it("combines level + keyword", () => {
+    expect(
+      filterLogs(logs, { levels: new Set(["warn", "error"]), keyword: "分段" }),
+    ).toHaveLength(0);
+  });
+
+  it("trims whitespace around the keyword", () => {
+    expect(filterLogs(logs, { levels: new Set(), keyword: "  重建绑定 " })).toHaveLength(1);
+  });
+});
+
+describe("sidebar width clamp (issue #36)", () => {
+  it("keeps widths inside the draggable range", () => {
+    expect(clampSidebarWidth(400)).toBe(400);
+    expect(clampSidebarWidth(10)).toBe(SIDEBAR_MIN_WIDTH);
+    expect(clampSidebarWidth(99999)).toBe(SIDEBAR_MAX_WIDTH);
+  });
+
+  it("falls back to the default for non-finite values", () => {
+    expect(clampSidebarWidth(NaN)).toBe(360);
+    expect(clampSidebarWidth(Infinity)).toBe(SIDEBAR_MAX_WIDTH);
   });
 });
 

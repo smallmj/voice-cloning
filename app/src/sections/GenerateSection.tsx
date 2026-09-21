@@ -9,7 +9,6 @@ import type {
 } from "../api";
 import { CompareSection } from "../components/CompareSection";
 import { reasonLabel, splitParamLayers } from "../ui";
-import { LogDrawer } from "../components/LogDrawer";
 import { Waveform } from "../components/Waveform";
 import { JumpLink } from "../components/bits";
 import type { SectionId } from "../ui";
@@ -38,9 +37,6 @@ export function GenerateSection({
   rerunParams,
   onClearRerunParams,
   onGenerate,
-  logs,
-  logsOpen,
-  onToggleLogs,
   onNavigate,
 }: {
   baseUrl: string;
@@ -66,9 +62,6 @@ export function GenerateSection({
   rerunParams: Record<string, unknown> | null;
   onClearRerunParams: () => void;
   onGenerate: () => void;
-  logs: LogEvent[];
-  logsOpen: boolean;
-  onToggleLogs: () => void;
   onNavigate: (section: SectionId) => void;
 }) {
   const notInstalled =
@@ -252,8 +245,7 @@ export function GenerateSection({
         engines={engines}
       />
 
-      {/* ADR-0013 §4: 生成时用户要盯着日志 —— 日志抽屉留在生成区内。 */}
-      <LogDrawer logs={logs} open={logsOpen} onToggle={onToggleLogs} />
+      {/* ADR-0013 2026 修订：日志抽屉已由全局右侧共享侧边栏取代（issue #36）。 */}
     </section>
   );
 }

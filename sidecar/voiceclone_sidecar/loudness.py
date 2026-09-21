@@ -36,31 +36,57 @@ GATE_RELATIVE_LU = 10.0
 BLOCK_SECONDS = 0.4
 OVERLAP = 0.75  # 75% overlap → hop = 100 ms
 
+# Issue #28: measurement is capped like diagnostics.analyze_audio — LUFS is
+# measured over the FIRST ``ANALYSIS_LIMIT_SECONDS`` only, so a long file can
+# never turn one normalization into minutes of pure-Python filtering or a
+# transient >1 GB of float lists. The cap trims the *analysis*; the gain is
+# still applied to the whole file via a streaming rewrite.
+ANALYSIS_LIMIT_SECONDS = 120.0
+
 
 class LoudnessError(ValueError):
     """Raised when the audio cannot be measured; message is user-facing."""
 
 
-def read_wav_mono(path: Path) -> tuple[list[float], int]:
+def read_wav_mono(
+    path: Path, limit_seconds: float | None = None
+) -> tuple[list[float], int]:
     """Decode a WAV file to mono float samples in [-1, 1] and its rate.
 
     Supports 8/16/24/32-bit integer PCM, downmixing channels by mean.
+    ``limit_seconds`` stops decoding after that many seconds (issue #28) —
+    the cap trims analysis memory, never the file itself.
     """
     try:
-        with wave.open(str(path), "rb") as w:
-            rate = w.getframerate()
-            channels = w.getnchannels()
-            width = w.getsampwidth()
-            raw = w.readframes(w.getnframes())
+        w = wave.open(str(path), "rb")
     except (wave.Error, EOFError) as exc:
         raise LoudnessError(f"WAV 文件无法解析：{exc}") from exc
+    with w:
+        rate = w.getframerate()
+        channels = w.getnchannels()
+        width = w.getsampwidth()
+        max_frames = (
+            w.getnframes()
+            if limit_seconds is None
+            else int(limit_seconds * rate)
+        )
+        raw = w.readframes(max_frames)
     if width == 0 or width > 4:
         raise LoudnessError(f"不支持的采样位宽：{width * 8}-bit")
 
     frame_bytes = width * channels
     n = len(raw) // frame_bytes
-    samples: list[float] = []
     peak = float(1 << (8 * width - 1))
+    return _decode_samples(raw, width, channels, peak), rate
+
+
+def _decode_samples(
+    raw: bytes, width: int, channels: int, peak: float
+) -> list[float]:
+    """Decode raw interleaved PCM frames to mono floats in [-1, 1]."""
+    frame_bytes = width * channels
+    n = len(raw) // frame_bytes
+    samples: list[float] = []
     for i in range(n):
         total = 0
         base = i * frame_bytes
@@ -69,7 +95,7 @@ def read_wav_mono(path: Path) -> tuple[list[float], int]:
             v = int.from_bytes(raw[off:off + width], "little", signed=True)
             total += v
         samples.append(total / channels / peak)
-    return samples, rate
+    return samples
 
 
 def write_wav_mono(path: Path, samples: list[float], rate: int) -> None:
@@ -185,7 +211,7 @@ def integrated_lufs(samples: list[float], rate: int) -> float:
 
 
 def measure_file_lufs(path: Path) -> float:
-    samples, rate = read_wav_mono(Path(path))
+    samples, rate = read_wav_mono(Path(path), limit_seconds=ANALYSIS_LIMIT_SECONDS)
     return integrated_lufs(samples, rate)
 
 
@@ -194,39 +220,107 @@ def gain_to_reach(current_lufs: float, target_lufs: float = TARGET_LUFS) -> floa
     return 10 ** ((target_lufs - current_lufs) / 20.0)
 
 
+def _encode_frames(samples: list[float]) -> bytes:
+    frames = bytearray()
+    for s in samples:
+        v = int(round(max(-1.0, min(1.0, s)) * FULL_SCALE))
+        frames += struct.pack("<h", v)
+    return bytes(frames)
+
+
 def normalize_wav_lufs(
     src: Path, dst: Path, target_lufs: float = TARGET_LUFS
 ) -> dict:
     """Measure ``src`` and write a gain-adjusted 16-bit mono copy to ``dst``.
 
-    Returns the measurement lineage: original LUFS, applied gain (dB) and the
-    achieved LUFS after gain (it can miss the target when the peak would
-    clip — the caller surfaces that honestly instead of lying).
+    Measurement is capped at ``ANALYSIS_LIMIT_SECONDS`` (issue #28) and the
+    gain is applied in a streaming rewrite over the WHOLE file, so a long
+    recording costs bounded analysis memory and chunk-sized transient
+    allocations instead of several full-file float lists. Returns the
+    measurement lineage: original LUFS, applied gain (dB) and the achieved
+    LUFS after gain (it can miss the target when the peak would clip — the
+    caller surfaces that honestly instead of lying).
     """
     src = Path(src)
     dst = Path(dst)
-    samples, rate = read_wav_mono(src)
-    current = integrated_lufs(samples, rate)
-    if current == -float("inf"):
-        # Digital silence: there is nothing to normalize — copy through and
-        # report the measurement as unachievable rather than +inf gain.
-        write_wav_mono(dst, samples, rate)
-        copy_info_chunks(src, dst)  # issue #15: keep the AIGC disclosure
-        return {
-            "original_lufs": None,
-            "gain_db": 0.0,
-            "achieved_lufs": None,
-            "peak_limited": False,
-        }
-    gain = gain_to_reach(current, target_lufs)
-    peak = max(abs(s) for s in samples)
-    peak_limited = peak * gain > 1.0
-    if peak_limited:
-        gain = 1.0 / peak  # never introduce clipping
-    gained = [s * gain for s in samples]
-    write_wav_mono(dst, gained, rate)
+    analysis, rate = read_wav_mono(src, limit_seconds=ANALYSIS_LIMIT_SECONDS)
+    current = integrated_lufs(analysis, rate)
+
+    with wave.open(str(src), "rb") as w:
+        in_rate = w.getframerate()
+        channels = w.getnchannels()
+        width = w.getsampwidth()
+        n_frames = w.getnframes()
+        if width == 0 or width > 4:
+            raise LoudnessError(f"不支持的采样位宽：{width * 8}-bit")
+        peak_scale = float(1 << (8 * width - 1))
+        frame_bytes = width * channels
+        chunk_frames = max(in_rate, 1)  # ~1 s of audio per chunk
+
+        if current == -float("inf"):
+            # Digital silence: nothing to normalize — copy through as mono
+            # and report the measurement as unachievable rather than +inf.
+            with wave.open(str(dst), "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(in_rate)
+                remaining = n_frames
+                while remaining > 0:
+                    raw = w.readframes(min(chunk_frames, remaining))
+                    if not raw:
+                        break
+                    remaining -= len(raw) // frame_bytes
+                    out.writeframes(_encode_frames(_decode_samples(raw, width, channels, peak_scale)))
+            copy_info_chunks(src, dst)  # issue #15: keep the AIGC disclosure
+            return {
+                "original_lufs": None,
+                "gain_db": 0.0,
+                "achieved_lufs": None,
+                "peak_limited": False,
+            }
+
+        gain = gain_to_reach(current, target_lufs)
+        # First streaming pass: full-file peak (the analysis cap must not
+        # hide a later hot sample and let the gain clip it).
+        peak = 0.0
+        w.setpos(0)
+        remaining = n_frames
+        while remaining > 0:
+            raw = w.readframes(min(chunk_frames, remaining))
+            if not raw:
+                break
+            remaining -= len(raw) // frame_bytes
+            for i in range(0, len(raw), frame_bytes):
+                total = 0
+                for c in range(channels):
+                    off = i + c * width
+                    total += int.from_bytes(raw[off:off + width], "little", signed=True)
+                v = abs(total / channels / peak_scale)
+                if v > peak:
+                    peak = v
+        peak_limited = peak * gain > 1.0
+        if peak_limited:
+            gain = 1.0 / peak  # never introduce clipping
+
+        # Second streaming pass: write the gained mono copy.
+        w.setpos(0)
+        with wave.open(str(dst), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(in_rate)
+            remaining = n_frames
+            while remaining > 0:
+                raw = w.readframes(min(chunk_frames, remaining))
+                if not raw:
+                    break
+                remaining -= len(raw) // frame_bytes
+                samples = _decode_samples(raw, width, channels, peak_scale)
+                out.writeframes(_encode_frames([s * gain for s in samples]))
+
     copy_info_chunks(src, dst)  # issue #15: keep the AIGC disclosure
-    achieved = integrated_lufs(gained, rate)
+    # Pure gain shifts loudness exactly by 20·log10(gain); measuring the
+    # output again would re-filter the full file for a known answer.
+    achieved = current + 20.0 * math.log10(gain)
     return {
         "original_lufs": round(current, 2),
         "gain_db": round(20.0 * math.log10(gain), 2),

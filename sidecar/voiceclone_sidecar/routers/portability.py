@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -18,12 +19,22 @@ from ..portability import (
 )
 from ..voices import VoiceValidationError
 
+# Issue #28: zips are built/restored with blocking file I/O (and restore
+# rmtree's the data dir) — all of it belongs on an executor. Upload caps
+# scale with what the endpoint legitimately carries.
+PACKAGE_MAX_BYTES = 200 * 1024 * 1024
+BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def build_router(ctx: AppContext) -> APIRouter:
     router = APIRouter()
     voice_store = ctx.voice_store
     _require_voice = ctx.require_voice
     _read_upload = ctx.read_upload
+
+    def _to_executor(fn, *args):
+        """Run a blocking portability operation off the event loop (issue #28)."""
+        return asyncio.get_running_loop().run_in_executor(None, lambda: fn(*args))
 
     def _portability_error(exc: PortabilityError | VoiceValidationError) -> HTTPException:
         return HTTPException(status_code=422, detail=str(exc))
@@ -34,7 +45,9 @@ def build_router(ctx: AppContext) -> APIRouter:
         record = _require_voice(voice_id)
         out = ctx.new_temp_zip()
         try:
-            export_voice_package(record, voice_store.root / voice_id, out)
+            await _to_executor(
+                export_voice_package, record, voice_store.root / voice_id, out
+            )
         except PortabilityError as exc:
             raise _portability_error(exc) from exc
         import re
@@ -53,10 +66,10 @@ def build_router(ctx: AppContext) -> APIRouter:
         demand against their own engines."""
         tmp = None
         try:
-            tmp = await _read_upload(file)
+            tmp = await _read_upload(file, max_bytes=PACKAGE_MAX_BYTES)
             if tmp is None:
                 raise PortabilityError("音色包不能为空")
-            record = import_voice_package(tmp, voice_store)
+            record = await _to_executor(import_voice_package, tmp, voice_store)
             return {"voice": record}
         except (PortabilityError, VoiceValidationError) as exc:
             raise _portability_error(exc) from exc
@@ -72,7 +85,7 @@ def build_router(ctx: AppContext) -> APIRouter:
         """Create and download a whole-library backup zip."""
         out = ctx.new_temp_zip()
         try:
-            create_library_backup(ctx.data_root, out)
+            await _to_executor(create_library_backup, ctx.data_root, out)
         except PortabilityError as exc:
             raise _portability_error(exc) from exc
         stamp = time.strftime("%Y%m%d", time.gmtime())
@@ -105,10 +118,10 @@ def build_router(ctx: AppContext) -> APIRouter:
             )
         tmp = None
         try:
-            tmp = await _read_upload(file)
+            tmp = await _read_upload(file, max_bytes=BACKUP_MAX_BYTES)
             if tmp is None:
                 raise PortabilityError("备份包不能为空")
-            restored = restore_library_backup(tmp, ctx.data_root)
+            restored = await _to_executor(restore_library_backup, tmp, ctx.data_root)
             # reload() reconnects each store's database to the swapped-in
             # file; a legacy JSON-format restore is migrated to SQLite by
             # that reopen path (ADR-0017).

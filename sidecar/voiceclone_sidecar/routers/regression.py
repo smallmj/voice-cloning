@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,14 +32,17 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     def _regression_worker(
         session_id: str, plan: list[dict], session_voice_id: str | None, asr_check: bool
-    ) -> None:
-        """Run one regression session to completion in a background thread.
+    ) -> "asyncio.Task[None]":
+        """Schedule one regression session on the MAIN event loop (issue #28).
 
-        Each engine × item pair goes through the SAME run_generation pipeline
-        as a plain generation — a regression candidate is never produced by a
-        different route (same guarantee as the compare legs, issue #10).
-        Local engines get peak-VRAM sampling; every output optionally gets an
-        ASR 可懂度 pass whose CER is measured against the curated target.
+        The worker used to run in a daemon thread via ``asyncio.run``, i.e. a
+        second event loop publishing onto asyncio.Queues created by the main
+        loop without ``call_soon_threadsafe`` — a cross-loop delivery the
+        asyncio debug mode flags. Running as a task on the main loop keeps
+        LogBus publishing, per-engine locks and store access on one loop;
+        blocking work (synthesis, ASR, ffprobe) already hops to executors
+        inside the pipeline. The caller holds ``ctx.regression_lock`` for the
+        whole run, so sessions are serialized process-wide.
         """
 
         async def _run():
@@ -120,17 +122,35 @@ def build_router(ctx: AppContext) -> APIRouter:
                 fresh["finished_at"] = now_iso()
                 regression_store.update(fresh)
 
-        try:
-            asyncio.run(_run())
-        except Exception as exc:  # noqa: BLE001 - a crashed run must NOT read
-            # as "completed" evidence: the matrix only merges sessions whose
-            # status is exactly "completed".
-            fresh = regression_store.get(session_id)
-            if fresh is not None:
-                fresh["status"] = "failed"
-                fresh["error"] = str(exc)
-                fresh["finished_at"] = now_iso()
-                regression_store.update(fresh)
+        async def _guarded():
+            try:
+                await _run()
+            except asyncio.CancelledError:
+                # Cancelled via session delete: the record is (being) removed;
+                # mark failed only if it is still readable.
+                fresh = regression_store.get(session_id)
+                if fresh is not None:
+                    fresh["status"] = "failed"
+                    fresh["error"] = "cancelled"
+                    fresh["finished_at"] = now_iso()
+                    regression_store.update(fresh)
+                raise
+            except Exception as exc:  # noqa: BLE001 - a crashed run must NOT read
+                # as "completed" evidence: the matrix only merges sessions whose
+                # status is exactly "completed".
+                fresh = regression_store.get(session_id)
+                if fresh is not None:
+                    fresh["status"] = "failed"
+                    fresh["error"] = str(exc)
+                    fresh["finished_at"] = now_iso()
+                    regression_store.update(fresh)
+            finally:
+                ctx.regression_tasks.pop(session_id, None)
+                ctx.regression_lock.release()
+
+        task = asyncio.create_task(_guarded(), name=f"regression-{session_id[:8]}")
+        ctx.regression_tasks[session_id] = task
+        return task
 
     @router.post("/regression/run", dependencies=[Depends(ctx.require_auth)])
     async def run_regression(body: dict) -> dict:
@@ -166,25 +186,34 @@ def build_router(ctx: AppContext) -> APIRouter:
                     "category": item["category"],
                     "local": is_local,
                 })
-        session = {
-            "id": uuid.uuid4().hex,
-            "created_at": now_iso(),
-            "status": "running",
-            "voice_id": voice_id,
-            "engines": list(engine_ids),
-            "asr_check": asr_check,
-            "items": [
-                make_item_record(p["engine_id"], {"id": p["item_id"], "category": p["category"]})
-                for p in plan
-            ],
-        }
-        regression_store.create(session)
-        threading.Thread(
-            target=_regression_worker,
-            args=(session["id"], plan, voice_id, asr_check),
-            daemon=True,
-            name=f"regression-{session['id'][:8]}",
-        ).start()
+        # Issue #28: one regression run at a time. A second POST used to
+        # start a second event loop contending for the same stores and
+        # per-engine locks; refuse it instead of queueing a heavier fight.
+        if not ctx.regression_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="已有回归运行在进行，请等待完成或删除该会话后再试",
+            )
+        try:
+            session = {
+                "id": uuid.uuid4().hex,
+                "created_at": now_iso(),
+                "status": "running",
+                "voice_id": voice_id,
+                "engines": list(engine_ids),
+                "asr_check": asr_check,
+                "items": [
+                    make_item_record(p["engine_id"], {"id": p["item_id"], "category": p["category"]})
+                    for p in plan
+                ],
+            }
+            regression_store.create(session)
+            _regression_worker(session["id"], plan, voice_id, asr_check)
+        except BaseException:
+            # The task owns the release only once it exists; a failure
+            # before that must not wedge /regression/run with 409s.
+            ctx.regression_lock.release()
+            raise
         return session
 
     @router.get("/regression/sessions", dependencies=[Depends(ctx.require_auth)])
@@ -201,6 +230,18 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     @router.delete("/regression/{session_id}", dependencies=[Depends(ctx.require_auth)])
     async def delete_regression_session(session_id: str) -> dict:
+        # Issue #28: deleting a running session also cancels its in-flight
+        # task. The task is awaited BEFORE the record is removed, so the
+        # cancelled run can never re-materialize a "failed" record after the
+        # client saw the delete succeed, and the serialization lock is
+        # guaranteed released when this handler returns.
+        task = ctx.regression_tasks.get(session_id)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         session = regression_store.delete(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="regression session not found")

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..context import AppContext
 from ..voices import AUDIO_MEDIA_TYPES, AVATAR_MEDIA_TYPES, VoiceValidationError
+
+# Issue #28: per-endpoint upload caps. Reference audio ≤ 20 MB is the
+# documented engine limit with headroom; avatars are images.
+REFERENCE_MAX_BYTES = 50 * 1024 * 1024
+AVATAR_MAX_BYTES = 20 * 1024 * 1024
 
 
 def build_router(ctx: AppContext) -> APIRouter:
@@ -25,11 +32,17 @@ def build_router(ctx: AppContext) -> APIRouter:
     ) -> dict:
         audio_tmp = avatar_tmp = None
         try:
-            audio_tmp = await _read_upload(file)
-            avatar_tmp = await _read_upload(avatar)
+            audio_tmp = await _read_upload(file, max_bytes=REFERENCE_MAX_BYTES)
+            avatar_tmp = await _read_upload(avatar, max_bytes=AVATAR_MAX_BYTES)
             if audio_tmp is None:
                 raise VoiceValidationError("参考音频不能为空")
-            return _flag_placeholder(voice_store.create(name, description, audio_tmp, avatar_tmp))
+            # voice_store.create runs ffprobe + sha256 over the upload —
+            # blocking work that must not pin the event loop (issue #28).
+            record = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: voice_store.create(name, description, audio_tmp, avatar_tmp),
+            )
+            return _flag_placeholder(record)
         except VoiceValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
@@ -69,10 +82,12 @@ def build_router(ctx: AppContext) -> APIRouter:
         _require_voice(voice_id)
         avatar_tmp = None
         try:
-            avatar_tmp = await _read_upload(avatar)
+            avatar_tmp = await _read_upload(avatar, max_bytes=AVATAR_MAX_BYTES)
             if avatar_tmp is None:
                 raise VoiceValidationError("头像不能为空")
-            return voice_store.set_avatar(voice_id, avatar_tmp)
+            return await asyncio.get_running_loop().run_in_executor(
+                None, lambda: voice_store.set_avatar(voice_id, avatar_tmp)
+            )
         except VoiceValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:

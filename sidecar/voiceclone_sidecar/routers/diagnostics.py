@@ -7,6 +7,10 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from ..context import AppContext
+
+# Issue #28: diagnostics only ever reads (never stores) the upload; cap it
+# like the other upload endpoints instead of trusting the client.
+ANALYSIS_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
 from ..diagnostics import DiagnosticError, analyze_audio
 from ..engines.cloud_base import CloudEngineError
 from ..registry import InstallableEngine
@@ -48,7 +52,7 @@ def build_router(ctx: AppContext) -> APIRouter:
         upload lands in a temp file that is deleted after analysis."""
         tmp = None
         try:
-            tmp = await _read_upload(file)
+            tmp = await _read_upload(file, max_bytes=ANALYSIS_UPLOAD_MAX_BYTES)
             if tmp is None:
                 raise VoiceValidationError("参考音频不能为空")
             return await asyncio.get_running_loop().run_in_executor(

@@ -214,3 +214,33 @@ def test_generation_without_voice_still_works(client):
     r = client.post("/generations", json={"engine_id": "fake", "text": "无音色生成"})
     assert r.status_code == 200
     assert r.json()["voice_id"] is None
+
+
+# --- upload caps + orphan cleanup (issue #28) -------------------------------
+
+
+def test_oversized_reference_upload_is_refunded_with_413(client, sidecar):
+    # A body over the 50 MB reference cap is refused mid-upload; the temp
+    # file must NOT survive in the audio dir (the next /backup would pack it).
+    huge = b"\x00" * (50 * 1024 * 1024 + 1)
+    r = client.post(
+        "/voices",
+        data={"name": "超大", "description": ""},
+        files={"file": ("ref.wav", huge, "audio/wav")},
+    )
+    assert r.status_code == 413, r.text
+    orphans = list(sidecar["audio_dir"].glob("upload-*"))
+    assert orphans == [], orphans
+
+
+def test_failed_validation_upload_leaves_no_orphan(client, sidecar):
+    # A body that uploads fine but fails domain validation (not a WAV) must
+    # still leave no temp file behind.
+    r = client.post(
+        "/voices",
+        data={"name": "x", "description": ""},
+        files={"file": ("ref.wav", b"not-a-wav", "audio/wav")},
+    )
+    assert r.status_code == 422, r.text
+    orphans = list(sidecar["audio_dir"].glob("upload-*"))
+    assert orphans == [], orphans

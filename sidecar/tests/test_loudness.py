@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 
 from voiceclone_sidecar.loudness import (
+    ANALYSIS_LIMIT_SECONDS,
     LoudnessError,
     TARGET_LUFS,
     integrated_lufs,
+    measure_file_lufs,
     normalize_wav_lufs,
     read_wav_mono,
     write_wav_mono,
@@ -128,3 +130,48 @@ def test_read_wav_rejects_non_wav(tmp_path: Path):
     junk.write_bytes(b"not a wav")
     with pytest.raises(LoudnessError):
         read_wav_mono(junk)
+
+
+# --- 长音频上界（issue #28）-------------------------------------------------
+
+
+def test_analysis_cap_trims_measurement_not_the_file(tmp_path: Path):
+    rate = 8000
+    seconds = ANALYSIS_LIMIT_SECONDS + 10  # 130 s
+    p = tmp_path / "long.wav"
+    _write_wav(p, seconds, rate, 0.1)
+
+    capped, capped_rate = read_wav_mono(p, limit_seconds=ANALYSIS_LIMIT_SECONDS)
+    assert capped_rate == rate
+    assert len(capped) == int(ANALYSIS_LIMIT_SECONDS * rate)
+    # 限窗测量与对前 120 s 手工测量一致
+    assert integrated_lufs(capped, capped_rate) == pytest.approx(
+        integrated_lufs(read_wav_mono(p)[0][: len(capped)], rate), abs=1e-6
+    )
+    # 文件本身没有被裁剪
+    assert measure_file_lufs(p) == pytest.approx(integrated_lufs(capped, rate), abs=1e-6)
+
+
+def test_normalize_long_file_preserves_duration_and_loudness(tmp_path: Path):
+    rate = 8000
+    seconds = ANALYSIS_LIMIT_SECONDS + 5
+    src = tmp_path / "src.wav"
+    dst = tmp_path / "dst.wav"
+    sine_wav(src, 0.02, seconds=seconds, rate=rate, freq=997.0)  # 安静的源
+    result = normalize_wav_lufs(src, dst)
+    assert result["original_lufs"] is not None
+    assert dst.exists()
+    full, full_rate = read_wav_mono(dst)
+    assert full_rate == rate
+    # 整个文件都被重写，不只是被分析的前 120 s
+    assert len(full) == int(seconds * rate)
+    assert result["achieved_lufs"] == pytest.approx(TARGET_LUFS, abs=0.5)
+
+
+def _write_wav(path: Path, seconds: float, rate: int, amplitude: float) -> None:
+    frames = int(rate * seconds)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(struct.pack("<h", int(amplitude * 32767)) * frames)

@@ -83,6 +83,14 @@ class AppContext:
 
     _transcriber: LocalTranscriber | None = field(default=None, repr=False)
 
+    # Issue #28: regression runs are serialized process-wide. Two POSTs used
+    # to spawn two event loops contending for the same stores and per-engine
+    # locks; now a second run is refused with 409 until the first finishes
+    # (or its session is deleted, which also cancels the in-flight task).
+    regression_lock: threading.Lock = field(default_factory=threading.Lock)
+    # Owning router: routers/regression.py — session id → its worker task.
+    regression_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
+
     # Auth gates, built once from the process token (issue #19 policy).
     require_auth: Any = field(init=False, repr=False)
     require_media_auth: Any = field(init=False, repr=False)
@@ -191,14 +199,46 @@ class AppContext:
 
     # -- uploads -------------------------------------------------------------
 
-    async def read_upload(self, upload: UploadFile | None) -> Path | None:
+    # Issue #28: uploads are capped so a runaway body can neither pin the
+    # loop writing an unbounded temp file nor leave a giant orphan behind
+    # (a pre-fix failure leaked the temp file, and the next /backup would
+    # then pack it into the archive). Callers pass tighter per-endpoint caps.
+    DEFAULT_UPLOAD_MAX_BYTES = 512 * 1024 * 1024
+
+    async def read_upload(
+        self, upload: UploadFile | None, max_bytes: int | None = None
+    ) -> Path | None:
+        """Spool an upload to a temp file in the audio dir.
+
+        HTTP contract (translated here, not per-router): a body larger than
+        ``max_bytes`` (default ``DEFAULT_UPLOAD_MAX_BYTES``) raises 413. Any
+        failure — cap exceeded, client disconnect — unlinks the temp file, so
+        an aborted upload never leaves an orphan for /backup to pack.
+        """
         if upload is None or not upload.filename:
             return None
+        limit = self.DEFAULT_UPLOAD_MAX_BYTES if max_bytes is None else max_bytes
         tmp = self.audio_dir / f"upload-{uuid.uuid4().hex}{Path(upload.filename).suffix}"
-        with open(tmp, "wb") as f:
-            while chunk := await upload.read(1 << 20):
-                f.write(chunk)
-        return tmp
+        try:
+            written = 0
+            with open(tmp, "wb") as f:
+                while chunk := await upload.read(1 << 20):
+                    written += len(chunk)
+                    if written > limit:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"上传文件超过大小上限（{limit // (1 << 20)} MB）",
+                        )
+                    f.write(chunk)
+            return tmp
+        except BaseException:
+            # Mid-read failure (cap exceeded, client disconnect, …) must not
+            # leave an orphan temp file in the audio dir.
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     # -- AIGC marker ---------------------------------------------------------
 

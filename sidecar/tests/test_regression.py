@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import wave
 
 import pytest
@@ -252,8 +253,6 @@ def test_regression_run_completes_on_fake_engines(client):
     session_id = r.json()["id"]
 
     # 后台运行：轮询直到完成（fake 引擎是秒级）。
-    import time
-
     deadline = time.monotonic() + 60
     while True:
         s = client.get(f"/regression/{session_id}").json()
@@ -277,8 +276,6 @@ def test_regression_run_completes_on_fake_engines(client):
 def test_regression_session_listing_and_delete(client):
     r = client.post("/regression/run", json={"engine_ids": ["fake"]})
     session_id = r.json()["id"]
-    import time
-
     deadline = time.monotonic() + 60
     while client.get(f"/regression/{session_id}").json()["status"] != "completed":
         assert time.monotonic() < deadline
@@ -310,3 +307,24 @@ def test_capability_matrix_endpoint_shape(client):
 def test_regression_run_rejects_unknown_engine(client):
     r = client.post("/regression/run", json={"engine_ids": ["nope"]})
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 运行串行化与取消（issue #28）
+# ---------------------------------------------------------------------------
+
+
+def test_regression_run_serializes_concurrent_sessions(client):
+    r1 = client.post("/regression/run", json={"engine_ids": ["fake-slow"]})
+    assert r1.status_code == 200, r1.text
+    sid1 = r1.json()["id"]
+    # 第二个 POST 不再起第二个事件循环抢单：直接 409。
+    r2 = client.post("/regression/run", json={"engine_ids": ["fake"]})
+    assert r2.status_code == 409, r2.text
+    # 删除运行中的会话会取消任务并立即释放串行锁。
+    # DELETE awaits the cancelled task, so the serialization lock is
+    # already released when the 200 comes back — no polling needed.
+    assert client.delete(f"/regression/{sid1}").status_code == 200
+    r3 = client.post("/regression/run", json={"engine_ids": ["fake"]})
+    assert r3.status_code == 200, r3.text
+    client.delete(f"/regression/{r3.json()['id']}")

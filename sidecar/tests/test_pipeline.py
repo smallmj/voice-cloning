@@ -89,8 +89,12 @@ def _minimax_ctx(tmp_path):
         output_dir=audio_dir, key_store=store,
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     ))
+    # keys=store is REQUIRED for hermeticity: without it the ctx defaults to
+    # the real Keychain KeyStore, so this test only passed on machines where
+    # the developer's own MiniMax key happened to be stored (CI caught it).
     return AppContext(
         registry=registry, token="t", audio_dir=audio_dir, data_root=tmp_path,
+        keys=store,
     )
 
 

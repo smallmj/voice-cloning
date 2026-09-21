@@ -63,6 +63,7 @@ def test_generation_artifact_carries_aigc_marker(client):
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio.content)
+        f.flush()  # read_info_comment opens the same path on another fd
         comment = read_info_comment(Path(f.name))
     assert comment, "no ICMT chunk in artifact"
     assert "AI-generated audio" in comment

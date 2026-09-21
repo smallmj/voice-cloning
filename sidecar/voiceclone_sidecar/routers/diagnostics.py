@@ -127,11 +127,17 @@ def build_router(ctx: AppContext) -> APIRouter:
         except TranscriptionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         state = tr.install_state()
+        installing = LOCAL_TOOL_ID in ctx.install_jobs
+        # Issue #42: the SAME byte-level progress structure engine installs
+        # expose (issue #35) — the engine-page card renders both with one
+        # shared helper. Gated on an actually running install so a stale
+        # field from a killed run is never advertised as a live progress bar.
         return {
             "id": LOCAL_TOOL_ID,
             "installed": state["installed"],
-            "installing": LOCAL_TOOL_ID in ctx.install_jobs,
+            "installing": installing,
             "steps": state["steps"],
+            "progress": state.get("progress") if installing else None,
         }
 
     @router.post("/transcription/local/install", dependencies=[Depends(ctx.require_auth)])

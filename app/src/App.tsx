@@ -609,6 +609,7 @@ export default function App() {
               token={commonSectionProps.token}
               prefs={prefs}
               updatePrefs={updatePrefs}
+              onNavigate={navigate}
             />
           )}
         </main>

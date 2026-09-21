@@ -7,6 +7,8 @@ import {
   downloadWithAuth,
 } from "../client";
 import type { ThemePref, UiPrefs } from "../hooks";
+import { JumpLink } from "../components/bits";
+import type { SectionId } from "../ui";
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
   { value: "system", label: "跟随系统" },
@@ -19,19 +21,22 @@ export function SettingsSection({
   token,
   prefs,
   updatePrefs,
+  onNavigate,
 }: {
   baseUrl: string;
   token: string;
   prefs: UiPrefs;
   updatePrefs: (partial: Partial<UiPrefs>) => void;
+  onNavigate: (section: SectionId) => void;
 }) {
-  // Transcription provider (issue #8) + local install lifecycle.
+  // Transcription provider (issue #8; issue #42: the install entry moved to
+  // the 引擎 page's transcription-tool card — this page keeps only the
+  // provider choice and a guidance hint).
   const [transProviders, setTransProviders] = useState<{
     provider: string;
     local: { supported: boolean; installed: boolean; label: string | null };
     engines: TranscriptionEngineInfo[];
   } | null>(null);
-  const [localTransInstalling, setLocalTransInstalling] = useState(false);
   const [transError, setTransError] = useState<string | null>(null);
   // Issue #14: whole-library backup/restore.
   const [backupBusy, setBackupBusy] = useState(false);
@@ -52,29 +57,6 @@ export function SettingsSection({
       });
   }, [baseUrl, token]);
 
-  useEffect(() => {
-    if (!localTransInstalling) return;
-    const t = setInterval(async () => {
-      let st: { installed: boolean; installing: boolean };
-      try {
-        st = await apiJson<{ installed: boolean; installing: boolean }>(
-          baseUrl,
-          token,
-          "/transcription/local/status",
-        );
-      } catch {
-        return; // sidecar restarting — keep polling
-      }
-      if (!st.installing) {
-        setLocalTransInstalling(false);
-        apiJson<typeof transProviders>(baseUrl, token, "/transcription/providers")
-          .then((p) => setTransProviders(p))
-          .catch(() => undefined);
-      }
-    }, 1000);
-    return () => clearInterval(t);
-  }, [baseUrl, token, localTransInstalling]);
-
   async function setTransProvider(provider: string) {
     setTransError(null);
     try {
@@ -87,18 +69,6 @@ export function SettingsSection({
       );
     } catch (e) {
       setTransError(`切换转写提供方失败：${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function installLocalTranscriber() {
-    if (localTransInstalling) return;
-    setLocalTransInstalling(true);
-    setTransError(null);
-    try {
-      await apiJson(baseUrl, token, "/transcription/local/install", { method: "POST" });
-    } catch (e) {
-      setLocalTransInstalling(false);
-      setTransError(`发起本地转写安装失败：${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -173,7 +143,7 @@ export function SettingsSection({
     <section>
       <h2>设置</h2>
       <div className="hint">
-        软件级设置：外观、备份恢复、转写提供方。引擎的密钥与安装入口在「引擎」页的引擎卡片里
+        软件级设置：外观、备份恢复、转写提供方。引擎与转写工具的密钥、安装入口都在「引擎」页的卡片里
         （云端引擎一律 BYOK：API Key 只保存在本机系统钥匙串中）。
       </div>
 
@@ -257,24 +227,21 @@ export function SettingsSection({
               该云端转写使用已接入引擎的 API Key（不新增密钥）；请先到「引擎」页该引擎卡片内配置该厂商的 API Key。
             </span>
           )}
-          {transProviders?.provider === "local" && transProviders.local.supported && (
-            <>
-              <button onClick={() => void installLocalTranscriber()} disabled={localTransInstalling}>
-                {localTransInstalling
-                  ? "安装中…"
-                  : transProviders.local.installed
-                    ? "重新安装"
-                    : "安装本地转写"}
-              </button>
+          {/* Issue #42: no install button here — the 引擎 page's transcription
+              tool card is the only install entry. Only guidance remains. */}
+          {transProviders?.provider === "local" &&
+            transProviders.local.supported &&
+            !transProviders.local.installed && (
               <span className="hint">
-                {localTransInstalling
-                  ? "正在下载并安装本地转写模型，请稍候…"
-                  : transProviders.local.installed
-                    ? "本地转写已就绪（离线可用）。"
-                    : "本地转写尚未安装；安装后转写与参考文本自动补全均离线完成。"}
+                本地转写尚未安装；
+                <JumpLink
+                  target="engines"
+                  label="到「引擎」页的转写工具卡片安装"
+                  onNavigate={onNavigate}
+                />
+                ，安装后转写与参考文本自动补全均离线完成。
               </span>
-            </>
-          )}
+            )}
         </div>
         {transError && <div className="error">{transError}</div>}
       </div>

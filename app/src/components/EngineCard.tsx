@@ -1,37 +1,10 @@
 import { useState } from "react";
 import type { EngineInfo, EngineInstallStatus } from "../api";
-import { CAP_LABELS, STEP_LABELS } from "../labels";
+import { CAP_LABELS } from "../labels";
 import { CapBadge } from "./bits";
-import { formatBytes, progressPercent } from "../install-progress";
+import { InstallProgressLine, InstallStepsList } from "./InstallProgress";
 import { engineDetailParagraphs } from "../ui";
 import type { MatrixEngine } from "../capability-matrix";
-
-function InstallProgressLine({
-  progress,
-}: {
-  progress: NonNullable<EngineInstallStatus["progress"]>;
-}) {
-  const pct = progressPercent(progress);
-  return (
-    <div
-      className="install-progress"
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={pct ?? undefined}
-    >
-      <div className="install-progress-bar">
-        <div className="install-progress-fill" style={{ width: `${pct ?? 0}%` }} />
-      </div>
-      <div className="install-progress-text">
-        {pct !== null ? `${pct}%` : "下载中…"} · {progress.file}
-        {`（${formatBytes(progress.done_bytes)}${
-          progress.total_bytes !== null ? ` / ${formatBytes(progress.total_bytes)}` : ""
-        }）`}
-      </div>
-    </div>
-  );
-}
 
 export function EngineCard({
   engine,
@@ -105,14 +78,7 @@ export function EngineCard({
         <InstallProgressLine progress={installStatus.progress} />
       )}
       {!installed && installStatus && Object.keys(installStatus.steps).length > 0 && (
-        <div className="install-steps">
-          {Object.entries(installStatus.steps).map(([id, s]) => (
-            <div key={id} className={`install-step step-${s.status}`}>
-              {STEP_LABELS[id] ?? id}：{s.status}
-              {s.status === "failed" && s.error ? `（${s.error}）` : ""}
-            </div>
-          ))}
-        </div>
+        <InstallStepsList steps={installStatus.steps} />
       )}
       <div className="badges">
         <CapBadge

@@ -170,8 +170,8 @@ def build_router(ctx: AppContext) -> APIRouter:
             if not tr.is_installed():
                 raise HTTPException(
                     status_code=409,
-                    detail="本地转写引擎未安装，无法做 ASR 可懂度复核；"
-                    "可先在「转写设置」安装，或关闭 asr_check 重试",
+                    detail="本地转写工具未安装，无法做 ASR 可懂度复核；"
+                    "可先到「引擎」页的转写工具卡片安装，或关闭 asr_check 重试",
                 )
 
         plan = []

@@ -167,7 +167,7 @@ export function VoiceCard({
           ⚠️ 这段转写文本是早期版本内置测试引擎写入的占位文本，不是真实转写结果。
           需要参考文本的引擎会把它当成参考文本使用，影响复刻质量。
           请先安装并使用本地转写，再点击「重新转写」覆盖。
-          <JumpLink target="settings" label="打开转写设置" onNavigate={onNavigate} />
+          <JumpLink target="engines" label="到「引擎」页安装本地转写" onNavigate={onNavigate} />
         </div>
       )}
       <div className="voice-tools" onClick={(ev) => ev.stopPropagation()}>

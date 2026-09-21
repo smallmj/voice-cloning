@@ -166,7 +166,15 @@ class LocalTranscriber:
 
     def install_state(self) -> dict:
         state = installer.load_state(self._ctx())
-        return {"installed": bool(state.get("installed")), "steps": state.get("steps", {})}
+        # Issue #42: whitelist exactly what the status endpoints render —
+        # including the persisted issue-#35 ``progress`` so the endpoint can
+        # expose the same unified progress structure engines do (the endpoint
+        # gates it on a live install). Nothing else from the state file leaks.
+        return {
+            "installed": bool(state.get("installed")),
+            "steps": state.get("steps", {}),
+            "progress": state.get("progress"),
+        }
 
     def _ms_weights_dir(self) -> Path:
         """Managed directory for ModelScope-downloaded ASR weights."""
@@ -208,7 +216,7 @@ class LocalTranscriber:
             if line.startswith("RESULT: "):
                 return Path(json.loads(line[len("RESULT: "):])["path"])
         raise TranscriptionError(
-            "本地转写模型尚未下载完成；请先在设置中安装本地转写"
+            "本地转写工具的模型尚未下载完成；请到「引擎」页的转写工具卡片重新安装"
         )
 
     def install_steps(self) -> list[installer.InstallStep]:
@@ -311,7 +319,7 @@ class LocalTranscriber:
     def transcribe(self, audio_path: str, log) -> str:
         if not self.is_installed():
             raise TranscriptionError(
-                "本地转写工具尚未安装；请在「转写设置」中先安装本地转写，"
+                "本地转写工具尚未安装；请到「引擎」页的转写工具卡片先安装本地转写，"
                 "或切换为云端转写"
             )
         venv = uvman.engine_venv_dir(self.root, LOCAL_TOOL_ID)

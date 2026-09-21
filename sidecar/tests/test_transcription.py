@@ -184,6 +184,43 @@ def test_local_tool_status_reports_uninstalled(client):
     assert data["installed"] is False
 
 
+def test_local_tool_status_progress_contract(client):
+    """Issue #42: the transcription tool status endpoint exposes the SAME
+    unified progress structure engine installs do (issue #35) — the engine
+    page renders both with one shared helper. With no live install the
+    field is present and null (a stale byte count must never look alive)."""
+    data = client.get("/transcription/local/status").json()
+    assert set(data) >= {"id", "installed", "installing", "steps", "progress"}
+    assert data["progress"] is None
+
+
+def test_local_tool_install_state_carries_progress(tmp_path):
+    """Unit seam for the live case (cross-process HTTP tests cannot fake a
+    running install): a mid-download install state carries the byte-level
+    ``progress`` through ``install_state`` so the endpoint can expose it."""
+    if transcription.platform_config() is None:
+        pytest.skip("local transcription is unsupported on this platform")
+
+    from voiceclone_sidecar.runtime import installer
+
+    tool = transcription.LocalTranscriber(root=tmp_path)
+    # Exactly what a live install persists mid-download (installer._persist_progress):
+    # progress sits in the state file between the running and cleared moments.
+    installer.save_state(
+        tool._ctx(),
+        {
+            "steps": {"weights": {"status": "running"}},
+            "progress": {"file": "weights:model.bin", "done_bytes": 1024, "total_bytes": 4096},
+        },
+    )
+    state = tool.install_state()
+    assert state["progress"] == {
+        "file": "weights:model.bin",
+        "done_bytes": 1024,
+        "total_bytes": 4096,
+    }
+
+
 def test_transcribe_via_engine_provider_stores_transcript(client):
     """Cloud transcription reuses a registered engine — no new vendor."""
     client.put("/transcription/provider", json={"provider": "fake"})

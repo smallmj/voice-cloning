@@ -8,15 +8,24 @@ import type {
   Voice,
 } from "../api";
 import { CompareSection } from "../components/CompareSection";
-import { reasonLabel, splitParamLayers, visibleParamSpecs } from "../ui";
+import {
+  GENERATE_TAB_IDS,
+  GENERATE_TAB_LABELS,
+  reasonLabel,
+  splitParamLayers,
+  visibleParamSpecs,
+  type GenerateTabId,
+  type SectionId,
+} from "../ui";
 import { Waveform } from "../components/Waveform";
 import { JumpLink } from "../components/bits";
-import type { SectionId } from "../ui";
 
 export function GenerateSection({
   baseUrl,
   token,
   mediaToken,
+  tab,
+  onTabChange,
   engines,
   selectedEngine,
   selectedEngineInfo,
@@ -43,6 +52,10 @@ export function GenerateSection({
   baseUrl: string;
   token: string;
   mediaToken: string;
+  /** Issue #43: which generate sub-tab is active. Lifted to App so the
+   * history-rerun jump can land on 「单条生成」 deterministically. */
+  tab: GenerateTabId;
+  onTabChange: (tab: GenerateTabId) => void;
   engines: EngineInfo[];
   selectedEngine: string | null;
   selectedEngineInfo: EngineInfo | null;
@@ -76,6 +89,24 @@ export function GenerateSection({
   return (
     <section>
       <h2>生成</h2>
+      {/* Issue #43: two independent sub-tabs — separate features, not two
+      stages of one flow. Each pane owns its own text/voice/param state;
+      switching never back-fills between them. */}
+      <div className="generate-tabs" role="tablist" aria-label="生成模式">
+        {GENERATE_TAB_IDS.map((id) => (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={tab === id}
+            className={`generate-tab ${tab === id ? "active" : ""}`}
+            onClick={() => onTabChange(id)}
+          >
+            {GENERATE_TAB_LABELS[id]}
+          </button>
+        ))}
+      </div>
+      {tab === "single" && (
+        <>
       <div className="voice-picker">
         <label>
           使用音色：
@@ -251,14 +282,18 @@ export function GenerateSection({
           <button onClick={onClearRerunParams}>清除</button>
         </div>
       )}
+        </>
+      )}
 
-      <CompareSection
-        baseUrl={baseUrl}
-        token={token}
-        mediaToken={mediaToken}
-        voices={voices}
-        engines={engines}
-      />
+      {tab === "compare" && (
+        <CompareSection
+          baseUrl={baseUrl}
+          token={token}
+          mediaToken={mediaToken}
+          voices={voices}
+          engines={engines}
+        />
+      )}
 
       {/* ADR-0013 2026 修订：日志抽屉已由全局右侧共享侧边栏取代（issue #36）。 */}
     </section>

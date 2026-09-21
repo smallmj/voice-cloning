@@ -5,6 +5,9 @@ import {
   engineDetailParagraphs,
   voiceDesignEngines,
   buildRerunState,
+  GENERATE_TAB_IDS,
+  GENERATE_TAB_LABELS,
+  isGenerateTabId,
   isSectionId,
   jobSettled,
   LOG_BUFFER_LIMIT,
@@ -36,6 +39,21 @@ describe("five sections + navigation (ADR-0013)", () => {
     expect(isSectionId("generate")).toBe(true);
     expect(isSectionId("bogus")).toBe(false);
     expect(isSectionId(null)).toBe(false);
+  });
+});
+
+describe("generate sub-tabs (issue #43)", () => {
+  it("defines exactly two independent tabs, single first", () => {
+    expect(GENERATE_TAB_IDS).toEqual(["single", "compare"]);
+    expect(GENERATE_TAB_LABELS).toEqual({ single: "单条生成", compare: "对比盲听" });
+  });
+
+  it("validates tab ids with the same fallback contract as sections", () => {
+    expect(isGenerateTabId("single")).toBe(true);
+    expect(isGenerateTabId("compare")).toBe(true);
+    expect(isGenerateTabId("bogus")).toBe(false);
+    expect(isGenerateTabId(null)).toBe(false);
+    expect(isGenerateTabId(undefined)).toBe(false);
   });
 });
 

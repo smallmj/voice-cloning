@@ -21,6 +21,7 @@ import {
   SECTION_IDS,
   SECTION_LABELS,
   sendableParams,
+  type GenerateTabId,
   type SectionId,
 } from "./ui";
 import { useActiveJobCount, useConsent, useEngines, useInstallStatuses, useLogStream, useMediaToken, useUiPrefs, useVoices } from "./hooks";
@@ -34,6 +35,9 @@ export default function App() {
   const [info, setInfo] = useState<SidecarInfo | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [active, setActive] = useState<SectionId>("generate");
+  // Issue #43: which generate sub-tab is showing. Kept in App state (not
+  // persisted — no requirement) so the rerun jump lands on 「单条生成」.
+  const [generateTab, setGenerateTab] = useState<GenerateTabId>("single");
 
   const baseUrl = info?.baseUrl ?? null;
   const token = info?.token ?? null;
@@ -427,6 +431,7 @@ export default function App() {
     setText(state.text);
     setSelectedVoice(state.voiceId);
     if (state.hint) setRerunHint(state.hint);
+    setGenerateTab("single"); // rerun targets the single-generation pane only
     setActive("generate");
   }
 
@@ -526,6 +531,8 @@ export default function App() {
               baseUrl={commonSectionProps.baseUrl}
               token={commonSectionProps.token}
               mediaToken={mediaToken}
+              tab={generateTab}
+              onTabChange={setGenerateTab}
               engines={engines}
               selectedEngine={selectedEngine}
               selectedEngineInfo={selectedEngineInfo}

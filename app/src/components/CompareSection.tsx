@@ -114,10 +114,11 @@ export function CompareSection({
 
   return (
     <div className="compare-mode">
-      <h3>对比盲听（生成内模式）</h3>
+      <h3>对比盲听</h3>
       <div className="hint">
         同一音色、同一文本交给多个引擎并排生成；所有结果先做响度归一化（LUFS −16），
         再以 A/B/C 盲标呈现。评分沉淀为本机偏好画像，仅作参考，不影响默认引擎或任何自动路由。
+        此处与「单条生成」互不共享状态。
       </div>
       <div className="voice-picker">
         <label>

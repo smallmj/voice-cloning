@@ -23,6 +23,24 @@ export function isSectionId(value: string | null | undefined): value is SectionI
   return !!value && (SECTION_IDS as readonly string[]).includes(value);
 }
 
+// --- generate section sub-tabs (issue #43, ADR-0013 2026 修订) --------------
+
+/** 「单条生成」「对比盲听」是两个独立功能（非同一流程两段）：各自拥有自己的
+ * 布局与状态，切换不回填文本/音色/参数。 */
+export const GENERATE_TAB_IDS = ["single", "compare"] as const;
+export type GenerateTabId = (typeof GENERATE_TAB_IDS)[number];
+
+export const GENERATE_TAB_LABELS: Record<GenerateTabId, string> = {
+  single: "单条生成",
+  compare: "对比盲听",
+};
+
+/** Persisted/unknown values fall back to the primary tab instead of a blank
+ * pane — same contract as isSectionId. */
+export function isGenerateTabId(value: string | null | undefined): value is GenerateTabId {
+  return !!value && (GENERATE_TAB_IDS as readonly string[]).includes(value);
+}
+
 // --- theme (ADR-0014) -------------------------------------------------------
 
 export type ThemePref = "system" | "dark" | "light";

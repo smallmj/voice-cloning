@@ -775,3 +775,21 @@ details.engine-params > summary {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
+
+/* Issue #43: generate section sub-tabs — 「单条生成」/「对比盲听」. */
+.generate-tabs { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.generate-tab {
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.generate-tab:hover { color: var(--text); }
+.generate-tab.active {
+  background: var(--accent-bg, var(--panel-raised));
+  color: var(--text);
+  border-color: var(--accent, var(--border));
+  font-weight: 600;
+}

@@ -108,6 +108,60 @@ def test_download_resumes_from_partial(http_server, tmp_path):
     assert out.read_bytes() == RangeHandler.payload
 
 
+class EOF416Handler(http.server.BaseHTTPRequestHandler):
+    """Serves 416 for ANY ranged GET — like an xet/S3 backend asked to resume
+    at (or past) EOF (live failure 2026-09-21: a fully-downloaded `.part`
+    retried as a resume 416'd forever and every source "failed")."""
+
+    payload = b"z" * 40_000
+
+    def do_GET(self):
+        if self.headers.get("Range"):
+            self.send_error(416)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(self.payload)))
+        self.end_headers()
+        self.wfile.write(self.payload)
+
+    def log_message(self, *args):
+        pass
+
+
+def _serve_416_on_range(tmp_path, part):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EOF416Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        return downloader.download_file(
+            downloader.DownloadSpec(path="f.bin", dest_name="f.bin"),
+            tmp_path,
+            [f"http://127.0.0.1:{server.server_address[1]}/{{path}}"],
+        )
+    finally:
+        server.shutdown()
+
+
+def test_download_finalizes_complete_part_without_redownload(tmp_path):
+    """A `.part` already at full size must be finalized as-is, never resumed
+    (a resume at EOF gets 416 and used to fail every source forever)."""
+    part = tmp_path / "f.bin.part"
+    part.write_bytes(EOF416Handler.payload)  # complete, but never renamed
+    out = _serve_416_on_range(tmp_path, part)
+    assert out == tmp_path / "f.bin"
+    assert out.read_bytes() == EOF416Handler.payload
+    assert not part.exists()
+
+
+def test_download_survives_416_by_falling_back_to_fresh(tmp_path):
+    """A 416 on resume with a genuinely short part must restart from scratch
+    on the SAME source, not abort it (the old code raised immediately, so the
+    fresh-download attempt was unreachable)."""
+    part = tmp_path / "f.bin.part"
+    part.write_bytes(EOF416Handler.payload[:123])  # short AND unservable
+    out = _serve_416_on_range(tmp_path, part)
+    assert out.read_bytes() == EOF416Handler.payload
+
+
 def test_download_falls_back_to_second_source(http_server, tmp_path):
     out = downloader.download_file(
         downloader.DownloadSpec(path="f.bin", dest_name="f.bin"),

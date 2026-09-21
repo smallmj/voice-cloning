@@ -134,6 +134,15 @@ def download_file(
             if log:
                 log(f"{spec.dest_name}: already complete ({total} bytes), skipping")
             return dest
+        # A complete `.part` from an interrupted finalize must never be fed
+        # back to curl as a resume: the server answers 416 (Range Not
+        # Satisfiable) for an offset at EOF and the transfer fails forever
+        # (seen live 2026-09-21: hf-mirror→xet, fully-downloaded 1.19 GB file).
+        if total is not None and part.exists() and part.stat().st_size == total:
+            part.replace(dest)
+            if log:
+                log(f"{spec.dest_name}: partial download was already complete ({total} bytes), finalizing")
+            return dest
         try:
             served_url = _download_from(url, part, spec.dest_name, progress, log, total=total)
             part.replace(dest)
@@ -195,6 +204,20 @@ def _download_from(url: str, part: Path, name: str, progress, log, total: int | 
             # where resumed bytes precede fresh bytes.
             if log:
                 log(f"{name}: server ignored Range; restarting from scratch")
+            continue
+        if code == 416 and resume:
+            # Range Not Satisfiable on resume = the offset is already at (or
+            # past) EOF. If the part holds the full file, the download was
+            # DONE and only the finalize was interrupted — treat it as
+            # complete (live 2026-09-21). Otherwise the part is corrupt/too
+            # long: fall through to the fresh-download attempt instead of
+            # aborting the whole source.
+            if total is not None and part.exists() and part.stat().st_size == total:
+                if log:
+                    log(f"{name}: resume hit 416 but the file is already complete ({total} bytes)")
+                return effective_url or url
+            if log:
+                log(f"{name}: resume hit 416 (bad partial size {part.stat().st_size if part.exists() else 0}); restarting from scratch")
             continue
         if code in (200, 206) and part.exists():
             if progress:

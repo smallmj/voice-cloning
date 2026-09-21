@@ -23,7 +23,9 @@ which shape this adapter:
 Install layout under the engine dir:
 
 - ``weights/``   — Base weights (campplus / fireredtts3_base / redae /
-  text_tokenizer), HF → hf-mirror chain (ModelScope twin unverified);
+  text_tokenizer), preferred-source chain with the ModelScope twin
+  ``FireRedTeam/FireRedTTS3`` (verified 2026-09-21: every WEIGHTS entry
+  answers 206 with data on a ranged GET);
 - ``upstream/``  — the extracted upstream source checkout, patched in place.
 """
 
@@ -266,7 +268,7 @@ class FireRedTts3MpsEngine(InstallableEngine):
                 log(f"fireredtts3 patch: {line}")
 
         def step_weights(log, progress):
-            chain = sources.weight_sources(REPO, ms_repo=None, preferred=sources.weight_pref(self.env))
+            chain = sources.weight_sources(REPO, ms_repo=REPO, preferred=sources.weight_pref(self.env))
             local = self._local_weights_root()
             for rel in WEIGHTS:
                 if local is not None and copy_from_local(local, rel, weights_dir / rel, log):

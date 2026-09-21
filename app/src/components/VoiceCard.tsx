@@ -157,7 +157,7 @@ export function VoiceCard({
             .join("、")}
         </div>
       )}
-      {ref?.transcript && (
+      {ref?.transcript && !ref.transcript_placeholder && (
         <div className="voice-transcript">
           转写文本：<code>{ref.transcript}</code>
         </div>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import wave
 
@@ -204,7 +205,6 @@ def test_matrix_data_lists_all_shipped_engines():
     data = load_matrix_data()
     ids = {e["engine_id"] for e in data["engines"]}
     assert ids == {
-        "fake",
         "qwen3-tts-vc-cloud",
         "qwen3-tts-vd-cloud",
         "minimax-speech-cloud",
@@ -217,6 +217,14 @@ def test_matrix_data_lists_all_shipped_engines():
         "voxcpm2-cuda",
         "dots-tts-cuda",
     }
+
+
+def test_matrix_data_has_no_fake_rows():
+    """issue #41: 矩阵是用户可见的能力矩阵，不得出现测试替身（fake）条目。"""
+    data = load_matrix_data()
+    for engine in data["engines"]:
+        blob = json.dumps(engine, ensure_ascii=False)
+        assert "fake" not in blob.lower(), engine["engine_id"]
 
 
 def test_matrix_data_every_fact_carries_verification():
@@ -293,12 +301,13 @@ def test_capability_matrix_endpoint_shape(client):
     assert r.status_code == 200, r.text
     data = r.json()
     ids = {e["engine_id"] for e in data["engines"]}
-    assert "fake" in ids and "indextts-25-cuda" in ids
+    # issue #41: 测试替身（fake）不再是矩阵条目，用户可见矩阵只含真实引擎。
+    assert "fake" not in ids and "indextts-25-cuda" in ids
     for e in data["engines"]:
         # 固化事实 + 运行时声明同时在场
         assert "evidence" in e and "runtime" in e
-    fake = next(e for e in data["engines"] if e["engine_id"] == "fake")
-    assert fake["runtime"]["capabilities"]["voice_cloning"] is True
+    indextts = next(e for e in data["engines"] if e["engine_id"] == "indextts-25-cuda")
+    assert indextts["evidence"], "固化事实必须随矩阵下发"
     # 类别与回归集条目随矩阵下发，界面据此渲染
     assert {c["id"] for c in data["categories"]} == {
         "numbers", "dates", "amounts", "mixed", "polyphones",

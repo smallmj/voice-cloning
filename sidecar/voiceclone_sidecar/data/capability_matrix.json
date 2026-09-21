@@ -4,38 +4,6 @@
   "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
   "engines": [
     {
-      "engine_id": "fake",
-      "display_name": "Fake Engine (built-in)",
-      "kind": "builtin",
-      "role": "测试替身（非产品引擎）：仅在 VOICECLONE_TEST_ENGINES=1 下注册，供契约测试走真实代码路径；生产引擎列表与转写提供方列表均不出现（issue #18）。",
-      "evidence": [
-        {
-          "field": "输出",
-          "value": "内置合成音（非语音）",
-          "verification": "measured",
-          "source": "voiceclone_sidecar/engines/fake.py",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "生产可见性",
-          "value": "被门控：仅 VOICECLONE_TEST_ENGINES=1 时注册",
-          "verification": "measured",
-          "source": "voiceclone_sidecar/registry.py（issue #18）",
-          "date": "2026-09-18"
-        }
-      ],
-      "performance": [
-        {
-          "env": "任意（无 GPU 依赖）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "measured",
-          "note": "纯 Python 写 WAV，无模型加载"
-        }
-      ],
-      "notes": "不参与听感评测，也不作为云端转写提供方：其 transcribe() 返回固定测试文本，曾污染音色库；issue #18 起从生产注册表门控移除。矩阵保留此条目只为契约测试环境的渲染路径验证。"
-    },
-    {
       "engine_id": "qwen3-tts-mlx",
       "display_name": "Qwen3-TTS 0.6B Base（本地 · MLX）",
       "kind": "local",

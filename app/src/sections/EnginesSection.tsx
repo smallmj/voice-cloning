@@ -6,7 +6,6 @@ import {
   useCapabilityMatrix,
 } from "../capability-matrix";
 import { CapabilityMatrixSection } from "../components/CapabilityMatrixSection";
-import { DownloadSourcesSection } from "../components/DownloadSourcesSection";
 import { EngineCard } from "../components/EngineCard";
 import { TranscribeToolCard } from "../components/TranscribeToolCard";
 import type { SectionId } from "../ui";
@@ -100,7 +99,8 @@ export function EnginesSection({
       {/* Issue #42: the transcription tool's ONLY install entry in the app. */}
       <TranscribeToolCard baseUrl={baseUrl} token={token} />
       <RegressionAdvancedArea baseUrl={baseUrl} token={token} />
-      <DownloadSourcesSection baseUrl={baseUrl} token={token} />
+      {/* Issue #44: 默认下载源 moved to the settings page — the 引擎 page
+          keeps only per-engine cards (keys, installs) and the matrix. */}
       <CapabilityMatrixSection baseUrl={baseUrl} token={token} engines={engines} onNavigate={onNavigate} />
     </section>
   );

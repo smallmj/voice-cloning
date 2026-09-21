@@ -25,6 +25,26 @@ SIDEBAR_MIN_WIDTH = 260
 SIDEBAR_MAX_WIDTH = 640
 SIDEBAR_DEFAULT_WIDTH = 360
 
+# Issue #44: software-level display and log-behavior settings. The clamps
+# mirror the renderer's controls so a corrupt stored value falls back cleanly.
+UI_SCALE_MIN = 0.85
+UI_SCALE_MAX = 1.5
+FONT_SIZE_MIN = 11
+FONT_SIZE_MAX = 24
+LOG_BUFFER_MIN = 100
+LOG_BUFFER_MAX = 5000
+LOG_BUFFER_DEFAULT = 500
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _clamp(value, lo, hi, default):
+    if not _is_number(value):
+        return default
+    return max(lo, min(hi, float(value)))
+
 
 def _sanitize(raw: dict) -> dict:
     """Coerce stored values into the public shape; unknown/corrupt values
@@ -41,7 +61,22 @@ def _sanitize(raw: dict) -> dict:
         # Issue #36: shared right sidebar (logs + job queue) state.
         "sidebar_open": raw.get("sidebar_open", True) is True,
         "sidebar_width": _clamp_sidebar_width(raw.get("sidebar_width")),
+        # Issue #44: UI scale / font-size override / log buffer count. A
+        # font_size of None means "no override" (the theme default applies).
+        "ui_scale": _clamp(raw.get("ui_scale"), UI_SCALE_MIN, UI_SCALE_MAX, 1.0),
+        "font_size": _clamp_int_or_none(raw.get("font_size"), FONT_SIZE_MIN, FONT_SIZE_MAX),
+        "log_buffer": int(
+            _clamp(raw.get("log_buffer"), LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
+        ),
     }
+
+
+def _clamp_int_or_none(value, lo: int, hi: int) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return max(lo, min(hi, value))
 
 
 def _clamp_sidebar_width(value) -> int:
@@ -103,8 +138,31 @@ def build_router(ctx: AppContext) -> APIRouter:
             if not isinstance(width, int) or isinstance(width, bool):
                 raise HTTPException(status_code=422, detail="sidebar_width 必须是整数")
             update["sidebar_width"] = _clamp_sidebar_width(width)
+        if "ui_scale" in body:
+            # Issue #44: a float scale; booleans are corrupt payloads.
+            if not _is_number(body["ui_scale"]):
+                raise HTTPException(status_code=422, detail="ui_scale 必须是数字")
+            update["ui_scale"] = _clamp(
+                body["ui_scale"], UI_SCALE_MIN, UI_SCALE_MAX, 1.0
+            )
+        if "font_size" in body:
+            size = body["font_size"]
+            if size is not None and (not isinstance(size, int) or isinstance(size, bool)):
+                raise HTTPException(status_code=422, detail="font_size 必须是整数或 null")
+            update["font_size"] = (
+                None
+                if size is None
+                else min(FONT_SIZE_MAX, max(FONT_SIZE_MIN, size))
+            )
+        if "log_buffer" in body:
+            buf = body["log_buffer"]
+            if not isinstance(buf, int) or isinstance(buf, bool):
+                raise HTTPException(status_code=422, detail="log_buffer 必须是整数")
+            update["log_buffer"] = int(
+                _clamp(buf, LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
+            )
         if not update:
-            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id、engine_params、sidebar_open 或 sidebar_width 之一")
+            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id、engine_params、sidebar_open、sidebar_width、ui_scale、font_size 或 log_buffer 之一")
         ctx.write_ui_prefs(update)
         return _sanitize(ctx.read_ui_prefs())
 

@@ -123,8 +123,23 @@ export function jobSettled(prev: JobStatus | undefined, next: JobStatus): boolea
 
 export const LOG_BUFFER_LIMIT = 500;
 
-export function appendLog(prev: LogEvent[], event: LogEvent): LogEvent[] {
-  return [...prev.slice(-(LOG_BUFFER_LIMIT - 1)), event];
+// Issue #44: the buffer count is a software-level setting (settings page).
+// The clamp mirrors the server-side /settings/ui validation.
+export const LOG_BUFFER_MIN = 100;
+export const LOG_BUFFER_MAX = 5000;
+
+export function clampLogBuffer(raw: unknown): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? Math.round(raw) : LOG_BUFFER_LIMIT;
+  return Math.min(LOG_BUFFER_MAX, Math.max(LOG_BUFFER_MIN, n));
+}
+
+export function appendLog(
+  prev: LogEvent[],
+  event: LogEvent,
+  limit: number = LOG_BUFFER_LIMIT,
+): LogEvent[] {
+  const cap = clampLogBuffer(limit);
+  return [...prev.slice(-(cap - 1)), event];
 }
 
 /** The log WebSocket delivers untrusted text; a malformed frame must be
@@ -191,6 +206,30 @@ export function clampSidebarWidth(width: number): number {
   return Math.round(
     Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width)),
   );
+}
+
+// --- issue #44: UI scale + font-size override ---------------------------------
+
+export const UI_SCALE_MIN = 0.85;
+export const UI_SCALE_MAX = 1.5;
+export const UI_SCALE_DEFAULT = 1;
+export const FONT_SIZE_MIN = 11;
+export const FONT_SIZE_MAX = 24;
+/** Font-size choices offered in the settings page; null = follow the theme. */
+export const FONT_SIZE_CHOICES = [12, 13, 14, 16, 18] as const;
+/** Log buffer count choices offered in the settings page. */
+export const LOG_BUFFER_CHOICES = [200, 500, 1000, 2000, 5000] as const;
+
+export function clampUiScale(raw: unknown): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? raw : UI_SCALE_DEFAULT;
+  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, n));
+}
+
+/** null = no override (the theme's default --fs-base applies). */
+export function clampFontSize(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  const n = typeof raw === "number" && Number.isFinite(raw) ? Math.round(raw) : null;
+  return n === null ? null : Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, n));
 }
 
 // --- issue #23 / ADR-0018: two-layer parameter surface -----------------------

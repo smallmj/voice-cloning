@@ -14,8 +14,12 @@ import type {
 import { apiJson, fetchMediaToken } from "./client";
 import {
   appendLog,
+  clampFontSize,
+  clampLogBuffer,
   clampSidebarWidth,
+  clampUiScale,
   isThemePref,
+  LOG_BUFFER_LIMIT,
   parseLogEvent,
   SIDEBAR_DEFAULT_WIDTH,
   type ThemePref,
@@ -46,6 +50,12 @@ export interface UiPrefs {
   // Issue #36: shared right sidebar (logs + job queue) persisted state.
   sidebar_open: boolean;
   sidebar_width: number;
+  // Issue #44: software-level display & log behavior. ui_scale zooms the
+  // whole interface; font_size (null = follow the theme) overrides --fs-base;
+  // log_buffer caps the in-memory log stream.
+  ui_scale: number;
+  font_size: number | null;
+  log_buffer: number;
 }
 
 function sanitizeSidebarWidth(raw: unknown): number {
@@ -63,6 +73,9 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
     engine_params: {},
     sidebar_open: true,
     sidebar_width: SIDEBAR_DEFAULT_WIDTH,
+    ui_scale: 1,
+    font_size: null,
+    log_buffer: 500,
   });
   const [ready, setReady] = useState(false);
 
@@ -78,6 +91,9 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
           engine_params: sanitizeEngineParams(p.engine_params),
           sidebar_open: p.sidebar_open !== false,
           sidebar_width: sanitizeSidebarWidth(p.sidebar_width),
+          ui_scale: clampUiScale(p.ui_scale),
+          font_size: clampFontSize(p.font_size),
+          log_buffer: clampLogBuffer(p.log_buffer),
         });
         setReady(true);
       })
@@ -106,6 +122,9 @@ export function useUiPrefs(baseUrl: string | null, token: string | null) {
             engine_params: sanitizeEngineParams(p.engine_params),
             sidebar_open: p.sidebar_open !== false,
             sidebar_width: sanitizeSidebarWidth(p.sidebar_width),
+            ui_scale: clampUiScale(p.ui_scale),
+            font_size: clampFontSize(p.font_size),
+            log_buffer: clampLogBuffer(p.log_buffer),
           }));
         })
         .catch(() => {
@@ -308,8 +327,19 @@ export function useActiveJobCount(baseUrl: string | null, token: string | null):
 
 /** Live log stream. Reconnects with a fixed backoff when the sidecar drops
  * the socket; malformed frames are dropped via `parseLogEvent`. */
-export function useLogStream(baseUrl: string | null, mediaToken: string): LogEvent[] {
+export function useLogStream(
+  baseUrl: string | null,
+  mediaToken: string,
+  limit: number = LOG_BUFFER_LIMIT,
+): LogEvent[] {
   const [logs, setLogs] = useState<LogEvent[]>([]);
+  // Issue #44: the buffer cap is read through a ref so changing 缓冲条数
+  // re-caps the buffer without tearing down and reopening the WebSocket
+  // (which would silently drop whatever arrives during the gap).
+  const limitRef = useRef(limit);
+  useEffect(() => {
+    limitRef.current = limit;
+  }, [limit]);
   useEffect(() => {
     if (!baseUrl || !mediaToken) return;
     let ws: WebSocket | null = null;
@@ -327,7 +357,7 @@ export function useLogStream(baseUrl: string | null, mediaToken: string): LogEve
       }
       ws.onmessage = (ev) => {
         const event = parseLogEvent(typeof ev.data === "string" ? ev.data : "");
-        if (event) setLogs((prev) => appendLog(prev, event));
+        if (event) setLogs((prev) => appendLog(prev, event, limitRef.current));
       };
       ws.onclose = () => {
         if (!closed) retry = window.setTimeout(connect, 3000);

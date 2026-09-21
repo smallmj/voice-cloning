@@ -10,10 +10,19 @@ import {
   isGenerateTabId,
   isSectionId,
   jobSettled,
+  clampFontSize,
+  clampLogBuffer,
+  clampUiScale,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
   LOG_BUFFER_LIMIT,
+  LOG_BUFFER_MAX,
+  LOG_BUFFER_MIN,
   parseLogEvent,
   resolveTheme,
   SECTION_IDS,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
 } from "./ui";
 
 function rec(overrides: Partial<GenerationRecord> = {}): GenerationRecord {
@@ -119,6 +128,32 @@ describe("log stream", () => {
     }
     expect(logs).toHaveLength(LOG_BUFFER_LIMIT);
     expect(logs[logs.length - 1].message).toBe(String(LOG_BUFFER_LIMIT + 49));
+  });
+
+  it("honors a custom buffer limit (issue #44) and clamps it to range", () => {
+    let logs: LogEvent[] = [];
+    for (let i = 0; i < 400; i++) {
+      logs = appendLog(logs, { ...ev, message: String(i) }, 200);
+    }
+    expect(logs).toHaveLength(200);
+    expect(logs[logs.length - 1].message).toBe("399");
+    // Corrupt limits fall back into the valid range, never grow unbounded.
+    expect(clampLogBuffer(1)).toBe(LOG_BUFFER_MIN);
+    expect(clampLogBuffer(99999)).toBe(LOG_BUFFER_MAX);
+    expect(clampLogBuffer("big")).toBe(LOG_BUFFER_LIMIT);
+  });
+
+  it("clamps ui scale and font-size override (issue #44)", () => {
+    expect(clampUiScale(1.25)).toBe(1.25);
+    expect(clampUiScale(99)).toBe(UI_SCALE_MAX);
+    expect(clampUiScale(0.1)).toBe(UI_SCALE_MIN);
+    expect(clampUiScale("big")).toBe(1);
+    expect(clampFontSize(16)).toBe(16);
+    expect(clampFontSize(null)).toBeNull();
+    expect(clampFontSize(undefined)).toBeNull();
+    expect(clampFontSize(1)).toBe(FONT_SIZE_MIN);
+    expect(clampFontSize(99)).toBe(FONT_SIZE_MAX);
+    expect(clampFontSize("big")).toBeNull();
   });
 
   it("parses well-formed frames", () => {

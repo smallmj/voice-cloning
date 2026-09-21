@@ -8,7 +8,16 @@ import {
 } from "../client";
 import type { ThemePref, UiPrefs } from "../hooks";
 import { JumpLink } from "../components/bits";
-import type { SectionId } from "../ui";
+import { DownloadSourcesSection } from "../components/DownloadSourcesSection";
+import {
+  FONT_SIZE_CHOICES,
+  LOG_BUFFER_CHOICES,
+  LOG_BUFFER_MAX,
+  LOG_BUFFER_MIN,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  type SectionId,
+} from "../ui";
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
   { value: "system", label: "跟随系统" },
@@ -143,7 +152,7 @@ export function SettingsSection({
     <section>
       <h2>设置</h2>
       <div className="hint">
-        软件级设置：外观、备份恢复、转写提供方。引擎与转写工具的密钥、安装入口都在「引擎」页的卡片里
+        软件级设置：外观、日志、默认下载源、备份恢复、转写提供方。引擎与转写工具的密钥、安装入口都在「引擎」页的卡片里
         （云端引擎一律 BYOK：API Key 只保存在本机系统钥匙串中）。
       </div>
 
@@ -165,8 +174,81 @@ export function SettingsSection({
               ))}
             </select>
           </label>
+          {/* Issue #44: UI scale (0.85–1.5) — takes effect immediately. */}
+          <label>
+            界面缩放：
+            <input
+              type="range"
+              min={UI_SCALE_MIN}
+              max={UI_SCALE_MAX}
+              step={0.05}
+              value={prefs.ui_scale}
+              onChange={(e) => updatePrefs({ ui_scale: Number(e.target.value) })}
+            />
+            {Math.round(prefs.ui_scale * 100)}%
+            {prefs.ui_scale !== 1 && (
+              <button onClick={() => updatePrefs({ ui_scale: 1 })}>重置</button>
+            )}
+          </label>
+          {/* Issue #44: font-size override — null follows the theme. */}
+          <label>
+            字号覆盖：
+            <select
+              value={prefs.font_size ?? ""}
+              onChange={(e) =>
+                updatePrefs({
+                  font_size: e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+            >
+              <option value="">默认</option>
+              {FONT_SIZE_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n} px
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
+
+      {/* Issue #44: log behavior — the shared right sidebar's default state
+          and the in-memory log buffer cap. */}
+      <div className="settings-engine">
+        <div className="settings-engine-head">
+          <strong>日志</strong>
+        </div>
+        <div className="voice-picker">
+          <label>
+            侧边栏默认展开：
+            <input
+              type="checkbox"
+              checked={prefs.sidebar_open}
+              onChange={(e) => updatePrefs({ sidebar_open: e.target.checked })}
+            />
+          </label>
+          <label>
+            日志缓冲条数：
+            <select
+              value={prefs.log_buffer}
+              onChange={(e) => updatePrefs({ log_buffer: Number(e.target.value) })}
+            >
+              {LOG_BUFFER_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n} 条
+                </option>
+              ))}
+            </select>
+            <span className="hint">
+              （{LOG_BUFFER_MIN}–{LOG_BUFFER_MAX}）
+            </span>
+          </label>
+        </div>
+      </div>
+
+      {/* Issue #44: 默认下载源 is a software-level setting and lives here
+          (moved off the 引擎 page, where engine cards own keys/installs). */}
+      <DownloadSourcesSection baseUrl={baseUrl} token={token} />
 
       <div className="settings-engine">
         <div className="settings-engine-head">

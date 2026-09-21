@@ -19,7 +19,42 @@ def test_ui_prefs_default(client: httpx.Client):
         # Issue #36: shared right sidebar state (open by default, 360px wide).
         "sidebar_open": True,
         "sidebar_width": 360,
+        # Issue #44: software-level display & log behavior settings.
+        "ui_scale": 1.0,
+        "font_size": None,
+        "log_buffer": 500,
     }
+
+
+def test_ui_prefs_scale_font_log_round_trip(client: httpx.Client):
+    # Issue #44: UI scale, font-size override and log buffer count ride the
+    # same /settings/ui store; out-of-range values are clamped, not rejected.
+    r = client.put(
+        "/settings/ui", json={"ui_scale": 1.25, "font_size": 16, "log_buffer": 2000}
+    )
+    assert r.status_code == 200
+    assert r.json()["ui_scale"] == 1.25
+    assert r.json()["font_size"] == 16
+    assert r.json()["log_buffer"] == 2000
+
+    r = client.put(
+        "/settings/ui",
+        json={"ui_scale": 99, "font_size": 99, "log_buffer": 999999},
+    )
+    assert r.json()["ui_scale"] == 1.5
+    assert r.json()["font_size"] == 24
+    assert r.json()["log_buffer"] == 5000
+
+    r = client.put("/settings/ui", json={"ui_scale": 0.1, "font_size": 1, "log_buffer": 1})
+    assert r.json()["ui_scale"] == 0.85
+    assert r.json()["font_size"] == 11
+    assert r.json()["log_buffer"] == 100
+
+    # font_size null clears the override; non-numeric values are rejected.
+    assert client.put("/settings/ui", json={"font_size": None}).json()["font_size"] is None
+    assert client.put("/settings/ui", json={"ui_scale": "big"}).status_code == 422
+    assert client.put("/settings/ui", json={"font_size": "big"}).status_code == 422
+    assert client.put("/settings/ui", json={"log_buffer": 1.5}).status_code == 422
 
 
 def test_ui_prefs_sidebar_round_trip(client: httpx.Client):

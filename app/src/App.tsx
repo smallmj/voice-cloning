@@ -46,7 +46,8 @@ export default function App() {
   const { consent, setConsent } = useConsent(baseUrl, token);
   const mediaToken = useMediaToken(baseUrl, token);
   const { prefs, ready: prefsReady, update: updatePrefs } = useUiPrefs(baseUrl, token);
-  const logs = useLogStream(baseUrl, mediaToken);
+  // Issue #44: the in-memory log buffer's cap is a software-level setting.
+  const logs = useLogStream(baseUrl, mediaToken, prefs.log_buffer);
   const activeJobs = useActiveJobCount(baseUrl, token);
 
   const navigate = useCallback((section: SectionId) => setActive(section), []);
@@ -56,6 +57,18 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = resolveTheme(prefs.theme, systemDark);
   }, [prefs.theme, systemDark]);
+
+  // --- issue #44: UI scale + font-size override ------------------------------
+  // Scale rides the root element's `zoom` (Chromium treats root zoom like
+  // page zoom, so viewport units follow the scale); a font-size override
+  // rewrites the --fs-base variable. Both take effect immediately.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (prefs.ui_scale === 1) root.style.removeProperty("zoom");
+    else root.style.zoom = String(prefs.ui_scale);
+    if (prefs.font_size == null) root.style.removeProperty("--fs-base");
+    else root.style.setProperty("--fs-base", `${prefs.font_size}px`);
+  }, [prefs.ui_scale, prefs.font_size]);
 
   // --- generate panel state (written by history rerun → explicit rewrite) ---
   const [selectedEngine, setSelectedEngine] = useState<string | null>(null);

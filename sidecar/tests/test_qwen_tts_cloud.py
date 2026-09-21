@@ -266,3 +266,74 @@ def test_voice_missing_error_never_fires_without_voice_mention():
         httpx.Response(400, json={"code": "InvalidParameter", "message": "文本过长"})
     )
     assert not voice_missing_error(httpx.Response(500, content=b"boom"))
+
+
+# --- cloud transcription (issue #33) ---------------------------------------------
+
+
+def test_transcribe_request_shape_and_parsing(wav_file):
+    harness = Harness(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "choices": [
+                            {"message": {"content": [{"text": " 你好，世界。 "}]}}
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    text = harness.engine.transcribe(str(wav_file), lambda m: None)
+    assert text == "你好，世界。", "the transcript must be stripped plain text"
+
+    req = harness.requests[0]
+    assert req.url == f"{BASE_URL}{SYNTH_PATH}"
+    body = json.loads(req.content)
+    assert body["model"] == "qwen3-asr-flash"
+    messages = body["input"]["messages"]
+    assert messages[0]["role"] == "system"
+    audio_item = messages[1]["content"][0]["audio"]
+    assert audio_item.startswith("data:audio/wav;base64,")
+    assert base64.b64decode(audio_item.split(",", 1)[1]) == wav_file.read_bytes()
+
+
+def test_transcribe_missing_key_is_actionable(wav_file):
+    engine = Qwen3TtsVcCloudEngine(key_store=KeyStore(backend=MemoryBackend()))
+    with pytest.raises(CloudEngineError, match="API Key"):
+        engine.transcribe(str(wav_file), lambda m: None)
+
+
+def test_transcribe_unsupported_container_raises_no_fallback(tmp_path):
+    harness = Harness([])
+    p = tmp_path / "ref.ogg"
+    p.write_bytes(b"OggS-not-really")
+    with pytest.raises(CloudEngineError, match="OGG"):
+        harness.engine.transcribe(str(p), lambda m: None)
+    assert harness.requests == [], "an unsupported file must never hit the wire"
+
+
+def test_transcribe_oversized_audio_raises(wav_file, monkeypatch):
+    import voiceclone_sidecar.engines.qwen_tts_cloud as mod
+
+    monkeypatch.setattr(mod, "MAX_ASR_BYTES", 4)
+    harness = Harness([])
+    with pytest.raises(CloudEngineError, match="10MB"):
+        harness.engine.transcribe(str(wav_file), lambda m: None)
+    assert harness.requests == []
+
+
+def test_transcribe_vendor_error_and_empty_text_raise(tmp_path):
+    wav = tmp_path / "ref.wav"
+    wav.write_bytes(make_wav_bytes())
+    err = Harness(
+        [httpx.Response(401, json={"code": "InvalidApiKey", "message": "无效"})]
+    )
+    with pytest.raises(CloudEngineError, match="云端转写失败"):
+        err.engine.transcribe(str(wav), lambda m: None)
+
+    empty = Harness([httpx.Response(200, json={"output": {"choices": []}})])
+    with pytest.raises(CloudEngineError, match="没有转写文本"):
+        empty.engine.transcribe(str(wav), lambda m: None)

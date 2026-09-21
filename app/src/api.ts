@@ -221,6 +221,13 @@ export interface ReferenceAnalysis {
   diagnostics: DiagnosticItem[];
 }
 
+export interface TranscriptionEngineInfo {
+  id: string;
+  display_name: string;
+  requires_key?: boolean;
+  key_configured?: boolean | null;
+}
+
 export interface TranscriptionProviders {
   provider: string;
   default: string;
@@ -231,7 +238,7 @@ export interface TranscriptionProviders {
     status?: { installed: boolean; steps: Record<string, unknown> } | null;
     reason?: string;
   };
-  engines: { id: string; display_name: string }[];
+  engines: TranscriptionEngineInfo[];
 }
 
 // --- blind comparison + preference profile (issue #10) ---

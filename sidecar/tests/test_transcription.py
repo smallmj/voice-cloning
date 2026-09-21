@@ -87,15 +87,16 @@ def test_default_registry_without_test_env_excludes_fake_engine(monkeypatch, tmp
 def test_default_registry_without_test_env_has_no_engine_transcribers(
     monkeypatch, tmp_path
 ):
-    """The transcription provider list has no test double in production:
-    no registered engine exposes transcribe(), so the only provider is
-    the local tool."""
+    """The transcription provider list has no test double in production.
+    Since issue #33 the real cloud vendor (qwen3-tts-vc-cloud via DashScope
+    Qwen-ASR) is the engine transcriber; the fake must never be."""
     monkeypatch.delenv("VOICECLONE_TEST_ENGINES", raising=False)
     from voiceclone_sidecar.registry import default_registry
     from voiceclone_sidecar.transcription import engine_transcribers
 
     registry = default_registry(output_dir=tmp_path / "audio")
-    assert engine_transcribers(registry) == []
+    ids = [e.engine_id for e in engine_transcribers(registry)]
+    assert ids == ["qwen3-tts-vc-cloud"]
 
 
 def test_default_registry_with_test_env_keeps_fake_engine(monkeypatch, tmp_path):
@@ -313,3 +314,146 @@ def test_local_weights_step_retries_through_hf_mirror(tmp_path, monkeypatch):
     assert len(seen) == 2, "expected one plain attempt plus one hf-mirror retry"
     assert seen[0].get("HF_ENDPOINT") != "https://hf-mirror.com"
     assert seen[1].get("HF_ENDPOINT") == "https://hf-mirror.com"
+
+
+# --- real cloud provider (issue #33) ----------------------------------------------
+#
+# The production provider list is exercised against the REAL default registry
+# (no fake registered: VOICECLONE_TEST_ENGINES is not set in-process), while
+# the vendor's HTTP leg is an httpx.MockTransport injected into the
+# already-registered qwen3-tts-vc-cloud engine — the full route runs.
+
+
+@pytest.fixture()
+def cloud_client(tmp_path):
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from voiceclone_sidecar.main import create_app
+    from voiceclone_sidecar.registry import default_registry
+    from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
+
+    store = KeyStore(backend=MemoryBackend())
+    store.set("qwen3-tts-vc-cloud", "sk-test")
+    registry = default_registry(key_store=store, env={})
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "choices": [
+                        {"message": {"content": [{"text": " 云端转写结果。 "}]}}
+                    ]
+                }
+            },
+        )
+
+    # Swap in a vc engine built on the ADR-0015 constructor seam (injectable
+    # httpx client); the registry has no unregister, so replace the entry.
+    from voiceclone_sidecar.engines.qwen_tts_cloud import (
+        BASE_URL,
+        SYNTH_PATH,
+        Qwen3TtsVcCloudEngine,
+    )
+
+    registry._engines["qwen3-tts-vc-cloud"] = Qwen3TtsVcCloudEngine(
+        output_dir=tmp_path / "audio",
+        key_store=store,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    (tmp_path / "audio").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    app = create_app(
+        registry,
+        token="t",
+        audio_dir=tmp_path / "audio",
+        data_dir=tmp_path / "data",
+        key_store=store,
+    )
+    client = TestClient(app)
+    client.headers.update({"Authorization": "Bearer t"})
+    try:
+        yield SimpleNamespace(
+            client=client,
+            seen=seen,
+            base_url_seen=f"{BASE_URL}{SYNTH_PATH}",
+            registry=registry,
+        )
+    finally:
+        client.put("/transcription/provider", json={"provider": "local"})
+
+
+def test_production_providers_include_the_real_cloud_vendor(cloud_client):
+    data = cloud_client.client.get("/transcription/providers").json()
+    ids = {e["id"] for e in data["engines"]}
+    assert "qwen3-tts-vc-cloud" in ids
+    assert "fake" not in ids, "issue #18: the test double must stay out"
+    entry = next(e for e in data["engines"] if e["id"] == "qwen3-tts-vc-cloud")
+    assert entry["requires_key"] is True
+    assert entry["key_configured"] is True
+
+
+def test_cloud_transcribe_writes_transcript_and_feeds_ref_text(cloud_client):
+    from voiceclone_sidecar.engines.fake import FakeRefTextEngine
+
+    voice = cloud_client.client.post(
+        "/voices",
+        data={"name": "云转写", "description": "d"},
+        files={"file": ("ref.wav", sine_wav_bytes(4.0), "audio/wav")},
+    ).json()
+
+    r = cloud_client.client.put(
+        "/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"}
+    )
+    assert r.status_code == 200, r.text
+
+    r = cloud_client.client.post(f"/voices/{voice['id']}/transcribe", json={})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["reference"]["transcript"] == "云端转写结果。"
+    assert body["reference"]["transcript_placeholder"] is False
+    assert cloud_client.seen, "the vendor must have been called"
+    assert cloud_client.seen[0].url == cloud_client.base_url_seen
+
+    # The stored transcript is what a requires_reference_text engine gets.
+    cloud_client.registry.register(FakeRefTextEngine(output_dir=None))
+    r = cloud_client.client.post(
+        "/generations",
+        json={"engine_id": "fake-ref-text", "text": "你好", "voice_id": voice["id"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["params"]["ref_text"] == "云端转写结果。"
+
+
+def test_cloud_transcribe_without_key_fails_actionably_and_never_falls_back(
+    cloud_client,
+):
+    voice = cloud_client.client.post(
+        "/voices",
+        data={"name": "无密钥", "description": "d"},
+        files={"file": ("ref.wav", sine_wav_bytes(4.0), "audio/wav")},
+    ).json()
+    cloud_client.client.put(
+        "/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"}
+    )
+    r = cloud_client.client.delete("/settings/keys/qwen3-tts-vc-cloud")
+    assert r.status_code == 200
+
+    r = cloud_client.client.post(f"/voices/{voice['id']}/transcribe", json={})
+    assert r.status_code == 409, r.text
+    assert "API Key" in r.json()["detail"], "the hint must be actionable"
+    # No silent fallback: the stored transcript is untouched and the provider
+    # choice stays where the user put it.
+    assert cloud_client.client.get(f"/voices/{voice['id']}").json()["reference"].get(
+        "transcript"
+    ) is None
+    assert (
+        cloud_client.client.get("/transcription/providers").json()["provider"]
+        == "qwen3-tts-vc-cloud"
+    )
+    assert cloud_client.seen == []

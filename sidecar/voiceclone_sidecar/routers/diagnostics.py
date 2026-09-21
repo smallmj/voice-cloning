@@ -159,7 +159,10 @@ def build_router(ctx: AppContext) -> APIRouter:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="voice not found") from None
-        except TranscriptionError as exc:
+        # Issue #33: a cloud provider's failure (missing key, vendor error)
+        # reaches the user verbatim — never a silent fallback to another
+        # provider and never a bare 500; same 409 contract as local ASR.
+        except (TranscriptionError, CloudEngineError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _flag_placeholder(voice_store.set_transcript(voice_id, text))
 

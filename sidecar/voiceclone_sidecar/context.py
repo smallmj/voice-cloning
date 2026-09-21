@@ -281,7 +281,17 @@ class AppContext:
 
     def transcription_providers(self) -> dict:
         engines = [
-            {"id": e.engine_id, "display_name": e.display_name}
+            {
+                "id": e.engine_id,
+                "display_name": e.display_name,
+                # Issue #33: surface the key state so the UI can warn BEFORE a
+                # transcription is attempted (a cloud provider without a key
+                # must fail loudly; warning early is kinder than 409-ing).
+                "requires_key": bool(e.requires_key),
+                "key_configured": (
+                    self.keys.get(e.engine_id) is not None if e.requires_key else None
+                ),
+            }
             for e in engine_transcribers(self.registry)
         ]
         local: dict = {"supported": True, "installed": False, "label": None, "status": None}

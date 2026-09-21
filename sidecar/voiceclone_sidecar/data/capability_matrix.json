@@ -201,7 +201,7 @@
       "engine_id": "qwen3-tts-vc-cloud",
       "display_name": "Qwen3-TTS 复刻（阿里百炼 · 云端）",
       "kind": "cloud",
-      "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）。",
+      "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）；兼任真实云端转写提供方（issue #33，qwen3-asr-flash，同密钥）。",
       "evidence": [
         {
           "field": "计费",
@@ -237,6 +237,13 @@
           "verification": "verified",
           "source": "阿里百炼 Qwen-TTS 文档；voiceclone_sidecar/engines/qwen_tts_cloud.py",
           "date": "2026-09-18"
+        },
+        {
+          "field": "云端转写",
+          "value": "提供方即本引擎：DashScope Qwen-ASR qwen3-asr-flash（Data-URL 音频 ≤10MB，WAV/MP3/M4A/FLAC）。复用同一阿里百炼 BYOK 密钥，不新增供应商与第二把密钥（issue #33，plan 决策 #15）；失败一律显式报错，不回退其他提供方",
+          "verification": "verified",
+          "source": "阿里百炼 Qwen-ASR 文档（help.aliyun.com qwen-asr-api-reference）；voiceclone_sidecar/engines/qwen_tts_cloud.py transcribe()",
+          "date": "2026-09-20"
         }
       ],
       "performance": [
@@ -249,7 +256,7 @@
           "date": "2026-09-18"
         }
       ],
-      "notes": "回归集覆盖它对归一化后文本的处理；云端不做盲听 LUFS 归一化之外的本地测量。"
+      "notes": "回归集覆盖它对归一化后文本的处理；云端不做盲听 LUFS 归一化之外的本地测量。 云端转写限制：音频 ≤10MB、仅 WAV/MP3/M4A/FLAC；未配置 Key 或格式不支持时直接报错。"
     },
     {
       "engine_id": "qwen3-tts-vd-cloud",

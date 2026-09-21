@@ -1,3 +1,4 @@
+import type { TranscriptionEngineInfo } from "../api";
 import { useEffect, useState } from "react";
 import type { EngineInfo } from "../api";
 import {
@@ -39,7 +40,7 @@ export function SettingsSection({
   const [transProviders, setTransProviders] = useState<{
     provider: string;
     local: { supported: boolean; installed: boolean; label: string | null };
-    engines: { id: string; display_name: string }[];
+    engines: TranscriptionEngineInfo[];
   } | null>(null);
   const [localTransInstalling, setLocalTransInstalling] = useState(false);
   const [transError, setTransError] = useState<string | null>(null);
@@ -48,6 +49,11 @@ export function SettingsSection({
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
+  // Issue #33: warn BEFORE transcribing when the selected cloud provider's
+  // key is absent — the provider reuses an engine's key, it never has its own.
+  const selectedTransEngineMissingKey = (transProviders?.engines ?? []).some(
+    (e) => e.id === transProviders?.provider && e.requires_key && !e.key_configured,
+  );
 
   useEffect(() => {
     apiJson<typeof transProviders>(baseUrl, token, "/transcription/providers")
@@ -287,10 +293,16 @@ export function SettingsSection({
               {(transProviders?.engines ?? []).map((e) => (
                 <option key={e.id} value={e.id}>
                   云端转写：{e.display_name}
+                  {e.requires_key && !e.key_configured ? "（未配置 API Key）" : ""}
                 </option>
               ))}
             </select>
           </label>
+          {selectedTransEngineMissingKey && (
+            <span className="hint">
+              该云端转写使用已接入引擎的 API Key（不新增密钥）；请先在下方引擎列表配置该厂商的 API Key。
+            </span>
+          )}
           {transProviders?.provider === "local" && transProviders.local.supported && (
             <>
               <button onClick={() => void installLocalTranscriber()} disabled={localTransInstalling}>

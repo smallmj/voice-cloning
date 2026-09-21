@@ -46,6 +46,7 @@ SYNTH_PATH = "/services/aigc/multimodal-generation/generation"
 BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 
 __all__ = [
+    "ASR_MODEL",
     "BASE_URL",
     "CloudEngineError",
     "Qwen3TtsVcCloudEngine",
@@ -63,6 +64,26 @@ PRICE_PER_10K_CHARS = 0.8
 # Reference containers the enrollment endpoint accepts as data URLs.
 DATA_URL_MIME = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
 MAX_REF_BYTES = 10 * 1024 * 1024
+
+# Issue #33 — cloud transcription rides the SAME vendor (阿里百炼) and the
+# SAME BYOK key as this engine, through DashScope's Qwen-ASR 录音文件识别 API
+# (verified 2026-09 against the vendor docs): qwen3-asr-flash accepts Base64
+# Data-URL audio (`data:<mime>;base64,<...>`, ≤10 MB) on the same
+# multimodal-generation endpoint used for synthesis. No new vendor, no second
+# key — plan decision #15's "云端转写复用已接入厂商" made real.
+ASR_MODEL = "qwen3-asr-flash"
+# Containers the ASR endpoint documents for Data-URL input. Deliberately not
+# the enrollment set: unsupported containers must raise (issue #33 forbids
+# silent fallback), so the accepted set is only what the vendor documents.
+ASR_DATA_URL_MIME = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
+}
+# Same 10 MB ceiling as enrollment (MAX_REF_BYTES), but a separate constant:
+# the two limits are separate vendor concerns and must not move together.
+MAX_ASR_BYTES = 10 * 1024 * 1024
 
 # language_type values documented for Qwen-TTS synthesis.
 LANGUAGE_CHOICES = (
@@ -143,6 +164,64 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
                 help="建议与文本语种一致以获得自然发音；auto 时不向引擎发送该参数",
             ),
         ]
+
+    # -- transcription (issue #33) ---------------------------------------------
+
+    def transcribe(self, audio_path, log) -> str:
+        """Real cloud transcription: DashScope Qwen-ASR (qwen3-asr-flash).
+
+        Deliberate design points (issue #33):
+        - same vendor, same BYOK key as this engine — ``_key()`` raises an
+          actionable CloudEngineError when the key is missing;
+        - errors RAISE, they never fall back to another provider or to a
+          placeholder: a silent fallback is exactly what issue #18 removed;
+        - the transcript is plain text for the voice's reference, consumed by
+          engines with ``requires_reference_text``.
+        """
+        ref = Path(audio_path)
+        mime = ASR_DATA_URL_MIME.get(ref.suffix.lower())
+        if mime is None:
+            raise CloudEngineError(
+                f"云端转写（{ASR_MODEL}）仅接受 WAV / MP3 / M4A / FLAC 音频，"
+                f"当前为 {ref.suffix[1:].upper() or '未知格式'}"
+            )
+        data = ref.read_bytes()
+        if len(data) > MAX_ASR_BYTES:
+            raise CloudEngineError("参考音频超过云端转写的 10MB 上限")
+
+        log(f"cloud: 转写参考音频（阿里百炼 {ASR_MODEL}，{len(data) / 1024:.0f} KB）…")
+        payload = {
+            "model": ASR_MODEL,
+            "input": {
+                "messages": [
+                    {"role": "system", "content": [{"text": ""}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"audio": f"data:{mime};base64,{base64.b64encode(data).decode()}"},
+                            {"text": ""},
+                        ],
+                    },
+                ],
+            },
+        }
+        resp = self._http().post(
+            f"{BASE_URL}{SYNTH_PATH}", headers=self._headers(), json=payload
+        )
+        if resp.status_code != 200:
+            raise CloudEngineError(f"云端转写失败：{self._vendor_error(resp)}")
+        try:
+            content = resp.json()["output"]["choices"][0]["message"]["content"]
+            text = content[0]["text"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise CloudEngineError(
+                f"云端转写失败：响应中没有转写文本：{resp.text[:200]}"
+            ) from None
+        text = (text or "").strip()
+        if not text:
+            raise CloudEngineError("云端转写失败：响应中的转写文本为空")
+        log(f"cloud: 转写完成（{len(text)} 字）")
+        return text
 
     # -- binding: enrollment ---------------------------------------------------
 

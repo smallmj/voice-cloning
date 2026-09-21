@@ -564,6 +564,7 @@ export default function App() {
               onInstall={(id) => void installEngine(id)}
               onSelect={selectEngine}
               onNavigate={navigate}
+              refreshEngines={reloadEngines}
             />
           ) : active === "voices" ? (
             <VoicesSection
@@ -606,10 +607,8 @@ export default function App() {
             <SettingsSection
               baseUrl={commonSectionProps.baseUrl}
               token={commonSectionProps.token}
-              engines={engines}
               prefs={prefs}
               updatePrefs={updatePrefs}
-              refreshEngines={reloadEngines}
             />
           )}
         </main>

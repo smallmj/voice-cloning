@@ -1,13 +1,11 @@
 import type { TranscriptionEngineInfo } from "../api";
 import { useEffect, useState } from "react";
-import type { EngineInfo } from "../api";
 import {
   apiJson,
   authHeaders,
   downloadPostWithAuth,
   downloadWithAuth,
 } from "../client";
-import { CAP_LABELS } from "../labels";
 import type { ThemePref, UiPrefs } from "../hooks";
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
@@ -19,23 +17,14 @@ const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
 export function SettingsSection({
   baseUrl,
   token,
-  engines,
   prefs,
   updatePrefs,
-  refreshEngines,
 }: {
   baseUrl: string;
   token: string;
-  engines: EngineInfo[];
   prefs: UiPrefs;
   updatePrefs: (partial: Partial<UiPrefs>) => void;
-  refreshEngines: () => Promise<void>;
 }) {
-  // BYOK keys (issue #9): inputs + per-engine busy flags; values live in the
-  // OS key store after save — the renderer never persists them.
-  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
-  const [keyBusy, setKeyBusy] = useState<Record<string, boolean>>({});
-  const [keyError, setKeyError] = useState<string | null>(null);
   // Transcription provider (issue #8) + local install lifecycle.
   const [transProviders, setTransProviders] = useState<{
     provider: string;
@@ -113,41 +102,6 @@ export function SettingsSection({
     }
   }
 
-  async function saveKey(engineId: string) {
-    const key = (keyInputs[engineId] ?? "").trim();
-    if (!key) {
-      setKeyError("API Key 不能为空");
-      return;
-    }
-    setKeyBusy((p) => ({ ...p, [engineId]: true }));
-    setKeyError(null);
-    try {
-      await apiJson(baseUrl, token, "/settings/keys", {
-        method: "PUT",
-        body: JSON.stringify({ engine_id: engineId, key }),
-      });
-      setKeyInputs((p) => ({ ...p, [engineId]: "" }));
-      await refreshEngines();
-    } catch (e) {
-      setKeyError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setKeyBusy((p) => ({ ...p, [engineId]: false }));
-    }
-  }
-
-  async function deleteKey(engineId: string) {
-    setKeyBusy((p) => ({ ...p, [engineId]: true }));
-    setKeyError(null);
-    try {
-      await apiJson(baseUrl, token, `/settings/keys/${engineId}`, { method: "DELETE" });
-      await refreshEngines();
-    } catch (e) {
-      setKeyError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setKeyBusy((p) => ({ ...p, [engineId]: false }));
-    }
-  }
-
   async function backupLibrary() {
     if (backupBusy) return;
     setBackupBusy(true);
@@ -219,8 +173,8 @@ export function SettingsSection({
     <section>
       <h2>设置</h2>
       <div className="hint">
-        云端引擎一律 BYOK（Bring Your Own Key）：API Key 只保存在本机系统钥匙串中，
-        不落明文文件，也不经过任何第三方服务器。
+        软件级设置：外观、备份恢复、转写提供方。引擎的密钥与安装入口在「引擎」页的引擎卡片里
+        （云端引擎一律 BYOK：API Key 只保存在本机系统钥匙串中）。
       </div>
 
       <div className="settings-engine">
@@ -300,7 +254,7 @@ export function SettingsSection({
           </label>
           {selectedTransEngineMissingKey && (
             <span className="hint">
-              该云端转写使用已接入引擎的 API Key（不新增密钥）；请先在下方引擎列表配置该厂商的 API Key。
+              该云端转写使用已接入引擎的 API Key（不新增密钥）；请先到「引擎」页该引擎卡片内配置该厂商的 API Key。
             </span>
           )}
           {transProviders?.provider === "local" && transProviders.local.supported && (
@@ -325,68 +279,6 @@ export function SettingsSection({
         {transError && <div className="error">{transError}</div>}
       </div>
 
-      <div className="settings-list">
-        {engines.map((e) => (
-          <div className="settings-engine" key={e.id}>
-            <div className="settings-engine-head">
-              <strong>{e.display_name}</strong>
-              {e.requires_key ? (
-                <span className={`badge ${e.key_configured ? "badge-on" : "badge-off"}`}>
-                  {e.key_configured ? "API Key 已配置（存于系统钥匙串）" : "未配置 API Key"}
-                </span>
-              ) : (
-                <span className="badge badge-on">本地引擎，无需密钥</span>
-              )}
-            </div>
-            {e.requires_key && (
-              <div className="key-row">
-                <input
-                  type="password"
-                  autoComplete="off"
-                  placeholder="粘贴 API Key（DashScope，sk-…）"
-                  value={keyInputs[e.id] ?? ""}
-                  onChange={(ev) =>
-                    setKeyInputs((p) => ({ ...p, [e.id]: ev.target.value }))
-                  }
-                />
-                <button
-                  disabled={keyBusy[e.id] || !(keyInputs[e.id] ?? "").trim()}
-                  onClick={() => void saveKey(e.id)}
-                >
-                  {keyBusy[e.id] ? "保存中…" : "保存"}
-                </button>
-                {e.key_configured && (
-                  <button disabled={keyBusy[e.id]} onClick={() => void deleteKey(e.id)}>
-                    删除
-                  </button>
-                )}
-              </div>
-            )}
-            <div className="engine-note">
-              <span className="engine-note-label">能力</span>
-              {`${CAP_LABELS.languages}：${e.capabilities.languages.join("/") || "—"} · `}
-              {(
-                ["voice_cloning", "voice_design", "pronunciation_control", "emotion"] as const
-              )
-                .map((k) => `${CAP_LABELS[k]} ${e.capabilities[k] ? "✓" : "✗（不支持）"}`)
-                .join(" · ")}
-            </div>
-            {e.billing_note && (
-              <div className="engine-note">
-                <span className="engine-note-label">计费口径</span>
-                {e.billing_note}
-              </div>
-            )}
-            {e.data_usage_note && (
-              <div className="engine-note">
-                <span className="engine-note-label">数据与训练</span>
-                {e.data_usage_note}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-      {keyError && <div className="error">{keyError}</div>}
     </section>
   );
 }

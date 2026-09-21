@@ -1,59 +1,14 @@
-import { useEffect, useState } from "react";
 import type { EngineInfo } from "../api";
-import { apiJson } from "../client";
+import { VERIFY_LABELS, useCapabilityMatrix } from "../capability-matrix";
 import type { SectionId } from "../ui";
 import { JumpLink } from "./bits";
 
 // ---------------------------------------------------------------------------
-// 能力矩阵（issue #16）：固化的矩阵数据 + 中文回归集结果，界面直接驱动。
+// 能力矩阵（issue #16）：固化的矩阵数据，界面直接驱动。
+// Issue #40: the 「运行中文回归集」 button moved into the engines-page
+// advanced area; this block now only displays the固化 matrix + regression
+// results.
 // ---------------------------------------------------------------------------
-
-interface MatrixEvidence {
-  field: string;
-  value: string;
-  verification: "measured" | "verified" | "vendor" | "unverified" | "unknown";
-  source: string;
-  date?: string;
-}
-
-interface MatrixPerf {
-  env: string;
-  rtf: number | null;
-  peak_vram_bytes: number | null;
-  verification: MatrixEvidence["verification"];
-  source?: string;
-  note?: string;
-}
-
-interface MatrixEngine {
-  engine_id: string;
-  display_name: string;
-  kind: "builtin" | "local" | "cloud";
-  role?: string;
-  evidence?: MatrixEvidence[];
-  performance?: MatrixPerf[];
-  notes?: string;
-  runtime?: { capabilities: Record<string, unknown> } | null;
-  regression_summary?: {
-    ok: number;
-    failed: number;
-    rtf_mean: number | null;
-  } | null;
-}
-
-interface CapabilityMatrix {
-  updated_at: string;
-  categories: { id: string; label: string }[];
-  engines: MatrixEngine[];
-}
-
-const VERIFY_LABELS: Record<MatrixEvidence["verification"], string> = {
-  measured: "实测",
-  verified: "已核实",
-  vendor: "厂商口径",
-  unverified: "未核实",
-  unknown: "未知",
-};
 
 export function CapabilityMatrixSection({
   baseUrl,
@@ -66,56 +21,7 @@ export function CapabilityMatrixSection({
   engines: EngineInfo[];
   onNavigate: (section: SectionId) => void;
 }) {
-  const [matrix, setMatrix] = useState<CapabilityMatrix | null>(null);
-  const [regression, setRegression] = useState<{
-    id: string;
-    status: string;
-  } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    apiJson<CapabilityMatrix>(baseUrl, token, "/capability-matrix")
-      .then(setMatrix)
-      .catch(() => {
-        /* sidecar not ready yet */
-      });
-  }, [baseUrl, token]);
-
-  // 回归在后台线程里跑：启动后轮询直到完成。
-  useEffect(() => {
-    if (!regression || regression.status !== "running") return;
-    const t = setTimeout(async () => {
-      try {
-        setRegression(await apiJson<{ id: string; status: string }>(
-          baseUrl,
-          token,
-          `/regression/${regression.id}`,
-        ));
-      } catch {
-        /* keep polling */
-      }
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [regression, baseUrl, token]);
-
-  async function runRegression() {
-    setBusy(true);
-    setError(null);
-    try {
-      setRegression(
-        await apiJson<{ id: string; status: string }>(baseUrl, token, "/regression/run", {
-          method: "POST",
-          body: JSON.stringify({}),
-        }),
-      );
-    } catch (err) {
-      setError(`启动回归失败：${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const matrix = useCapabilityMatrix(baseUrl, token);
   return (
     <section>
       <h2>能力矩阵</h2>
@@ -124,19 +30,6 @@ export function CapabilityMatrixSection({
         <b>实测</b>（本项目真机跑出来的）、<b>已核实</b>（一手来源）、
         <b>厂商口径</b>、<b>未核实</b>（仍未知）、<b>未知</b>。任何公开榜单都给不出这台机器上的数字。
       </div>
-      <div className="key-row">
-        <button disabled={busy} onClick={() => void runRegression()}>
-          {busy ? "启动中…" : "运行中文回归集（数字 / 日期 / 金额 / 中英混读 / 多音字）"}
-        </button>
-        {regression && (
-          <span className="hint">
-            {regression.status === "running"
-              ? "回归运行中…（引擎逐条生成，完成后自动刷新）"
-              : "最近一次回归已完成，结果已合入下方矩阵。"}
-          </span>
-        )}
-      </div>
-      {error && <div className="error">{error}</div>}
       {matrix && (
         <div className="settings-list">
           {matrix.engines.map((e) => {

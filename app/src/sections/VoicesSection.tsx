@@ -2,6 +2,7 @@ import type { EngineInfo, Voice } from "../api";
 import { VoiceCard } from "../components/VoiceCard";
 import type { SectionId } from "../ui";
 import { JumpLink } from "../components/bits";
+import { voiceDesignEngines } from "../ui";
 
 export function VoicesSection({
   baseUrl,
@@ -135,15 +136,12 @@ export function VoicesSection({
               }}
             >
               <option value="">（选择引擎）</option>
-              {engines.map((e) => {
-                const supported = e.capabilities.voice_design;
-                const reason = !supported
-                  ? "不支持：引擎未声明音色设计能力"
-                  : e.requires_key && !e.key_configured
-                    ? "需先配置 API Key"
-                    : "";
+              {/* Issue #40: engines that don't declare voice_design are
+              filtered out entirely instead of shown disabled. */}
+              {voiceDesignEngines(engines).map((e) => {
+                const reason = e.requires_key && !e.key_configured ? "需先配置 API Key" : "";
                 return (
-                  <option key={e.id} value={e.id} disabled={!supported}>
+                  <option key={e.id} value={e.id}>
                     {e.display_name}
                     {reason ? ` — ${reason}` : ""}
                   </option>
@@ -152,11 +150,6 @@ export function VoicesSection({
             </select>
           </label>
         </div>
-        {selectedDesignEngine && !selectedDesignEngine.capabilities.voice_design && (
-          <div className="hint">
-            所选引擎不支持音色设计（能力未声明），请改用支持设计的引擎。
-          </div>
-        )}
         <div className="voice-create-row">
           <input
             placeholder="音色名称（必填）"
@@ -190,8 +183,8 @@ export function VoicesSection({
         </div>
         {selectedDesignEngine?.requires_key && !selectedDesignEngine.key_configured && (
           <div className="hint">
-            该设计引擎需要 API Key（BYOK）：请先在设置中保存后再设计。
-            <JumpLink target="settings" label="打开设置" onNavigate={onNavigate} />
+            该设计引擎需要 API Key（BYOK）：请先在「引擎」页该引擎卡片内填写后再设计。
+            <JumpLink target="engines" label="打开引擎页" onNavigate={onNavigate} />
           </div>
         )}
         {designError && <div className="error">{designError}</div>}

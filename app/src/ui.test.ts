@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { GenerationRecord, LogEvent } from "./api";
 import {
   appendLog,
+  engineDetailParagraphs,
+  voiceDesignEngines,
   buildRerunState,
   isSectionId,
   jobSettled,
@@ -294,5 +296,84 @@ describe("formatBytes", () => {
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
     expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1.50 GB");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #40: engines-page card rework helpers.
+// ---------------------------------------------------------------------------
+
+describe("voice design engine filter (issue #40)", () => {
+  function engine(id: string, voiceDesign: boolean, keyConfigured = true) {
+    return {
+      id,
+      display_name: id,
+      capabilities: {
+        languages: ["zh"],
+        voice_cloning: true,
+        voice_design: voiceDesign,
+        pronunciation_control: false,
+        emotion: false,
+        commercial_license: false,
+        cross_device_use: false,
+        upload_used_for_training: false,
+        api_closed_loop: true,
+      },
+      requires_key: true,
+      key_configured: keyConfigured,
+    };
+  }
+
+  it("keeps only engines that declare voice_design", () => {
+    const engines = [engine("a", true), engine("b", false), engine("c", true, false)];
+    expect(voiceDesignEngines(engines).map((e) => e.id)).toEqual(["a", "c"]);
+  });
+
+  it("returns an empty list when no engine supports design", () => {
+    expect(voiceDesignEngines([engine("b", false)])).toEqual([]);
+  });
+});
+
+describe("engine card detail paragraphs (issue #40)", () => {
+  const engine = {
+    id: "qwen",
+    display_name: "Qwen3-TTS",
+    capabilities: {
+      languages: ["zh", "en"],
+      voice_cloning: true,
+      voice_design: false,
+      pronunciation_control: false,
+      emotion: false,
+      commercial_license: false,
+      cross_device_use: false,
+      upload_used_for_training: false,
+      api_closed_loop: true,
+    },
+    billing_note: "按字符计费",
+    data_usage_note: "不上传训练",
+  };
+
+  it("orders role → capability declaration → notes → matrix notes", () => {
+    const paragraphs = engineDetailParagraphs(engine, {
+      engine_id: "qwen",
+      display_name: "Qwen3-TTS",
+      kind: "cloud",
+      role: "BYOK 云端复刻档",
+      notes: "回归覆盖归一化文本。",
+    });
+    expect(paragraphs[0]).toBe("BYOK 云端复刻档");
+    expect(paragraphs[1]).toContain("能力声明");
+    expect(paragraphs[1]).toContain("复刻 ✓");
+    expect(paragraphs[1]).toContain("音色设计 ✗");
+    expect(paragraphs[1]).toContain("zh/en");
+    expect(paragraphs[2]).toContain("计费口径：按字符计费");
+    expect(paragraphs[3]).toContain("数据与训练：不上传训练");
+    expect(paragraphs[4]).toBe("回归覆盖归一化文本。");
+  });
+
+  it("skips absent matrix entry and notes without placeholders", () => {
+    const paragraphs = engineDetailParagraphs(engine, null);
+    expect(paragraphs).toHaveLength(3);
+    expect(paragraphs.join("\n")).not.toMatch(/undefined|null/);
   });
 });

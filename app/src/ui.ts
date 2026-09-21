@@ -2,7 +2,9 @@
 // vitest net can test the cross-section behaviours and API-shape parsing
 // without a renderer.
 
-import type { GenerationRecord, JobStatus, LogEvent, LogLevel } from "./api";
+import type { EngineInfo, GenerationRecord, JobStatus, LogEvent, LogLevel } from "./api";
+import type { MatrixEngine } from "./capability-matrix";
+import { CAP_LABELS } from "./labels";
 
 // --- five sections + left navigation (ADR-0013) ----------------------------
 
@@ -248,3 +250,39 @@ export function reasonLabel(reason: string | null): string {
   };
   return labels[reason ?? ""] ?? "未暴露";
 }
+
+// ---------------------------------------------------------------------------
+// Issue #40: engines-page card rework helpers (pure, unit-tested).
+// ---------------------------------------------------------------------------
+
+/** Voice design dropdown only offers engines that declare the capability. */
+export function voiceDesignEngines(engines: EngineInfo[]): EngineInfo[] {
+  return engines.filter((e) => e.capabilities.voice_design);
+}
+
+/**
+ * 「详情」 copy for one engine card (issue #40): capability declarations plus
+ * the curated capability-matrix entry, in stable paragraph order. Missing
+ * pieces are simply skipped so the card never shows empty placeholders.
+ */
+export function engineDetailParagraphs(
+  engine: EngineInfo,
+  matrix: MatrixEngine | null,
+): string[] {
+  const c = engine.capabilities;
+  const caps = [
+    `${CAP_LABELS.voice_cloning} ${c.voice_cloning ? "✓" : "✗"}`,
+    `${CAP_LABELS.voice_design} ${c.voice_design ? "✓" : "✗"}`,
+    `${CAP_LABELS.pronunciation_control} ${c.pronunciation_control ? "✓" : "✗"}`,
+    `${CAP_LABELS.emotion} ${c.emotion ? "✓" : "✗"}`,
+    `${CAP_LABELS.languages}：${c.languages.join("/") || "—"}`,
+  ];
+  const paragraphs: string[] = [];
+  if (matrix?.role) paragraphs.push(matrix.role);
+  paragraphs.push(`能力声明：${caps.join(" · ")}`);
+  if (engine.billing_note) paragraphs.push(`计费口径：${engine.billing_note}`);
+  if (engine.data_usage_note) paragraphs.push(`数据与训练：${engine.data_usage_note}`);
+  if (matrix?.notes) paragraphs.push(matrix.notes);
+  return paragraphs;
+}
+

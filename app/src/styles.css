@@ -752,3 +752,26 @@ details.engine-params > summary {
   font-weight: 600;
   opacity: 0.85;
 }
+
+/* Issue #40: engine card details expansion + engines-page advanced area. */
+.details-toggle {
+  font-size: var(--fs-sm);
+  padding: 1px var(--sp-3);
+  align-self: flex-start;
+  opacity: 0.85;
+}
+.engine-card .key-row { margin-top: var(--sp-2); }
+.engine-card .key-row input { flex: 1; min-width: 160px; }
+.engine-details { margin-top: var(--sp-2); }
+.engine-detail-paragraph {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  opacity: 0.85;
+  white-space: pre-wrap;
+}
+.engines-advanced {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}

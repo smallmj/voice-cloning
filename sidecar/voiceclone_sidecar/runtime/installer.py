@@ -7,7 +7,14 @@ engine directory, so:
 - a completed step is never redone (weights already on disk stay there);
 - a failed step's artifacts are DELETED before the retry — a half-written
   venv or a truncated weights file must never be trusted (ADR-0002);
-- the UI can render per-step status from the same JSON.
+- the UI can render per-step status from the same JSON;
+- byte-level download progress is persisted to the same JSON as
+  ``progress: {file, done_bytes, total_bytes}`` (issue #35), so the status
+  endpoint the frontend polls once a second shows a real progress bar
+  without any new endpoint. The field is written throttled (the poll
+  cadence makes sub-second writes pointless) and CLEARED when a step
+  completes or fails — a finished or dead install must never advertise a
+  stale byte count.
 """
 
 from __future__ import annotations
@@ -65,10 +72,46 @@ def save_state(ctx: InstallContext, state: dict) -> None:
     tmp.replace(path)  # atomic: a crash never leaves a half-written state
 
 
-def run_install(ctx: InstallContext, steps: list[InstallStep], log: LogFn, progress: ProgressFn | None = None) -> dict:
+def _persist_progress(
+    ctx: InstallContext,
+    state: dict,
+    last_save: dict,
+    name: str,
+    done: int,
+    total: int | None,
+    force: bool,
+) -> None:
+    """Write the current download position into the durable install state.
+
+    Throttled to one write a second (the frontend polls at exactly that
+    cadence, so faster writes are pure disk churn); ``force`` flushes
+    immediately, used for the final byte count and the clear.
+    """
+    now = time.time()
+    if not force and now - last_save.get("t", 0.0) < 1.0:
+        return
+    last_save["t"] = now
+    state["progress"] = {"file": name, "done_bytes": done, "total_bytes": total}
+    save_state(ctx, state)
+
+
+def run_install(
+    ctx: InstallContext, steps: list[InstallStep], log: LogFn, progress: ProgressFn | None = None
+) -> dict:
     progress = progress or (lambda *a: None)
     state = load_state(ctx)
+    # Stale progress from a killed previous run must never be advertised.
+    state.pop("progress", None)
+    save_state(ctx, state)
     record = state.setdefault("steps", {})
+    last_save: dict = {"t": 0.0}
+
+    def tracked(name: str, done: int, total: int | None) -> None:
+        # Unknown total size: every report is flushed, so the UI still sees
+        # movement (a 1s throttle on the only writes would freeze the bar).
+        force = total is None or done >= total
+        _persist_progress(ctx, state, last_save, name, done, total, force=force)
+        progress(name, done, total)
 
     # Pre-pass: a failed step's artifact is DELETED before the retry, and
     # every completed step sharing that artifact is reset to pending — its
@@ -103,12 +146,14 @@ def run_install(ctx: InstallContext, steps: list[InstallStep], log: LogFn, progr
         save_state(ctx, state)
         log(f"[{step.id}] {step.description}")
         try:
-            step.run(log, progress)
+            step.run(log, tracked)
         except Exception as exc:
+            state.pop("progress", None)  # no fake progress after a failure
             entry.update(status="failed", error=str(exc), finished_at=time.time())
             save_state(ctx, state)
             log(f"[{step.id}] FAILED: {exc}")
             raise
+        state.pop("progress", None)  # a completed step has no live download
         entry.update(status="completed", finished_at=time.time())
         save_state(ctx, state)
 

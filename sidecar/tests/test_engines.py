@@ -7,6 +7,8 @@ boot path."""
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -157,7 +159,10 @@ def test_qwen3_engine_install_steps_cover_expected_steps(tmp_path):
     step_ids = [s.id for s in engine.install_steps()]
     assert step_ids == ["python", "venv", "packages", "weights"]
     weights_step = engine.install_steps()[3]
-    assert weights_step.artifact == tmp_path / "engines" / qwen3_tts.Qwen3TtsMlxEngine.engine_id / "weights"
+    assert (
+        weights_step.artifact
+        == tmp_path / "engines" / qwen3_tts.Qwen3TtsMlxEngine.engine_id / "weights"
+    )
 
 
 def test_qwen3_engine_declares_modelscope_twin():
@@ -168,3 +173,99 @@ def test_qwen3_engine_declares_modelscope_twin():
     assert chain[0].startswith("https://huggingface.co/")
     assert chain[1].startswith("https://hf-mirror.com/")
     assert chain[2].startswith("https://modelscope.cn/models/mlx-community/")
+
+
+# --- install progress on the status endpoint (issue #35) ----------------------
+
+
+class ProgressStub(StubInstallable):
+    """Installable stub whose install reports byte progress mid-run (issue #35)."""
+
+    engine_id = "progress-stub"
+
+    def __init__(self, fail=False):
+        super().__init__(fail=fail)
+        self.progress = None
+        self.reported = threading.Event()
+        self.release = threading.Event()
+        self.steps = {"weights": {"status": "pending"}}
+
+    def install_state(self):
+        state = super().install_state()
+        state["steps"] = self.steps
+        state["progress"] = self.progress
+        return state
+
+    def install(self, log, progress=None):
+        progress("weights:model.safetensors", 100, 400)
+        self.progress = {
+            "file": "weights:model.safetensors",
+            "done_bytes": 100,
+            "total_bytes": 400,
+        }
+        self.reported.set()
+        self.release.wait(timeout=5)
+        if self.fail:
+            self.steps = {"weights": {"status": "failed", "error": "boom: download failed"}}
+            raise RuntimeError("boom: download failed")
+        self.steps = {"weights": {"status": "completed"}}
+        self._installed = True
+        return {"installed": True}
+
+
+@pytest.fixture()
+def progress_client(tmp_path):
+    registry = Registry()
+    stub = ProgressStub()
+    registry.register(stub)
+    app = sidecar_main.create_app(registry, token="t", audio_dir=tmp_path)
+    with TestClient(app, headers={"Authorization": "Bearer t"}) as c:
+        yield c, stub
+
+
+def _wait(event) -> None:
+    for _ in range(200):
+        if event.is_set():
+            return
+        time.sleep(0.05)
+    raise AssertionError("install did not reach the expected phase")
+
+
+def test_status_exposes_progress_while_downloading(progress_client):
+    c, stub = progress_client
+    assert c.post("/engines/progress-stub/install").status_code == 200
+    _wait(stub.reported)
+    body = c.get("/engines/progress-stub/status").json()
+    assert body["installing"] is True
+    assert body["progress"] == {
+        "file": "weights:model.safetensors",
+        "done_bytes": 100,
+        "total_bytes": 400,
+    }
+    stub.release.set()
+    for _ in range(200):
+        if c.get("/engines/progress-stub/status").json()["installed"]:
+            break
+        time.sleep(0.05)
+    done = c.get("/engines/progress-stub/status").json()
+    assert done["installed"] is True
+    assert done["progress"] is None  # no fake progress after completion
+
+
+def test_status_clears_progress_after_failed_install(tmp_path):
+    registry = Registry()
+    stub = ProgressStub(fail=True)
+    registry.register(stub)
+    app = sidecar_main.create_app(registry, token="t", audio_dir=tmp_path)
+    with TestClient(app, headers={"Authorization": "Bearer t"}) as c:
+        c.post("/engines/progress-stub/install")
+        _wait(stub.reported)
+        stub.release.set()
+        for _ in range(200):
+            body = c.get("/engines/progress-stub/status").json()
+            if body["steps"]["weights"]["status"] == "failed":
+                break
+            time.sleep(0.05)
+        assert body["installing"] is False
+        assert body["progress"] is None
+        assert "download failed" in body["steps"]["weights"]["error"]

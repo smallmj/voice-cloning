@@ -47,7 +47,9 @@ class RangeHandler(http.server.BaseHTTPRequestHandler):
             start = int(rng.removeprefix("bytes=").split("-")[0])
             chunk = self.payload[start:]
             self.send_response(206)
-            self.send_header("Content-Range", f"bytes {start}-{len(self.payload)-1}/{len(self.payload)}")
+            self.send_header(
+                "Content-Range", f"bytes {start}-{len(self.payload) - 1}/{len(self.payload)}"
+            )
             self.send_header("Content-Length", str(len(chunk)))
         else:
             start = 0
@@ -215,10 +217,10 @@ def test_installer_skips_completed_and_retries_failed(tmp_path):
 
 def test_installer_state_survives_reload(tmp_path):
     ctx = installer.InstallContext(engine_id="e", root=tmp_path)
-    installer.run_install(ctx, [installer.InstallStep("s", "d", lambda _log, p: None)], lambda m: None)
-    reloaded = installer.load_state(
-        installer.InstallContext(engine_id="e", root=tmp_path)
+    installer.run_install(
+        ctx, [installer.InstallStep("s", "d", lambda _log, p: None)], lambda m: None
     )
+    reloaded = installer.load_state(installer.InstallContext(engine_id="e", root=tmp_path))
     assert reloaded["installed"] is True
     assert json.loads((tmp_path / "engines" / "e" / "install_state.json").read_text())["installed"]
 
@@ -266,6 +268,7 @@ def test_retry_after_artifact_wipe_reruns_shared_artifact_steps(tmp_path, monkey
             venv.mkdir(parents=True, exist_ok=True)
             if fail:
                 raise RuntimeError("boom")
+
         return InstallStep(step_id, step_id, run, artifact=venv)
 
     with pytest.raises(RuntimeError):
@@ -279,3 +282,54 @@ def test_retry_after_artifact_wipe_reruns_shared_artifact_steps(tmp_path, monkey
     # torch reruns because its artifact (the venv) was wiped by the engine retry
     assert calls == ["torch", "engine", "torch", "engine"]
     assert load_state(ctx)["installed"] is True
+
+
+# --- install progress (issue #35) ---------------------------------------------
+
+
+def test_installer_persists_progress_and_clears_on_completion(tmp_path):
+    ctx = installer.InstallContext(engine_id="e", root=tmp_path)
+    observed = []
+
+    def dl(log, progress):
+        for done in (0, 50, 100):
+            progress("weights:model.safetensors", done, 100)
+            observed.append(installer.load_state(ctx).get("progress"))
+
+    installer.run_install(ctx, [installer.InstallStep("weights", "download", dl)], lambda m: None)
+    # First report lands on disk; later ones are throttled to the poll cadence
+    # but the final one is forced (done >= total).
+    assert observed[0] == {
+        "file": "weights:model.safetensors",
+        "done_bytes": 0,
+        "total_bytes": 100,
+    }
+    assert observed[-1]["done_bytes"] == 100
+    # A completed install leaves no stale progress behind.
+    assert "progress" not in installer.load_state(ctx)
+
+
+def test_installer_clears_progress_on_failure(tmp_path):
+    ctx = installer.InstallContext(engine_id="e", root=tmp_path)
+
+    def dl(log, progress):
+        progress("weights:model.safetensors", 10, 100)
+        raise RuntimeError("network reset")
+
+    with pytest.raises(RuntimeError):
+        installer.run_install(
+            ctx, [installer.InstallStep("weights", "download", dl)], lambda m: None
+        )
+    assert "progress" not in installer.load_state(ctx)
+    assert installer.load_state(ctx)["steps"]["weights"]["status"] == "failed"
+
+
+def test_installer_drops_stale_progress_from_previous_run(tmp_path):
+    ctx = installer.InstallContext(engine_id="e", root=tmp_path)
+    installer.save_state(
+        ctx, {"steps": {}, "progress": {"file": "w", "done_bytes": 5, "total_bytes": 10}}
+    )
+    installer.run_install(
+        ctx, [installer.InstallStep("s", "d", lambda _log, p: None)], lambda m: None
+    )
+    assert "progress" not in installer.load_state(ctx)

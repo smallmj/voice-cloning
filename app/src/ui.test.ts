@@ -170,8 +170,36 @@ describe("parameter layers (issue #23 / ADR-0018)", () => {
       spec({ name: "speed" }),
       spec({ name: "speed_dead", exposed: false, not_exposed_reason: "no-op" }),
     ];
-    expect(
-      sendableParams(params, { speed: "1.2", speed_dead: "3", gone: "x" }),
-    ).toEqual({ speed: "1.2" });
+    expect(sendableParams(params, { speed: "1.2", speed_dead: "3", gone: "x" })).toEqual({
+      speed: "1.2",
+    });
+  });
+});
+
+// --- install progress rendering (issue #35) -----------------------------------
+
+import { formatBytes, progressPercent } from "./install-progress";
+
+describe("progressPercent", () => {
+  it("computes percent from bytes", () => {
+    expect(progressPercent({ file: "w", done_bytes: 50, total_bytes: 200 })).toBe(25);
+  });
+
+  it("returns null when the total size is unknown", () => {
+    expect(progressPercent({ file: "w", done_bytes: 50, total_bytes: null })).toBeNull();
+    expect(progressPercent({ file: "w", done_bytes: 50, total_bytes: 0 })).toBeNull();
+  });
+
+  it("clamps at 100", () => {
+    expect(progressPercent({ file: "w", done_bytes: 300, total_bytes: 200 })).toBe(100);
+  });
+});
+
+describe("formatBytes", () => {
+  it("formats human-readable byte counts", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1.50 GB");
   });
 });

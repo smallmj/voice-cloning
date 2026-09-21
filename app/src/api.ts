@@ -93,11 +93,19 @@ export interface InstallStepState {
   error?: string | null;
 }
 
+/** Byte-level download progress of a running install (issue #35). */
+export interface InstallProgress {
+  file: string;
+  done_bytes: number;
+  total_bytes: number | null;
+}
+
 export interface EngineInstallStatus {
   id: string;
   installed: boolean;
   installing: boolean;
   steps: Record<string, InstallStepState>;
+  progress: InstallProgress | null;
 }
 
 export interface GenerationLogLine {

@@ -360,6 +360,10 @@ code {
 .install-step.step-completed { color: var(--success); }
 .install-step.step-running { color: var(--accent); }
 .install-step.step-failed { color: var(--danger); }
+.install-progress { font-size: var(--fs-sm); margin: var(--sp-1) 0; }
+.install-progress-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.install-progress-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.install-progress-text { margin-top: 2px; opacity: 0.8; word-break: break-all; }
 
 /* --- 音色库 --- */
 .voice-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-3); margin-top: var(--sp-3); }

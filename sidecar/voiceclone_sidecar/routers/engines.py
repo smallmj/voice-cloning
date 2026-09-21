@@ -38,13 +38,9 @@ def build_router(ctx: AppContext) -> APIRouter:
                     "id": e.engine_id,
                     "display_name": e.display_name,
                     "capabilities": e.capabilities().to_dict(),
-                    "installed": e.is_installed()
-                    if isinstance(e, InstallableEngine)
-                    else True,
+                    "installed": e.is_installed() if isinstance(e, InstallableEngine) else True,
                     "requires_key": e.requires_key,
-                    "key_configured": keys.get(e.engine_id) is not None
-                    if e.requires_key
-                    else None,
+                    "key_configured": keys.get(e.engine_id) is not None if e.requires_key else None,
                     "billing_note": e.billing_note,
                     "data_usage_note": e.data_usage_note,
                     "params": [p.to_dict() for p in e.param_specs()],
@@ -86,13 +82,24 @@ def build_router(ctx: AppContext) -> APIRouter:
     async def engine_status(engine_id: str) -> dict:
         engine = ctx.require_engine(engine_id)
         if not isinstance(engine, InstallableEngine):
-            return {"id": engine.engine_id, "installed": True, "installing": False, "steps": {}}
+            return {
+                "id": engine.engine_id,
+                "installed": True,
+                "installing": False,
+                "steps": {},
+                "progress": None,
+            }
         state = engine.install_state()
+        installing = engine_id in ctx.install_jobs
         return {
             "id": engine.engine_id,
             "installed": state["installed"],
-            "installing": engine_id in ctx.install_jobs,
+            "installing": installing,
             "steps": state["steps"],
+            # Byte-level download progress (issue #35). Gated on an actually
+            # running install so a stale field from a killed run (crash
+            # between writes) is never advertised as a live progress bar.
+            "progress": state.get("progress") if installing else None,
         }
 
     @router.post("/engines/{engine_id}/install", dependencies=[Depends(ctx.require_auth)])
@@ -133,14 +140,10 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     def _model_entry(target, engine_id: str, display_name: str) -> dict:
         d = target.model_dir()
-        usage = sum(
-            f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.is_symlink()
-        )
+        usage = sum(f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.is_symlink())
         try:
             weights_dir = (
-                str(target.weights_dir())
-                if hasattr(target, "weights_dir")
-                else str(d / "weights")
+                str(target.weights_dir()) if hasattr(target, "weights_dir") else str(d / "weights")
             )
         except Exception:  # noqa: BLE001 - listing must never fail
             weights_dir = str(d / "weights")
@@ -187,22 +190,17 @@ def build_router(ctx: AppContext) -> APIRouter:
         """Uninstall one local model: remove its engine dir (weights + venv
         + install state) and start from a clean install lifecycle."""
         if engine_id in ctx.install_jobs:
-            raise HTTPException(
-                status_code=409, detail="该引擎正在安装中，无法卸载"
-            )
+            raise HTTPException(status_code=409, detail="该引擎正在安装中，无法卸载")
         target = _model_target(engine_id)
         if not hasattr(target, "model_dir"):
-            raise HTTPException(
-                status_code=422, detail=f"engine {engine_id} 没有可卸载的本地模型"
-            )
+            raise HTTPException(status_code=422, detail=f"engine {engine_id} 没有可卸载的本地模型")
         # Re-check right before the destructive step: an install started
         # between the earlier check and here must not be deleted underneath.
         if engine_id in ctx.install_jobs:
-            raise HTTPException(
-                status_code=409, detail="该引擎刚开始安装，无法卸载；请稍后重试"
-            )
+            raise HTTPException(status_code=409, detail="该引擎刚开始安装，无法卸载；请稍后重试")
         d = target.model_dir()
         if d.exists():
             shutil.rmtree(d)
         return {"id": engine_id, "uninstalled": True, "model_dir": str(d)}
+
     return router

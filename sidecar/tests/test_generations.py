@@ -3,18 +3,12 @@ artifact cleanup, and rerun-grade lineage (issue #7)."""
 
 from __future__ import annotations
 
-import json
-
-import httpx
-
 from voiceclone_sidecar.generations import GenerationStore
-
 
 # --- store unit tests -------------------------------------------------------
 
 
 def _write_wav(path, seconds: float = 0.2) -> None:
-    import struct
     import wave
 
     with wave.open(str(path), "wb") as w:
@@ -102,7 +96,7 @@ def test_torn_legacy_index_fails_loudly(tmp_path):
     from voiceclone_sidecar.db import DatabaseError
 
     (tmp_path / "generations.json").write_text("{broken", encoding="utf-8")
-    with pytest.raises(DatabaseError, match="generations.json"):
+    with pytest.raises(DatabaseError, match=r"generations\.json"):
         GenerationStore(tmp_path, tmp_path / "audio")
 
 
@@ -190,7 +184,7 @@ def test_generation_with_voice_snapshots_voice_name(client, sidecar):
     voice = client.post(
         "/voices",
         data={"name": "重跑溯源音色", "description": ""},
-        files={"file": ("ref.wav", open(sidecar["audio_dir"] / "voice-ref.wav", "rb"), "audio/wav")},
+        files={"file": ("ref.wav", open(sidecar["audio_dir"] / "voice-ref.wav", "rb"), "audio/wav")},  # noqa: SIM115 - request-scoped handle consumed by the client call
     ).json()
     record = client.post(
         "/generations",

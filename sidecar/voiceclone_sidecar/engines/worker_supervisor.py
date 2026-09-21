@@ -35,6 +35,7 @@ work on Windows pipes at all.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import subprocess
@@ -105,10 +106,9 @@ class WorkerSupervisor:
         with self._lock:
             if self._proc is None:
                 return
-            try:
+            # Unload failure is fine: process exit is the real release.
+            with contextlib.suppress(Exception):
                 self._exchange({"action": "unload"}, None, time.monotonic() + 60)
-            except Exception:  # noqa: BLE001 - process exit is the real release
-                pass
             self._terminate()
 
     def shutdown(self) -> None:

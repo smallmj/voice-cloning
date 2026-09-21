@@ -57,7 +57,9 @@ def test_run_generation_unknown_voice_404(ctx):
 def _minimax_ctx(tmp_path):
     """A real MiniMaxCloudEngine behind a MockTransport: exercises the
     issue-#27 system-voice-without-a-voice-record path end to end."""
-    import io, wave as _wave
+    import io
+    import wave as _wave
+
     import httpx
 
     from voiceclone_sidecar.engines.minimax_cloud import MiniMaxCloudEngine

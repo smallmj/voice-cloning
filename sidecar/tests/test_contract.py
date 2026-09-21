@@ -4,11 +4,9 @@ contract (HTTP responses, audio files, WebSocket events, error codes)."""
 from __future__ import annotations
 
 import struct
-import uuid
 import wave
 
 import httpx
-import pytest
 
 EXPECTED_CAPABILITY_KEYS = {
     "languages",
@@ -48,6 +46,7 @@ def test_health_with_valid_token(client):
 
 def test_websocket_without_token_is_rejected(sidecar, ws_url):
     import asyncio
+
     import websockets
 
     async def run():
@@ -78,7 +77,7 @@ def test_engines_list_includes_fake_engine_with_capabilities(client):
     fake = [e for e in engines if e["id"] == "fake"]
     assert len(fake) == 1
     caps = fake[0]["capabilities"]
-    assert EXPECTED_CAPABILITY_KEYS <= set(caps.keys()), "capability declaration is incomplete"
+    assert set(caps.keys()) >= EXPECTED_CAPABILITY_KEYS, "capability declaration is incomplete"
 
 
 # --- generation end-to-end -------------------------------------------------

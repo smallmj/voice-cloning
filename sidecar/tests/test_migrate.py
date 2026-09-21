@@ -8,9 +8,7 @@ import pytest
 
 from voiceclone_sidecar import migrate
 from voiceclone_sidecar.db import (
-    T_COMPARE,
     T_GENERATIONS,
-    T_REGRESSION,
     T_VOICES,
     Database,
     library_db_path,
@@ -107,7 +105,7 @@ def test_corrupt_index_fails_migration_loudly_and_keeps_originals(tmp_path):
     from voiceclone_sidecar.db import DatabaseError
 
     (tmp_path / "voices.json").write_text("{not json", encoding="utf-8")
-    with pytest.raises(DatabaseError, match="voices.json"):
+    with pytest.raises(DatabaseError, match=r"voices\.json"):
         ensure_migrated(tmp_path)
     assert (tmp_path / "voices.json").exists()
     assert not list(tmp_path.glob("migration-backup-*"))

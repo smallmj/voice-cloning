@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
@@ -11,15 +12,22 @@ from ..context import AppContext
 # Issue #28: diagnostics only ever reads (never stores) the upload; cap it
 # like the other upload endpoints instead of trusting the client.
 ANALYSIS_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
-from ..diagnostics import DiagnosticError, analyze_audio
-from ..engines.cloud_base import CloudEngineError
-from ..registry import InstallableEngine
-from ..transcription import (
+from ..diagnostics import (  # noqa: E402 - imports follow the module constant
+    DiagnosticError,
+    analyze_audio,
+)
+from ..engines.cloud_base import (  # noqa: E402 - imports follow the module constant
+    CloudEngineError,
+)
+from ..registry import (  # noqa: E402 - imports follow the module constant
+    InstallableEngine,
+)
+from ..transcription import (  # noqa: E402 - intentional: imports follow the module constant
     LOCAL_TOOL_ID,
     TranscriptionError,
     engine_transcribers,
 )
-from ..voices import VoiceValidationError
+from ..voices import VoiceValidationError  # noqa: E402 - imports follow the module constant
 
 
 def _read_all_kv(ctx: AppContext, table: str) -> dict:
@@ -62,10 +70,8 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             if tmp is not None:
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
 
     @router.get("/voices/{voice_id}/diagnose", dependencies=[Depends(ctx.require_auth)])
     async def diagnose_voice(voice_id: str) -> dict:

@@ -16,7 +16,10 @@
     "fetch:uv": "node scripts/fetch-uv.mjs",
     "dist:mac": "npm run build && node scripts/fetch-uv.mjs darwin-arm64 && electron-builder --mac",
     "dist:win": "npm run build && node scripts/fetch-uv.mjs win32-x64 && electron-builder --win",
-    "pack": "npm run build && node scripts/fetch-uv.mjs && electron-builder --dir"
+    "pack": "npm run build && node scripts/fetch-uv.mjs && electron-builder --dir",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -24,6 +27,7 @@
     "wavesurfer.js": "^7.8.6"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
@@ -31,7 +35,12 @@
     "electron": "^33.2.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.24.0",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.8",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.70.0",
     "vite": "^6.0.3",
     "vitest": "^5.0.1"
   }

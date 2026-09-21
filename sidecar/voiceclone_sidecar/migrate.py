@@ -237,7 +237,7 @@ def _db_is_blank_or_absent_ok(db_path: Path) -> bool:
         probe = Database(db_path, migrate=False)
         probe.close()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any failure means "not blank-or-absent ok"
         return False
 
 

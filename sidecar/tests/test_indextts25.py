@@ -14,7 +14,6 @@ import threading
 import time
 from pathlib import Path
 
-import httpx
 import pytest
 
 from voiceclone_sidecar import main as sidecar_main
@@ -26,7 +25,7 @@ from voiceclone_sidecar.registry import (
     GenerationResult,
     Registry,
 )
-from voiceclone_sidecar.runtime import downloader, installer, uvman
+from voiceclone_sidecar.runtime import downloader, uvman
 
 
 @pytest.fixture()

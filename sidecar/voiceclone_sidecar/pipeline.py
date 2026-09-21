@@ -39,7 +39,6 @@ async def run_generation(
     generation_id: str | None = None,
 ) -> dict:
     """One complete synthesis run through the shared pipeline."""
-    registry = ctx.registry
     engine: Engine | None = ctx.require_engine(engine_id or "")
 
     params = dict(params or {})
@@ -270,7 +269,7 @@ async def run_generation(
         for attempt_no in range(1, ctx.rate_limit_attempts + 1):
             try:
                 return attempt()
-            except Exception as exc:  # noqa: BLE001 - re-raised below
+            except Exception as exc:
                 if (
                     not engine.requires_key
                     or attempt_no >= ctx.rate_limit_attempts
@@ -287,7 +286,7 @@ async def run_generation(
 
     try:
         result = await loop.run_in_executor(None, run_synthesis)
-    except Exception as exc:  # noqa: BLE001 - recorded in history, surfaced on the contract
+    except Exception as exc:
         record.update(
             status="failed",
             error=str(exc),

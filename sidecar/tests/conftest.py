@@ -15,8 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import httpx
+import pytest
 
 SIDECAR_DIR = Path(__file__).resolve().parent.parent
 
@@ -29,9 +29,9 @@ def _wait_for_port(port: int, process: subprocess.Popen, timeout: float = 30.0) 
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.5):
                 return
-        except OSError:
+        except OSError as exc:
             if process.poll() is not None:
-                raise RuntimeError(f"sidecar exited early: {process.stderr.read()!r}")
+                raise RuntimeError(f"sidecar exited early: {process.stderr.read()!r}") from exc
             time.sleep(0.1)
     raise TimeoutError("sidecar did not start listening in time")
 

@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 
 import pytest
 
 from voiceclone_sidecar.db import (
-    Database,
-    DatabaseError,
     T_APP_STATE,
     T_COMPARE,
     T_GENERATIONS,
     T_REGRESSION,
     T_SETTINGS,
     T_VOICES,
+    Database,
+    DatabaseError,
     library_db_path,
     read_kv_block,
     write_kv_block,
 )
-
 
 # -- open / schema -------------------------------------------------------------
 
@@ -163,10 +161,9 @@ def test_integrity_check_true_on_healthy_db():
 def test_transaction_rolls_back_on_error():
     db = Database(None)
     db.put_payload(T_VOICES, "v1", "", {"id": "v1"})
-    with pytest.raises(RuntimeError):
-        with db.tx() as conn:
-            conn.execute("DELETE FROM voices")
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), db.tx() as conn:
+        conn.execute("DELETE FROM voices")
+        raise RuntimeError("boom")
     assert db.count(T_VOICES) == 1
 
 

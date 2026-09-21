@@ -18,6 +18,7 @@ renamed or deleted.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -105,7 +106,7 @@ class GenerationStore:
         rows = self._db.execute(
             f"SELECT payload FROM {T_GENERATIONS} {clause} "
             "ORDER BY created_at DESC, id LIMIT ? OFFSET ?",
-            tuple(params) + (limit, offset),
+            (*tuple(params), limit, offset),
         ).fetchall()
         return {"records": [json.loads(r["payload"]) for r in rows], "total": total}
 
@@ -116,10 +117,8 @@ class GenerationStore:
             raise KeyError(generation_id)
         audio_name = record.get("audio_file")
         if audio_name:
-            try:
+            with contextlib.suppress(OSError):
                 (self.audio_dir / audio_name).unlink()
-            except OSError:
-                pass
 
 
 def now_iso() -> str:

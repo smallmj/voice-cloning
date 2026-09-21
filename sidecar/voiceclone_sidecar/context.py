@@ -10,13 +10,13 @@ shared services and helpers into one importable object. Routers receive an
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-
 from typing import Any
 
 from fastapi import HTTPException, UploadFile
@@ -27,8 +27,8 @@ from .db import T_APP_STATE, read_kv_block, write_kv_block
 from .generations import GenerationStore
 from .jobs import JobStore
 from .logbus import LogBus
-from .regression import RegressionStore
 from .registry import Registry
+from .regression import RegressionStore
 from .secrets import KeyStore
 from .transcription import (
     DEFAULT_PROVIDER,
@@ -89,7 +89,7 @@ class AppContext:
     # (or its session is deleted, which also cancels the in-flight task).
     regression_lock: threading.Lock = field(default_factory=threading.Lock)
     # Owning router: routers/regression.py — session id → its worker task.
-    regression_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
+    regression_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
 
     # Auth gates, built once from the process token (issue #19 policy).
     require_auth: Any = field(init=False, repr=False)
@@ -234,10 +234,8 @@ class AppContext:
         except BaseException:
             # Mid-read failure (cap exceeded, client disconnect, …) must not
             # leave an orphan temp file in the audio dir.
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
             raise
 
     # -- AIGC marker ---------------------------------------------------------

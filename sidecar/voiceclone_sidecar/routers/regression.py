@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..context import AppContext
 from ..generations import now_iso
 from ..pipeline import run_generation
+from ..registry import InstallableEngine
 from ..regression import (
     REGRESSION_ITEMS,
     aggregate_session,
@@ -20,7 +22,6 @@ from ..regression import (
     sample_peak_vram,
     wav_duration_seconds,
 )
-from ..registry import InstallableEngine
 
 
 def build_router(ctx: AppContext) -> APIRouter:
@@ -32,7 +33,7 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     def _regression_worker(
         session_id: str, plan: list[dict], session_voice_id: str | None, asr_check: bool
-    ) -> "asyncio.Task[None]":
+    ) -> asyncio.Task[None]:
         """Schedule one regression session on the MAIN event loop (issue #28).
 
         The worker used to run in a daemon thread via ``asyncio.run``, i.e. a
@@ -57,9 +58,9 @@ def build_router(ctx: AppContext) -> APIRouter:
                     if fresh is None:
                         return
                     fresh["items"] = [
-                        record_item
-                        if i.get("item_id") == step["item_id"]
-                        and i.get("engine_id") == step["engine_id"]
+                        record_item  # noqa: B023 - invoked within the same iteration
+                        if i.get("item_id") == step["item_id"]  # noqa: B023 - invoked within the same iteration
+                        and i.get("engine_id") == step["engine_id"]  # noqa: B023 - invoked within the same iteration
                         else i
                         for i in fresh["items"]
                     ]
@@ -102,7 +103,7 @@ def build_router(ctx: AppContext) -> APIRouter:
                                 transcript = await asyncio.get_running_loop().run_in_executor(
                                     None,
                                     lambda: ctx.local_transcriber().transcribe(
-                                        str(audio_dir / audio_file), lambda m: None
+                                        str(audio_dir / audio_file), lambda m: None  # noqa: B023 - awaited within the same iteration
                                     ),
                                 )
                                 record_item["asr_text"] = transcript
@@ -238,10 +239,8 @@ def build_router(ctx: AppContext) -> APIRouter:
         task = ctx.regression_tasks.get(session_id)
         if task is not None:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
         session = regression_store.delete(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="regression session not found")

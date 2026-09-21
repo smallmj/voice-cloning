@@ -9,13 +9,12 @@ import subprocess
 import wave
 from pathlib import Path
 
-import httpx
 import pytest
 
 from voiceclone_sidecar import transcription
 from voiceclone_sidecar.runtime import uvman
 
-from .test_voices import create_voice, wav_bytes
+from .test_voices import create_voice
 
 
 def sine_wav_bytes(seconds: float = 4.0, freq: float = 220.0, rate: int = 16000) -> bytes:
@@ -135,7 +134,7 @@ def test_placeholder_transcript_in_library_is_flagged(client):
     assert stored["reference"]["transcript_placeholder"] is True
 
     listed = client.get("/voices").json()["voices"]
-    match = [v for v in listed if v["id"] == voice["id"]][0]
+    match = next(v for v in listed if v["id"] == voice["id"])
     assert match["reference"]["transcript_placeholder"] is True
 
 

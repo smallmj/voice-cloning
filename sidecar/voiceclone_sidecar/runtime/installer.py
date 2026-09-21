@@ -15,9 +15,9 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from .paths import engine_dir
 
@@ -104,7 +104,7 @@ def run_install(ctx: InstallContext, steps: list[InstallStep], log: LogFn, progr
         log(f"[{step.id}] {step.description}")
         try:
             step.run(log, progress)
-        except Exception as exc:  # noqa: BLE001 - recorded, surfaced, retriable
+        except Exception as exc:
             entry.update(status="failed", error=str(exc), finished_at=time.time())
             save_state(ctx, state)
             log(f"[{step.id}] FAILED: {exc}")

@@ -10,6 +10,7 @@ default-engine selection or routing decision.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import uuid
 
@@ -17,9 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..compare import (
     ALL_LABELS,
-    CompareError,
     DEFAULT_TEXT_TYPE,
     TEXT_TYPES,
+    CompareError,
     detect_language,
 )
 from ..context import AppContext
@@ -43,13 +44,13 @@ def build_router(ctx: AppContext) -> APIRouter:
         """
         loop = asyncio.get_running_loop()
         labeled: list[dict] = []
-        for entry, label in zip(entries, list(ALL_LABELS)[: len(entries)]):
+        for entry, label in zip(entries, list(ALL_LABELS)[: len(entries)], strict=False):
             norm_name = f"norm-{session_id}-{label}.wav"
             try:
                 measurement = await loop.run_in_executor(
                     None,
                     lambda: normalize_wav_lufs(
-                        audio_dir / entry["audio_file"], audio_dir / norm_name
+                        audio_dir / entry["audio_file"], audio_dir / norm_name  # noqa: B023 - awaited within the same iteration
                     ),
                 )
             except LoudnessError as exc:
@@ -206,10 +207,8 @@ def build_router(ctx: AppContext) -> APIRouter:
         for entry in session.get("entries", []):
             name = entry.get("normalized_file")
             if name:
-                try:
+                with contextlib.suppress(OSError):
                     (audio_dir / name).unlink()
-                except OSError:
-                    pass
         return {"deleted": session_id}
 
     @router.get("/preferences", dependencies=[Depends(ctx.require_auth)])

@@ -8,7 +8,6 @@ import wave
 import httpx
 import pytest
 
-from .test_contract import auth_headers
 from voiceclone_sidecar.regression import (
     REGRESSION_CATEGORIES,
     REGRESSION_ITEMS,
@@ -19,6 +18,7 @@ from voiceclone_sidecar.regression import (
     wav_duration_seconds,
 )
 
+from .test_contract import auth_headers
 
 # ---------------------------------------------------------------------------
 # 固化的中文回归集

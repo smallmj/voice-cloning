@@ -58,7 +58,7 @@ def read_wav_mono(
     the cap trims analysis memory, never the file itself.
     """
     try:
-        w = wave.open(str(path), "rb")
+        w = wave.open(str(path), "rb")  # noqa: SIM115 - closed by `with w:` below
     except (wave.Error, EOFError) as exc:
         raise LoudnessError(f"WAV 文件无法解析：{exc}") from exc
     with w:
@@ -74,8 +74,6 @@ def read_wav_mono(
     if width == 0 or width > 4:
         raise LoudnessError(f"不支持的采样位宽：{width * 8}-bit")
 
-    frame_bytes = width * channels
-    n = len(raw) // frame_bytes
     peak = float(1 << (8 * width - 1))
     return _decode_samples(raw, width, channels, peak), rate
 
@@ -102,7 +100,7 @@ def write_wav_mono(path: Path, samples: list[float], rate: int) -> None:
     """Encode mono floats to a 16-bit PCM WAV, hard-clamping to full scale."""
     frames = bytearray()
     for s in samples:
-        v = int(round(max(-1.0, min(1.0, s)) * FULL_SCALE))
+        v = round(max(-1.0, min(1.0, s)) * FULL_SCALE)
         frames += struct.pack("<h", v)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -223,7 +221,7 @@ def gain_to_reach(current_lufs: float, target_lufs: float = TARGET_LUFS) -> floa
 def _encode_frames(samples: list[float]) -> bytes:
     frames = bytearray()
     for s in samples:
-        v = int(round(max(-1.0, min(1.0, s)) * FULL_SCALE))
+        v = round(max(-1.0, min(1.0, s)) * FULL_SCALE)
         frames += struct.pack("<h", v)
     return bytes(frames)
 

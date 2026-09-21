@@ -13,11 +13,11 @@ from __future__ import annotations
 import io
 import time
 import wave
+from pathlib import Path
 
 import httpx
 
 from voiceclone_sidecar.segmentation import concat_wav_files, split_text
-from pathlib import Path
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 

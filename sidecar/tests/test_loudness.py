@@ -11,8 +11,8 @@ import pytest
 
 from voiceclone_sidecar.loudness import (
     ANALYSIS_LIMIT_SECONDS,
-    LoudnessError,
     TARGET_LUFS,
+    LoudnessError,
     integrated_lufs,
     measure_file_lufs,
     normalize_wav_lufs,

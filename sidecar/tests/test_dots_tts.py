@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from voiceclone_sidecar.engines import dots_tts_cuda, dots_tts_patch
+from voiceclone_sidecar.engines import dots_tts_cuda
 from voiceclone_sidecar.engines.dots_tts_cuda import DotsTtsCudaEngine
 from voiceclone_sidecar.engines.dots_tts_patch import PatchAnchorError, apply_patches
 from voiceclone_sidecar.pronunciation import rewrite

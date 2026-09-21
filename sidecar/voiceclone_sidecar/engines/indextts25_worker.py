@@ -61,7 +61,6 @@ def check_cuda() -> None:
 
 
 def _load(model_dir: str):
-    import torch
 
     if _state["tts"] is not None:
         return _state["tts"]

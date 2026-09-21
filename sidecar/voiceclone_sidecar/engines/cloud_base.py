@@ -42,7 +42,7 @@ class CloudEngineBase:
 
     def __init__(self, output_dir: Path | None = None, key_store=None,
                  client: httpx.Client | None = None,
-                 config: "EngineConfig | None" = None) -> None:
+                 config: EngineConfig | None = None) -> None:
         self.key_store = key_store
         # Same seam as local engines; cloud engines currently consume only
         # output_dir from it, but the env dict is carried for uniformity.

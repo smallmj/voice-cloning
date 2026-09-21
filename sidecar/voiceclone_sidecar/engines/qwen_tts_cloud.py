@@ -27,7 +27,6 @@ import time
 import uuid
 from pathlib import Path
 
-
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .cloud_base import (
@@ -50,8 +49,8 @@ __all__ = [
     "BASE_URL",
     "CloudEngineError",
     "Qwen3TtsVcCloudEngine",
-    "billing_cost",
     "billed_chars",
+    "billing_cost",
     "voice_missing_error",
 ]
 
@@ -136,7 +135,7 @@ class Qwen3TtsVcCloudEngine(DashScopeEngine, Engine):
                 label="发音语种",
                 kind="select",
                 default="auto",
-                choices=("auto",) + LANGUAGE_CHOICES,
+                choices=("auto", *LANGUAGE_CHOICES),
                 layer="canonical",
                 wire_path="language_type",
                 applies_to=AppliesTo(engine=self.engine_id, model=TARGET_MODEL, mode="cloning"),

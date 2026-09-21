@@ -14,17 +14,17 @@ import wave
 import httpx
 import pytest
 
+from voiceclone_sidecar.engines.cloud_base import CloudEngineError
 from voiceclone_sidecar.engines.qwen_tts_cloud import (
     BASE_URL,
     ENROLL_MODEL,
+    PRICE_PER_10K_CHARS,
     SYNTH_PATH,
     TARGET_MODEL,
-    PRICE_PER_10K_CHARS,
     Qwen3TtsVcCloudEngine,
-    billing_cost,
     billed_chars,
+    billing_cost,
 )
-from voiceclone_sidecar.engines.cloud_base import CloudEngineError
 from voiceclone_sidecar.registry import GenerationRequest
 from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 

@@ -11,7 +11,6 @@ import pytest
 
 from voiceclone_sidecar.runtime import downloader, installer, paths
 
-
 # --- paths -----------------------------------------------------------------
 
 
@@ -162,7 +161,7 @@ def test_installer_skips_completed_and_retries_failed(tmp_path):
 
 def test_installer_state_survives_reload(tmp_path):
     ctx = installer.InstallContext(engine_id="e", root=tmp_path)
-    installer.run_install(ctx, [installer.InstallStep("s", "d", lambda l, p: None)], lambda m: None)
+    installer.run_install(ctx, [installer.InstallStep("s", "d", lambda _log, p: None)], lambda m: None)
     reloaded = installer.load_state(
         installer.InstallContext(engine_id="e", root=tmp_path)
     )
@@ -195,7 +194,6 @@ def test_download_file_skips_already_complete_file(tmp_path, monkeypatch):
 def test_retry_after_artifact_wipe_reruns_shared_artifact_steps(tmp_path, monkeypatch):
     """issue #25: a failed engine step wipes the shared venv; the earlier
     torch step (same artifact) must rerun on retry, not stay 'completed'."""
-    import json
 
     from voiceclone_sidecar.runtime.installer import (
         InstallContext,

@@ -7,9 +7,7 @@ and directly unit-testable without booting the app (issue #20).
 
 from __future__ import annotations
 
-import asyncio
-
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from ..context import AppContext

@@ -63,7 +63,7 @@ def expires_at(value: str) -> int | None:
 
 __all__ = [
     "DEFAULT_MEDIA_TTL_SECONDS",
+    "expires_at",
     "make_media_token",
     "verify_media_token",
-    "expires_at",
 ]

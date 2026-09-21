@@ -95,8 +95,15 @@ def verify_wav_output(output: str, log=log, engine_label="indextts-2.5") -> dict
     }
 
 
-def run_synthesis(request: dict, load, memory_report, log=log) -> dict:
-    """One synthesize request: load the model, infer, verify the output."""
+def run_synthesis(request: dict, load, memory_report, log=log,
+                  engine_label="indextts-2.5") -> dict:
+    """One synthesize request: load the model, infer, verify the output.
+
+    ``engine_label`` is forwarded by ``serve`` on every call (the substituted
+    synthesis functions in other workers accept it too); ruff's F821 caught
+    this name previously being used here without ever being defined, which
+    made every IndexTTS-2.5 synthesize request fail with a TypeError.
+    """
     output = request["output"]
     model_dir = request["model_dir"]
     started = time.monotonic()

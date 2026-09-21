@@ -27,7 +27,6 @@ from voiceclone_sidecar.pronunciation import (
     to_minimax,
 )
 
-
 # --- ParamSpec validation ----------------------------------------------------
 
 
@@ -97,7 +96,7 @@ def test_parse_annotations_canonical_format():
 
 def test_indextts_grammar_uppercase_digit_tone():
     text = "他在银行里走了半天"
-    ann, _ = parse_annotations("行=xing2\n行2=hang2")
+    _ann, _ = parse_annotations("行=xing2\n行2=hang2")
     out = to_indextts(text, {"行": "xing2"})
     assert "<行|XING2>" in out
     # Multi-char pinyin stays as-is; tone digit is kept, never a diacritic.

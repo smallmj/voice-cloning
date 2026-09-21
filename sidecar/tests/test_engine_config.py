@@ -10,8 +10,6 @@ path — ``default_registry()`` — only.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from voiceclone_sidecar import sources
@@ -24,8 +22,6 @@ from voiceclone_sidecar.engine_config import (
 from voiceclone_sidecar.engines.cloud_base import (
     CloudEngineBase,
     CloudEngineError,
-    billed_chars,
-    voice_missing_error,
 )
 from voiceclone_sidecar.registry import default_registry
 from voiceclone_sidecar.secrets import KeyStore, MemoryBackend

@@ -123,11 +123,11 @@ RATE_LIMIT_CODES = (1002, 1039)
 __all__ = [
     "BASE_URL_ENV",
     "DEFAULT_BASE_URL",
-    "CloudEngineError",
     "MODEL_CHOICES",
     "PRICES_PER_M_CHARS",
     "SYNC_CHAR_LIMIT",
     "TARGET_MODEL",
+    "CloudEngineError",
     "MiniMaxCloudEngine",
 ]
 
@@ -214,7 +214,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
                 label="情感",
                 kind="select",
                 default="auto",
-                choices=("auto",) + EMOTION_CHOICES,
+                choices=("auto", *EMOTION_CHOICES),
                 layer="engine",
                 wire_path="voice_setting.emotion",
                 applies_to=applies,

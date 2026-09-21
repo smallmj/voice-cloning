@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,8 +16,12 @@ from voiceclone_sidecar import main as sidecar_main
 from voiceclone_sidecar import sources
 from voiceclone_sidecar.capabilities import Capabilities
 from voiceclone_sidecar.engines import qwen3_tts
-from voiceclone_sidecar.registry import Engine, GenerationRequest, GenerationResult, InstallableEngine, Registry
-from voiceclone_sidecar.runtime import installer
+from voiceclone_sidecar.registry import (
+    Engine,
+    GenerationResult,
+    InstallableEngine,
+    Registry,
+)
 
 
 class StubEngine(Engine):

@@ -58,11 +58,11 @@ __all__ = [
     "AUX_WEIGHTS",
     "ENGINE_PACKAGE_URL",
     "ENGINE_PACKAGE_URL_FALLBACK",
-    "IndexTts25CudaEngine",
     "LANG_CHOICES",
     "MAIN_WEIGHTS_FILES",
     "REPO",
     "TORCH_VERSION",
+    "IndexTts25CudaEngine",
     "param_specs_for",
     "prepare_synthesis",
 ]

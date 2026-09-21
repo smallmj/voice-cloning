@@ -121,8 +121,6 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
     )
     # Write 16-bit PCM WAV ourselves — same output contract as the other
     # local workers (the peak self-check below refuses empty/silent files).
-    import torch
-
     import soundfile as sf
 
     wav = gen.detach().cpu().float().numpy()

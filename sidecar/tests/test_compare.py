@@ -241,7 +241,7 @@ def test_detect_language():
 
 
 def test_compare_store_scores_validation(tmp_path: Path):
-    store = CompareStore(tmp_path)
+    _ = CompareStore(tmp_path)
     session = {
         "id": "s1",
         "created_at": "t",

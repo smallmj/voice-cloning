@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from voiceclone_sidecar.engines import voxcpm2_base, voxcpm2_cuda, voxcpm2_mps
+from voiceclone_sidecar.engines import voxcpm2_base, voxcpm2_mps
 from voiceclone_sidecar.engines.voxcpm2_mps import VoxCPM2MpsEngine
 from voiceclone_sidecar.pronunciation import rewrite
 from voiceclone_sidecar.registry import GenerationRequest

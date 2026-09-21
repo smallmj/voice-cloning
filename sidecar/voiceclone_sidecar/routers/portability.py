@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -75,10 +76,8 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise _portability_error(exc) from exc
         finally:
             if tmp is not None:
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
 
     @router.post("/backup", dependencies=[Depends(ctx.require_auth)])
     async def backup_library() -> FileResponse:
@@ -138,9 +137,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise _portability_error(exc) from exc
         finally:
             if tmp is not None:
-                try:
+                with contextlib.suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
 
     return router

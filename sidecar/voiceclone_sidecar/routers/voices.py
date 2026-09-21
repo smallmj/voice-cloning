@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -48,10 +49,8 @@ def build_router(ctx: AppContext) -> APIRouter:
         finally:
             for tmp in (audio_tmp, avatar_tmp):
                 if tmp is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         tmp.unlink()
-                    except OSError:
-                        pass
 
     @router.get("/voices", dependencies=[Depends(ctx.require_auth)])
     async def list_voices() -> dict:
@@ -92,10 +91,8 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             if avatar_tmp is not None:
-                try:
+                with contextlib.suppress(OSError):
                     avatar_tmp.unlink()
-                except OSError:
-                    pass
 
     @router.delete("/voices/{voice_id}", dependencies=[Depends(ctx.require_auth)])
     async def delete_voice(voice_id: str) -> dict:

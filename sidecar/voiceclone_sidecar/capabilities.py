@@ -13,8 +13,9 @@ WITH their ``not_exposed_reason`` instead of silently dropped (issue #23).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 # ADR-0018 decision 3: the closed vocabulary of "why is this parameter not
 # exposed". Anything outside this set means the declaration is lying.

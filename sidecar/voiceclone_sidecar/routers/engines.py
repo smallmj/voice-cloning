@@ -124,7 +124,7 @@ def build_router(ctx: AppContext) -> APIRouter:
         if engine_id == LOCAL_TOOL_ID:
             try:
                 return ctx.local_transcriber()
-            except Exception as exc:  # noqa: BLE001 - unsupported platform
+            except Exception as exc:
                 raise HTTPException(
                     status_code=422,
                     detail=f"当前平台不支持本地转写：{exc}",

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import wave
 
-import httpx
-
 
 def test_design_voice_with_capable_engine_creates_first_class_voice(client):
     r = client.post(
@@ -135,7 +133,6 @@ def test_designed_voice_can_be_deleted(client):
 
 def _wav_bytes(seconds: float = 5.0, rate: int = 16000) -> bytes:
     import io
-    import struct
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

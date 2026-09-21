@@ -15,6 +15,7 @@ Storage layout (all under the data dir, ADR-0017):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import shutil
 import subprocess
@@ -332,10 +333,8 @@ class VoiceStore:
             old = record.get("avatar")
             avatar = self._store_avatar(voice_id, avatar_file)
             if old and old["filename"] != avatar["filename"]:
-                try:
+                with contextlib.suppress(OSError):
                     (self.root / voice_id / old["filename"]).unlink()
-                except OSError:
-                    pass
             record["avatar"] = avatar
             self._db.put_payload(T_VOICES, voice_id, record["created_at"], record)
             return dict(record)

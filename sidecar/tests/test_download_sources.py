@@ -5,20 +5,16 @@ and local model management (weight dir, disk usage, uninstall)."""
 
 from __future__ import annotations
 
-import json
-
-from voiceclone_sidecar.db import T_SETTINGS, write_kv_block
-
 import pytest
 
 from voiceclone_sidecar import sources
+from voiceclone_sidecar.db import T_SETTINGS, write_kv_block
 from voiceclone_sidecar.engine_config import (
     effective_env,
     load_source_prefs,
     save_source_prefs,
 )
 from voiceclone_sidecar.runtime import downloader
-
 
 # --- axis 1: weight sources --------------------------------------------------
 

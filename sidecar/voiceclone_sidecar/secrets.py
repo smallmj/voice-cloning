@@ -75,7 +75,7 @@ class KeyringBackend(KeyBackend):
                 raise KeyStoreError("系统没有可用的钥匙串后端")
         except KeyStoreError:
             raise
-        except Exception as exc:  # noqa: BLE001 - backend probe varies
+        except Exception as exc:
             raise KeyStoreError(f"系统钥匙串不可用：{exc}") from exc
         return keyring
 
@@ -84,7 +84,7 @@ class KeyringBackend(KeyBackend):
             return self._lib().get_password(service, account)
         except KeyStoreError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise KeyStoreError(f"读取系统钥匙串失败：{exc}") from exc
 
     def set(self, service: str, account: str, value: str) -> None:
@@ -92,7 +92,7 @@ class KeyringBackend(KeyBackend):
             self._lib().set_password(service, account, value)
         except KeyStoreError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise KeyStoreError(f"写入系统钥匙串失败：{exc}") from exc
 
     def delete(self, service: str, account: str) -> None:
@@ -100,7 +100,7 @@ class KeyringBackend(KeyBackend):
             # PasswordDeleteError is raised for a missing entry on some
             # backends; deleting a non-existent key is a no-op here.
             self._lib().delete_password(service, account)
-        except Exception as exc:  # noqa: BLE001 - entry-missing vs real failure
+        except Exception as exc:
             if "not found" not in str(exc).lower() and "nopassword" not in type(exc).__name__.lower():
                 raise KeyStoreError(f"删除系统钥匙串条目失败：{exc}") from exc
 

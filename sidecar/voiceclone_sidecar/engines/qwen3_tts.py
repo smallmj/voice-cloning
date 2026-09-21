@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import threading
 import uuid
 from pathlib import Path
 
+from .. import params as params_mod
+from .. import sources
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
-from .. import params as params_mod
-from .. import sources
 
 REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
 
@@ -127,7 +126,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
 
     def install_steps(self) -> list[installer.InstallStep]:
         weights_dir = paths.engine_weights_dir(self.root, self.engine_id)
-        ctx = self._ctx()
+        _ = self._ctx()
 
         def find_uv(log):
             return uvman.find_uv(self.root, env=self.env, log=log)
@@ -180,7 +179,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
     # -- generation ---------------------------------------------------------
 
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
-        ctx = self._ctx()
+        _ = self._ctx()
         if not self.is_installed():
             raise RuntimeError(
                 "engine is not installed yet — call POST /engines/qwen3-tts-mlx/install first"

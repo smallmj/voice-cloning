@@ -77,7 +77,7 @@ def test_missing_key_fails_with_actionable_message():
 
 
 def test_design_request_shape_and_response_parsing(tmp_path):
-    b64, raw = wav_b64()
+    b64, _raw = wav_b64()
     harness = Harness(
         [
             httpx.Response(
@@ -127,7 +127,7 @@ def test_design_failure_without_voice_field():
 
 
 def test_synthesis_uses_vd_model_and_designed_voice(tmp_path):
-    dl_b64, dl_raw = wav_b64()
+    _dl_b64, dl_raw = wav_b64()
     harness = Harness(
         [
             httpx.Response(200, json={"output": {"audio": {"url": "https://x/a.wav"}}}),

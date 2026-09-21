@@ -12,8 +12,8 @@ Covers four independent problems from the audit:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
-import struct
 import time
 import uuid
 import wave
@@ -167,10 +167,8 @@ def test_media_token_works_on_ws_logs(sidecar):
         async with websockets.connect(f"{ws_url}?token={payload['media_token']}") as ws:
             # Just prove the handshake succeeded: try to receive with a tiny
             # timeout; log traffic is not guaranteed immediately.
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(ws.recv(), timeout=0.5)
-            except asyncio.TimeoutError:
-                pass
 
     asyncio.run(run())
 

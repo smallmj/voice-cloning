@@ -93,7 +93,6 @@ def test_weights_list_is_base_only(engine, tmp_path, monkeypatch):
 def test_patch_table_matches_poc_script():
     """ADR-0019 decision 2: the PoC CLI and the engine install must share
     one patch surface — the script delegates to the package module."""
-    import importlib.util
 
     repo = Path(fireredtts3_mps.__file__).resolve().parents[3]
     script = repo / "scripts" / "fireredtts3_poc" / "patch_fireredtts3.py"

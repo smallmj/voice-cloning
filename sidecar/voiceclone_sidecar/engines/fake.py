@@ -14,8 +14,8 @@ import wave
 from pathlib import Path
 
 from ..capabilities import Capabilities
-from .qwen_tts_cloud import billed_chars
 from ..registry import Engine, GenerationRequest, GenerationResult
+from .qwen_tts_cloud import billed_chars
 
 SAMPLE_RATE = 22050
 BASE_FREQ = 220.0

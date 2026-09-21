@@ -173,12 +173,13 @@ def test_diagnostics_index_export_returns_the_whole_sqlite_index(client):
     endpoint restores inspectability of the full index — and actually
     reflects the stored records."""
     import io
-    import struct
     import wave
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
         w.writeframes(b"\x00\x00" * 16000 * 5)
     r = client.post("/voices", data={"name": "导出检查", "description": ""},
                     files={"file": ("ref.wav", buf.getvalue(), "audio/wav")})

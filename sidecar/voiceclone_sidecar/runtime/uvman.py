@@ -18,6 +18,7 @@ from pathlib import Path
 from . import downloader
 from .downloader import download_file
 from .paths import engine_venv_dir
+
 DEFAULT_PYTHON = "3.12"
 # Pinned uv version (issue #29): releases/latest is not reproducible and the
 # GitHub host is the very one plan §3 flagged as unavailable in CN. Bump via

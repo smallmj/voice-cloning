@@ -9,18 +9,16 @@ the same paths as a cloned one.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pathlib import Path
 
 from ..context import AppContext
 from ..engines.cloud_base import CloudEngineError
-from ..registry import InstallableEngine
 
 
 def build_router(ctx: AppContext) -> APIRouter:
     router = APIRouter()
-    registry = ctx.registry
     voice_store = ctx.voice_store
     _flag_placeholder = ctx.flag_placeholder
 
@@ -74,7 +72,7 @@ def build_router(ctx: AppContext) -> APIRouter:
         except CloudEngineError as exc:
             voice_store.delete(voice["id"])
             raise HTTPException(status_code=502, detail=f"设计音色失败：{exc}") from exc
-        except (Exception, OSError) as exc:  # noqa: BLE001
+        except (Exception, OSError) as exc:
             # ANY failure (vendor or local IO) leaves no orphaned,
             # reference-less voice behind — ADR-0010's hard guarantee.
             voice_store.delete(voice["id"])

@@ -9,6 +9,7 @@ a caller is never aliased into the store.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -133,11 +134,8 @@ class Database:
             ensure_migrated(self.path.parent)
 
     def close(self) -> None:
-        with self._lock:
-            try:
-                self._conn.close()
-            except sqlite3.Error:
-                pass
+        with self._lock, contextlib.suppress(sqlite3.Error):
+            self._conn.close()
 
     def reconnect(self) -> None:
         """Reopen the same path after the underlying file was swapped out
@@ -270,7 +268,7 @@ class Database:
 
     def all_kv(self, table: str) -> dict:
         self._check_table(table, _KV_TABLES)
-        rows = self.execute("SELECT key, value FROM {t}".format(t=table)).fetchall()
+        rows = self.execute(f"SELECT key, value FROM {table}").fetchall()
         return {r["key"]: json.loads(r["value"]) for r in rows}
 
     # -- snapshot / integrity (ADR-0017 decision 4) ------------------------------

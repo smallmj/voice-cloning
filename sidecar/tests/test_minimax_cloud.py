@@ -28,12 +28,12 @@ from __future__ import annotations
 
 import io
 import json
-import uuid
 import wave
 
 import httpx
 import pytest
 
+from voiceclone_sidecar.engine_config import EngineConfig
 from voiceclone_sidecar.engines.cloud_base import CloudEngineError
 from voiceclone_sidecar.engines.minimax_cloud import (
     BASE_URL_ENV,
@@ -44,7 +44,6 @@ from voiceclone_sidecar.engines.minimax_cloud import (
     TARGET_MODEL,
     MiniMaxCloudEngine,
 )
-from voiceclone_sidecar.engine_config import EngineConfig
 from voiceclone_sidecar.registry import GenerationRequest
 from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
@@ -54,7 +53,7 @@ def tmp_dir():
     return pathlib.Path(tempfile.mkdtemp())
 
 
-import pathlib
+import pathlib  # noqa: E402 - test helpers above, imports after
 
 
 def make_wav_bytes(seconds: float = 0.5, rate: int = 24000) -> bytes:
@@ -115,7 +114,7 @@ def test_missing_key_fails_with_actionable_message():
 
 
 def test_enroll_uploads_then_clones_then_activates(wav_file):
-    wav = make_wav_bytes(0.2)
+    _ = make_wav_bytes(0.2)
     harness = Harness([
         httpx.Response(200, json={"file": {"file_id": 42}, **ok_base()}),
         httpx.Response(200, json=ok_base()),
@@ -127,7 +126,7 @@ def test_enroll_uploads_then_clones_then_activates(wav_file):
 
     assert extra["voice_id"][0].isalpha()
     assert 8 <= len(extra["voice_id"]) <= 256
-    assert not extra["voice_id"][-1] in "-_"
+    assert extra["voice_id"][-1] not in "-_"
     assert extra["activated_at"]
     assert "activation_error" not in extra
 
@@ -231,7 +230,6 @@ def test_sync_synthesis_requests_wav_via_url(tmp_path):
     assert body["output_format"] == "url"
     assert "stream" not in body
 
-    out = tmp_path  # engine wrote into its output dir? default cwd/data — assert content via file
     import pathlib
     written = pathlib.Path(result.audio_path)
     assert written.read_bytes() == wav

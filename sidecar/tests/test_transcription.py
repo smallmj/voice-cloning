@@ -24,10 +24,12 @@ def sine_wav_bytes(seconds: float = 4.0, freq: float = 220.0, rate: int = 16000)
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(b"".join(
-            struct.pack("<h", int(0.3 * 32767 * math.sin(2 * math.pi * freq * i / rate)))
-            for i in range(frames)
-        ))
+        w.writeframes(
+            b"".join(
+                struct.pack("<h", int(0.3 * 32767 * math.sin(2 * math.pi * freq * i / rate)))
+                for i in range(frames)
+            )
+        )
     return buf.getvalue()
 
 
@@ -84,9 +86,7 @@ def test_default_registry_without_test_env_excludes_fake_engine(monkeypatch, tmp
     assert registry.get("fake") is None
 
 
-def test_default_registry_without_test_env_has_no_engine_transcribers(
-    monkeypatch, tmp_path
-):
+def test_default_registry_without_test_env_has_no_engine_transcribers(monkeypatch, tmp_path):
     """The transcription provider list has no test double in production.
     Since issue #33 the real cloud vendor (qwen3-tts-vc-cloud via DashScope
     Qwen-ASR) is the engine transcriber; the fake must never be."""
@@ -251,23 +251,29 @@ def test_engines_expose_requires_reference_text(client):
     assert engines["fake-ref-text"]["capabilities"]["requires_reference_text"] is True
 
 
-def test_generation_reuses_stored_transcript_without_retranscribing(client):
-    """A stored transcript is reused even when the current provider is
-    unavailable — the auto-fill never re-transcribes behind the user's back."""
+def test_generation_does_not_reuse_placeholder_transcript(client):
+    """The legacy fake engine's placeholder transcript (issue #18) is NOT a
+    transcript: a ref-text-conditioned generation must not reuse it silently
+    (it degrades FireRedTTS3/VoxCPM2 clones to near-silence/gibberish).
+    Instead the pipeline re-transcribes — and fails with an actionable 409
+    when no transcription provider is available, rather than shipping a
+    broken clone."""
     voice = create_voice(client, seconds=4.0)
-    # First: transcribe via the fake engine provider (transcript gets stored).
+    # Transcribe via the fake engine provider: the placeholder gets stored.
     client.put("/transcription/provider", json={"provider": "fake"})
     client.post(f"/voices/{voice['id']}/transcribe", json={})
     stored = client.get(f"/voices/{voice['id']}").json()["reference"]["transcript"]
-    # Then: switch to the (uninstalled) local provider and generate — the
-    # stored transcript must be used as-is, no new transcription, no 409.
+    assert stored == "这是一段用于测试的转写文本。"
+    # Switch to the (uninstalled) local provider and generate: the stored
+    # placeholder must NOT be reused as-is — the pipeline must try to
+    # re-transcribe and fail loudly.
     client.put("/transcription/provider", json={"provider": "local"})
     r = client.post(
         "/generations",
         json={"engine_id": "fake-ref-text", "text": "你好", "voice_id": voice["id"]},
     )
-    assert r.status_code == 200, r.text
-    assert r.json()["params"]["ref_text"] == stored
+    assert r.status_code == 409, r.text
+    assert "自动转写失败" in r.json()["detail"]
     client.put("/transcription/provider", json={"provider": "local"})
 
 
@@ -345,11 +351,7 @@ def cloud_client(tmp_path):
         return httpx.Response(
             200,
             json={
-                "output": {
-                    "choices": [
-                        {"message": {"content": [{"text": " 云端转写结果。 "}]}}
-                    ]
-                }
+                "output": {"choices": [{"message": {"content": [{"text": " 云端转写结果。 "}]}}]}
             },
         )
 
@@ -407,9 +409,7 @@ def test_cloud_transcribe_writes_transcript_and_feeds_ref_text(cloud_client):
         files={"file": ("ref.wav", sine_wav_bytes(4.0), "audio/wav")},
     ).json()
 
-    r = cloud_client.client.put(
-        "/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"}
-    )
+    r = cloud_client.client.put("/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"})
     assert r.status_code == 200, r.text
 
     r = cloud_client.client.post(f"/voices/{voice['id']}/transcribe", json={})
@@ -438,9 +438,7 @@ def test_cloud_transcribe_without_key_fails_actionably_and_never_falls_back(
         data={"name": "无密钥", "description": "d"},
         files={"file": ("ref.wav", sine_wav_bytes(4.0), "audio/wav")},
     ).json()
-    cloud_client.client.put(
-        "/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"}
-    )
+    cloud_client.client.put("/transcription/provider", json={"provider": "qwen3-tts-vc-cloud"})
     r = cloud_client.client.delete("/settings/keys/qwen3-tts-vc-cloud")
     assert r.status_code == 200
 
@@ -449,9 +447,10 @@ def test_cloud_transcribe_without_key_fails_actionably_and_never_falls_back(
     assert "API Key" in r.json()["detail"], "the hint must be actionable"
     # No silent fallback: the stored transcript is untouched and the provider
     # choice stays where the user put it.
-    assert cloud_client.client.get(f"/voices/{voice['id']}").json()["reference"].get(
-        "transcript"
-    ) is None
+    assert (
+        cloud_client.client.get(f"/voices/{voice['id']}").json()["reference"].get("transcript")
+        is None
+    )
     assert (
         cloud_client.client.get("/transcription/providers").json()["provider"]
         == "qwen3-tts-vc-cloud"

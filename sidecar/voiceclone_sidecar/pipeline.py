@@ -27,7 +27,7 @@ from .engines.cloud_base import CloudEngineError
 from .generations import now_iso
 from .normalization import normalize_text
 from .registry import Engine, GenerationRequest
-from .transcription import TranscriptionError
+from .transcription import TranscriptionError, is_placeholder_transcript
 
 
 async def run_generation(
@@ -42,6 +42,12 @@ async def run_generation(
     engine: Engine | None = ctx.require_engine(engine_id or "")
 
     params = dict(params or {})
+    # The legacy fake engine's fixed placeholder once landed in voice
+    # transcripts (issue #18). It is not a transcript: ref_text-conditioned
+    # engines (FireRedTTS3, VoxCPM2) silently produce near-silence or
+    # gibberish with it. Treat it as missing wherever it surfaces.
+    if is_placeholder_transcript(params.get("ref_text")):
+        params.pop("ref_text")
     voice = None
     if voice_id:
         voice = ctx.require_voice(voice_id)
@@ -66,8 +72,13 @@ async def run_generation(
         if engine.capabilities().requires_reference_text and not params.get("ref_text"):
             # Engines that need reference text get it automatically
             # (issue #8): stored transcript first, on-demand transcription
-            # second — the user never types it by hand.
+            # second — the user never types it by hand. A stored placeholder
+            # from the legacy fake engine is NOT a transcript: using it as
+            # ref_text silently degrades ref_text-conditioned engines to
+            # near-silence/gibberish, so it is treated as missing here.
             transcript = (voice.get("reference") or {}).get("transcript")
+            if is_placeholder_transcript(transcript):
+                transcript = None
             if not transcript:
                 try:
                     transcript = await asyncio.get_running_loop().run_in_executor(
@@ -85,7 +96,7 @@ async def run_generation(
             # one when it exists (cloud enrollment quality) — pass it if
             # it is already known, never transcribe on demand for them.
             transcript = (voice.get("reference") or {}).get("transcript")
-            if transcript:
+            if transcript and not is_placeholder_transcript(transcript):
                 params["ref_text"] = transcript
 
     # The normalization layer is applied centrally, here, before any
@@ -120,7 +131,9 @@ async def run_generation(
                     detail=f"云端引擎 {engine.engine_id} 必须使用音色生成"
                     "（复刻模型需要一个已绑定的云端音色；或在引擎参数中填写系统音色 ID）",
                 )
-        cloud_voice_id = (voice["bindings"].get(engine.engine_id) or {}).get("voice_id") if voice else None
+        cloud_voice_id = (
+            (voice["bindings"].get(engine.engine_id) or {}).get("voice_id") if voice else None
+        )
 
         # Issue #12: cloud vendors silently recycle enrolled voices. A
         # binding that says "ready" is only a cache — probe the vendor
@@ -140,9 +153,7 @@ async def run_generation(
             except CloudEngineError as exc:
                 # Not a verdict about the voice (bad key, outage) — the
                 # existing binding stays untouched and the run fails.
-                raise HTTPException(
-                    status_code=502, detail=f"云端音色健康检查失败：{exc}"
-                ) from exc
+                raise HTTPException(status_code=502, detail=f"云端音色健康检查失败：{exc}") from exc
             if not alive:
                 ctx.log_bus.publish(
                     generation_id,
@@ -156,6 +167,10 @@ async def run_generation(
             # voice record enters enrollment/re-enrollment.
             ref_path = ctx.voice_store.reference_path(voice["id"])
             transcript = params.get("ref_text") or (voice.get("reference") or {}).get("transcript")
+            if is_placeholder_transcript(transcript):
+                # Same rule as ref_text above: a placeholder is not a
+                # transcript — never enroll it with the vendor.
+                transcript = None
 
             _log = ctx.log_from_thread(generation_id)
 
@@ -180,9 +195,7 @@ async def run_generation(
                         status_code=502,
                         detail=f"云端音色重建失败（绑定已标记不可用）：{exc}",
                     ) from exc
-                raise HTTPException(
-                    status_code=502, detail=f"云端音色创建失败：{exc}"
-                ) from exc
+                raise HTTPException(status_code=502, detail=f"云端音色创建失败：{exc}") from exc
             cloud_voice_id = binding_extra["voice_id"]
             # Persist the cloud binding the moment enrollment succeeds —
             # the vendor-side voice now exists regardless of what happens
@@ -333,7 +346,8 @@ async def run_generation(
         # is cleared now that the run succeeded.
         previous = voice["bindings"].get(engine.engine_id) or {}
         carried = {
-            k: v for k, v in previous.items()
+            k: v
+            for k, v in previous.items()
             if k not in {"status", "created_at", "reference_sha256", "error"}
         }
         # Issue #27 (MiniMax): the first REAL synthesis is what activates a

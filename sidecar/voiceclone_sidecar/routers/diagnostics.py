@@ -8,26 +8,26 @@ import contextlib
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from ..context import AppContext
-
-# Issue #28: diagnostics only ever reads (never stores) the upload; cap it
-# like the other upload endpoints instead of trusting the client.
-ANALYSIS_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
-from ..diagnostics import (  # noqa: E402 - imports follow the module constant
+from ..diagnostics import (
     DiagnosticError,
     analyze_audio,
 )
-from ..engines.cloud_base import (  # noqa: E402 - imports follow the module constant
+from ..engines.cloud_base import (
     CloudEngineError,
 )
-from ..registry import (  # noqa: E402 - imports follow the module constant
+from ..registry import (
     InstallableEngine,
 )
-from ..transcription import (  # noqa: E402 - intentional: imports follow the module constant
+from ..transcription import (
     LOCAL_TOOL_ID,
     TranscriptionError,
     engine_transcribers,
 )
-from ..voices import VoiceValidationError  # noqa: E402 - imports follow the module constant
+from ..voices import VoiceValidationError
+
+# Issue #28: diagnostics only ever reads (never stores) the upload; cap it
+# like the other upload endpoints instead of trusting the client.
+ANALYSIS_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
 
 
 def _read_all_kv(ctx: AppContext, table: str) -> dict:

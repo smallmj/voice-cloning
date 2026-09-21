@@ -126,7 +126,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
 
     def install_steps(self) -> list[installer.InstallStep]:
         weights_dir = paths.engine_weights_dir(self.root, self.engine_id)
-        _ = self._ctx()
+        self._ctx()  # ensure the engine context is initialized (pure side-effect call)
 
         def find_uv(log):
             return uvman.find_uv(self.root, env=self.env, log=log)
@@ -179,7 +179,7 @@ class Qwen3TtsMlxEngine(InstallableEngine):
     # -- generation ---------------------------------------------------------
 
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
-        _ = self._ctx()
+        self._ctx()  # ensure the engine context is initialized (pure side-effect call)
         if not self.is_installed():
             raise RuntimeError(
                 "engine is not installed yet — call POST /engines/qwen3-tts-mlx/install first"

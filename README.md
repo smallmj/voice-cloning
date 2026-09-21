@@ -47,7 +47,7 @@ npm run dist:win     # Windows 安装包
 | `make test-frontend` / `cd app && npm test` | repo 根 | 前端 vitest 测试 |
 | `make typecheck` / `cd app && npm run typecheck` | repo 根 | `tsc --noEmit` |
 | `make lint` | repo 根 | ruff（sidecar）+ eslint（app） |
-| `make format` | repo 根 | ruff format --fix + prettier --write |
+| `make format` | repo 根 | ruff check --fix + ruff format + prettier --write |
 | `cd app && npm run lint` | app | 仅 eslint |
 | `cd sidecar && uv run ruff check .` | sidecar | 仅 ruff |
 

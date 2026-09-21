@@ -98,6 +98,53 @@ function resolveUv(): string {
   return "uv";
 }
 
+function sidecarPidFile(): string {
+  return path.join(runtimeDir(), "sidecar.pid");
+}
+
+// Terminate the whole sidecar process tree, not just the uv wrapper: uv does
+// not reliably forward signals to the python grandchild, which used to leave
+// orphan sidecars behind after app quit (issue #29).
+function killTree(pid: number): void {
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      // Negative pid signals the whole process group (requires detached).
+      process.kill(-pid, "SIGTERM");
+    }
+  } catch (err) {
+    console.warn(`[main] could not signal sidecar tree ${pid}:`, (err as Error).message);
+  }
+}
+
+// Idempotent cleanup: if a previous run died without killing its sidecar,
+// the pid it left behind lets us terminate the stale tree before spawning a
+// new one. Only acts when the recorded pid is still alive.
+function killStaleSidecar(): void {
+  try {
+    const raw = fs.readFileSync(sidecarPidFile(), "utf8").trim();
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isInteger(pid) || pid <= 1) return;
+    if (process.platform === "win32") {
+      // Can't signal-check on Windows; taskkill /F is a no-op on a dead pid.
+      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      process.kill(-pid, 0); // throws ESRCH if the group is gone
+      killTree(pid);
+      console.warn(`[main] killed stale sidecar process group ${pid} from a previous run`);
+    }
+  } catch {
+    // No pid file or the process is gone — nothing to clean up.
+  } finally {
+    try {
+      fs.unlinkSync(sidecarPidFile());
+    } catch {
+      // Already absent.
+    }
+  }
+}
+
 function startSidecar(): void {
   const token = crypto.randomBytes(24).toString("base64url");
   const uv = resolveUv();
@@ -115,11 +162,16 @@ function startSidecar(): void {
   ];
 
   console.log("[main] starting sidecar:", uv, args.join(" "));
+  killStaleSidecar();
   // Token goes through the environment, not argv (argv is readable via ps).
   // The sidecar reuses the same bundled uv for engine venvs, and keeps all
   // mutable runtime state under userData (never inside the .app bundle).
+  // detached: true gives the uv→python tree its own process group so the
+  // whole tree can be terminated at quit (killing uv alone does not
+  // necessarily terminate the python grandchild — observed orphans, #29).
   sidecar = spawn(uv, args, {
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
     env: {
       ...process.env,
       SIDECAR_TOKEN: token,
@@ -128,6 +180,14 @@ function startSidecar(): void {
       UV_PROJECT_ENVIRONMENT: path.join(runtimeDir(), "sidecar-venv"),
     },
   });
+
+  if (sidecar.pid) {
+    try {
+      fs.writeFileSync(sidecarPidFile(), String(sidecar.pid));
+    } catch {
+      // Best-effort bookkeeping for stale-sidecar cleanup on next launch.
+    }
+  }
 
   let buffer = "";
   sidecar.stdout!.on("data", (chunk: Buffer) => {
@@ -223,7 +283,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  if (sidecar && sidecar.exitCode === null) {
+  if (sidecar && sidecar.exitCode === null && sidecar.pid) {
+    killTree(sidecar.pid);
     sidecar.kill();
   }
 });

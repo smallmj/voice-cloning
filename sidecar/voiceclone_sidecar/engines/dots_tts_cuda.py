@@ -202,6 +202,12 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
 
 
 class DotsTtsCudaEngine(InstallableEngine):
+
+    # This engine keeps a trained model resident in memory between
+    # generations (see the unload()/worker supervisor); run_generation
+    # evicts other resident-worker engines before this one loads so
+    # multi-local sessions never hold several models at once.
+    resident_worker = True
     """dots.tts on Windows + CUDA. Carries the InstallableEngine surface."""
 
     engine_id = "dots-tts-cuda"

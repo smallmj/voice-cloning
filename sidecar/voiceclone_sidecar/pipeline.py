@@ -269,6 +269,23 @@ async def run_generation(
             generation_id=generation_id, text=normalized_text, params=record["params"]
         )
 
+        if getattr(engine, "resident_worker", False):
+            # Local models stay resident in GPU/system memory between
+            # generations (the worker supervisor releases them only after
+            # the 300s idle timeout). Running several local engines back to
+            # back - a multi-local blind-compare session does exactly that -
+            # would otherwise pile full models into memory at once, which
+            # locked a machine up (three local models + a cloud one). Before
+            # this engine loads its model, evict every OTHER resident-worker
+            # engine's model; the next request respawns it lazily.
+            for other in ctx.registry.list():
+                if (
+                    other.engine_id != engine.engine_id
+                    and getattr(other, "resident_worker", False)
+                ):
+                    log(f"释放本地引擎 {other.engine_id} 的模型内存，为 {engine.engine_id} 腾出空间")
+                    other.unload()
+
         def attempt() -> object:
             with ctx.generation_locks.setdefault(engine.engine_id, threading.Lock()):
                 return engine.synthesize(request, log)

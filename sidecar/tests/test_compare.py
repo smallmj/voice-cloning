@@ -295,3 +295,47 @@ def test_preferences_are_read_only_over_sessions(tmp_path: Path):
         c for c in profile["cells"] if c["language"] == "en" and c["text_type"] == "dialogue"
     )
     assert all(e["score_count"] == 1 for e in cell["engines"])
+
+
+# -- local residency invariant (multi-local compare must not pile up models) --
+
+
+def _residency_violations(events):
+    """Walk [{kind, engine}] events; return any second model loaded while
+    another resident-worker model has not been unloaded yet."""
+    violations = []
+    resident = None
+    for ev in events:
+        kind, engine = ev["kind"], ev["engine"]
+        if kind == "load":
+            if resident is not None and resident != engine:
+                violations.append((resident, engine))
+            resident = engine
+        elif kind == "unload" and resident == engine:
+            resident = None
+    return violations
+
+
+def test_compare_never_keeps_two_local_models_resident(client, sidecar):
+    """Three local models compared with a cloud one locked a machine up:
+    each local engine keeps its model resident, so running legs back to
+    back left several full models in memory at once. The generation path
+    must evict the previous local model before the next one loads."""
+    events_path = sidecar["audio_dir"] / "fake-residency.jsonl"
+    events_path.unlink(missing_ok=True)
+    voice_id = _make_voice(client)
+    r = client.post(
+        "/compare",
+        json={
+            "voice_id": voice_id,
+            "text": "两个本地引擎先后生成，不允许同时驻留。",
+            "engine_ids": ["fake-resident-a", "fake-resident-b"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["entries"]) == 2
+    import json
+
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [e["kind"] for e in events].count("load") == 2, events
+    assert _residency_violations(events) == [], events

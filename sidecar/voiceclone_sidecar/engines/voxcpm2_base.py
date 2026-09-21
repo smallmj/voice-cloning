@@ -182,6 +182,12 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
 
 
 class VoxCPM2EngineBase(InstallableEngine):
+
+    # This engine keeps a trained model resident in memory between
+    # generations (see the unload()/worker supervisor); run_generation
+    # evicts other resident-worker engines before this one loads so
+    # multi-local sessions never hold several models at once.
+    resident_worker = True
     """Everything the MPS and CUDA VoxCPM2 variants share verbatim.
 
     Subclasses declare the platform deltas (torch source + worker gate via

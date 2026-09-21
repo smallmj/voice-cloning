@@ -190,6 +190,12 @@ def copy_from_local(local_root: Path, relative: str, dest: Path, log) -> bool:
 
 
 class IndexTts25EngineBase(InstallableEngine):
+
+    # This engine keeps a trained model resident in memory between
+    # generations (see the unload()/worker supervisor); run_generation
+    # evicts other resident-worker engines before this one loads so
+    # multi-local sessions never hold several models at once.
+    resident_worker = True
     """Everything the CUDA and MPS IndexTTS variants share verbatim.
 
     Subclasses declare the platform deltas as class attributes and implement

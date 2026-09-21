@@ -331,3 +331,51 @@ class FakeRateLimitedEngine(FakeKeyEngine):
                 "云端合成失败：Throttling：Requests rate limit exceeded, please try again later. (HTTP 429)"
             )
         return super().synthesize(request, log)
+
+
+# -- resident-worker seams (local model memory residency) ---------------------
+
+# The sidecar runs as its own process, so tests cannot observe these events
+# through a shared list. Each FakeResidentEngine appends one JSON line per
+# load/unload to "fake-residency.jsonl" inside its output dir (the app's
+# audio dir in tests); tests read that file back to assert the residency
+# invariant: two resident-worker engines must never be loaded at once.
+
+
+def _record_residency(output_dir, kind: str, engine_id: str) -> None:
+    import json
+
+    if not output_dir:
+        return
+    log = Path(output_dir) / "fake-residency.jsonl"
+    with log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"kind": kind, "engine": engine_id}) + "\n")
+
+
+class FakeResidentEngine(FakeEngine):
+    """Test seam (local residency): stands in for a real local model worker.
+
+    Real local engines (IndexTTS-2.5, dots.tts, VoxCPM2, FireRedTTS3) keep a
+    model resident in GPU/system memory between generations and expose
+    ``unload()`` as the reliable release. This seam records load/unload so
+    tests can prove that running several local engines one after another
+    (as the blind-compare loop does) evicts the previous model before the
+    next one loads - the scenario that locked a machine up when three local
+    models + a cloud one were compared at once.
+    """
+
+    engine_id = "fake-resident-a"
+    display_name = "Fake Engine (resident worker A)"
+    resident_worker = True
+
+    def synthesize(self, request, log):
+        _record_residency(self.output_dir, "load", self.engine_id)
+        return super().synthesize(request, log)
+
+    def unload(self) -> None:
+        _record_residency(self.output_dir, "unload", self.engine_id)
+
+
+class FakeResidentEngineTwo(FakeResidentEngine):
+    engine_id = "fake-resident-b"
+    display_name = "Fake Engine (resident worker B)"

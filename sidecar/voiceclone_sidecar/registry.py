@@ -310,4 +310,14 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
         registry.register(FakeRateLimitedEngine(output_dir=output_dir))
         # Test seam (issue #19): always fails with a path-bearing message.
         registry.register(FakeBrokenEngine(output_dir=output_dir))
+
+        # Contract-test seams (local residency): two engines that model a
+        # resident local worker (model stays in memory; unload() releases
+        # it). The generation path must never let two of these be resident
+        # at once - the multi-local blind-compare scenario that locked a
+        # machine up.
+        from .engines.fake import FakeResidentEngine, FakeResidentEngineTwo
+
+        registry.register(FakeResidentEngine(output_dir=output_dir))
+        registry.register(FakeResidentEngineTwo(output_dir=output_dir))
     return registry

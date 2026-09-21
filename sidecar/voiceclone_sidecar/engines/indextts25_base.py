@@ -26,7 +26,7 @@ from pathlib import Path
 
 from .. import params as params_mod
 from .. import pronunciation, sources
-from ..capabilities import AppliesTo, Capabilities, ParamSpec
+from ..capabilities import AppliesTo, Capabilities, ObjectField, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import downloader, installer, paths, uvman
@@ -87,6 +87,70 @@ MAX_REQUESTS_PER_WORKER = 20  # recycle the worker to bound slow memory leaks
 
 LANG_CHOICES = ("zh", "en", "ja", "es", "ar")
 
+# -- 情感控制四模式（issue #37：对齐官方 webui）----------------------------
+# The SELECT CHOICES are the official webui wordings (what the user picks);
+# the wire keys are the stable mode identifiers the synthesize adapter gates
+# on. The ignored_when predicates compare against the raw choice string —
+# that is the single value both the UI and the engine adapter see.
+EMO_MODE_SAME = "与参考音频相同"
+EMO_MODE_REF_AUDIO = "情感参考音频"
+EMO_MODE_VECTOR = "情感向量"
+EMO_MODE_TEXT = "情感描述文本"
+EMO_MODE_CHOICES = (EMO_MODE_SAME, EMO_MODE_REF_AUDIO, EMO_MODE_VECTOR, EMO_MODE_TEXT)
+
+EMO_MODE_WIRE_KEYS = {
+    EMO_MODE_SAME: "same-as-reference",
+    EMO_MODE_REF_AUDIO: "reference-audio",
+    EMO_MODE_VECTOR: "vector",
+    EMO_MODE_TEXT: "text",
+}
+
+# 8 维情感向量：固定顺序（官方一致），每维 0–1（ADR-0018 decision 2 的
+# 对象数组形态 —— 顺序敏感，故用固定 items 而不是自由输入）。
+EMO_VECTOR_ITEMS = tuple(
+    ObjectField(name=name, label=label, kind="number", min=0.0, max=1.0)
+    for name, label in (
+        ("happy", "高兴"),
+        ("angry", "愤怒"),
+        ("sad", "悲伤"),
+        ("afraid", "恐惧"),
+        ("disgusted", "厌恶"),
+        ("melancholic", "低落"),
+        ("surprised", "惊喜"),
+        ("calm", "平静"),
+    )
+)
+
+
+def emo_mode_to_wire(value):
+    """User-facing mode wording -> stable wire key. Unknown values fall back
+    to the default mode (same-as-reference), never an invented one."""
+    if value in EMO_MODE_WIRE_KEYS:
+        return EMO_MODE_WIRE_KEYS[value]
+    if value in set(EMO_MODE_WIRE_KEYS.values()):  # already a wire key (rerun)
+        return value
+    return "same-as-reference"
+
+
+def emo_vector_to_wire(value):
+    """Comma-joined 8-dim string -> list[float] of length 8 (0–1 clamped).
+
+    Empty/invalid input returns None so the engine's own default applies —
+    never a padded zeros vector that would silently change the sound.
+    """
+    if value is None or value == "":
+        return None
+    parts = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    if len(parts) != len(EMO_VECTOR_ITEMS):
+        return None
+    out = []
+    for part in parts:
+        try:
+            out.append(max(0.0, min(1.0, float(part))))
+        except (TypeError, ValueError):
+            return None
+    return out
+
 
 def param_specs_for(engine_id: str) -> list[ParamSpec]:
     """Shared parameter declaration for both IndexTTS adapters (issue #23).
@@ -115,17 +179,190 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
                 "IndexTTS 的 <行|XING2> 语法后送入引擎。"
             ),
         ),
-        # "不支持是数据"（ADR-0018 decision 3）：上游另有 8 维情感向量 /
-        # 情感文本等参数，但需要构造期 QwenEmotion 开关，未在锁定的引擎
-        # 版本上验证 —— 暴露即撒谎，先以数据声明不暴露。
+        # -- 情感控制（issue #37：对齐官方 webui 四模式）-------------------
+        # The four official emotion modes. The user sees the official webui
+        # wording; to_wire maps it onto a stable mode key that the synthesize
+        # adapter uses to gate the emotion wire parameters (ignored_when is
+        # enforced BOTH in the UI display and again here, engine-side).
+        ParamSpec(
+            name="emo_mode",
+            label="情感控制",
+            kind="select",
+            default=EMO_MODE_SAME,
+            choices=EMO_MODE_CHOICES,
+            layer="canonical",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            to_wire=emo_mode_to_wire,
+            help="与参考音频相同 / 使用情感参考音频 / 情感向量 / 情感描述文本（官方 webui 四模式）。",
+        ),
+        # 情感权重 0–1，官方 webui 默认 0.65。仅在「情感参考音频」与「情感向量」
+        # （及情感文本推导出的向量）下生效；与参考音频相同时上游强制 1.0。
+        ParamSpec(
+            name="emo_weight",
+            label="情感权重",
+            kind="number",
+            default=0.65,
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            layer="canonical",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            to_wire=lambda v: None if v in (None, "") else float(v),
+            ignored_when=(
+                "emo_mode!=" + EMO_MODE_REF_AUDIO,
+                "emo_mode!=" + EMO_MODE_VECTOR,
+                "emo_mode!=" + EMO_MODE_TEXT,
+            ),
+            help="0–1，官方默认 0.65：情感参考/向量对结果的加权强度。",
+        ),
+        # 情感参考音频：新增的生成期上传输入（issue #37）。前端经
+        # POST /uploads/audio 上传后把返回的文件引用填进该参数；管线把它
+        # 解析为音频目录内受限的绝对路径。引擎收到的最终键是 emo_audio_prompt。
+        ParamSpec(
+            name="emo_audio",
+            label="情感参考音频",
+            kind="audio",
+            layer="canonical",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            to_wire=lambda v: None if v in (None, "") else str(v),
+            ignored_when=("emo_mode!=" + EMO_MODE_REF_AUDIO,),
+            help="仅「情感参考音频」模式下使用：上传一段代表目标情绪的音频。",
+        ),
+        # 情感向量：8 维固定顺序滑条（ADR-0018 decision 2 的对象数组形态）。
+        # 上游 normalize_emo_vec 后按 emo_alpha 缩放（issue #37 听感验证通过，
+        # 故由 unverified 翻转为 exposed）。
         ParamSpec(
             name="emo_vector",
             label="8 维情感向量",
-            kind="text",
-            exposed=False,
-            not_exposed_reason="unverified",
+            kind="array",
+            items=EMO_VECTOR_ITEMS,
+            max_items=8,
+            layer="canonical",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
-            help="上游支持（[高兴,愤怒,悲伤,害怕,厌恶,忧郁,惊讶,平静]），但需构造期情感模型开关，本版本未验证，暂不暴露。",
+            ignored_when=("emo_mode!=" + EMO_MODE_VECTOR,),
+            to_wire=emo_vector_to_wire,
+            help="0–1 滑条，顺序与官方一致：[高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]。",
+        ),
+        # 情感描述文本 + 随机采样（实验）：需要 QwenEmotion（use_qwen_emo=True，
+        # 两个 worker 构造期均已开启）。
+        ParamSpec(
+            name="emo_text",
+            label="情感描述文本",
+            kind="textarea",
+            max_length=200,
+            layer="canonical",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            to_wire=lambda v: None if v in (None, "") else str(v),
+            ignored_when=("emo_mode!=" + EMO_MODE_TEXT,),
+            help="实验功能：用自然语言描述情绪，由 QwenEmotion 推导情感向量。",
+        ),
+        ParamSpec(
+            name="emo_random",
+            label="情感随机采样（实验）",
+            kind="bool",
+            default=False,
+            layer="canonical",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            to_wire=lambda v: str(v).strip().lower() == "true" if v not in (None, "") else None,
+            ignored_when=("emo_mode!=" + EMO_MODE_TEXT,),
+            help="实验功能：在文本推导的情感向量上加入随机采样。",
+        ),
+        # -- 引擎专属层：采样参数（官方 webui 默认值，issue #37）-----------
+        ParamSpec(
+            name="temperature",
+            label="温度",
+            kind="number",
+            default=0.8,
+            min=0.1,
+            max=2.0,
+            step=0.05,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 0.8。",
+        ),
+        ParamSpec(
+            name="top_p",
+            label="Top P",
+            kind="number",
+            default=0.8,
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 0.8。",
+        ),
+        ParamSpec(
+            name="top_k",
+            label="Top K",
+            kind="number",
+            integer=True,
+            default=30,
+            min=0,
+            max=100,
+            step=1,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 30。",
+        ),
+        ParamSpec(
+            name="num_beams",
+            label="束搜索宽度",
+            kind="number",
+            integer=True,
+            default=3,
+            min=1,
+            max=10,
+            step=1,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 3。",
+        ),
+        ParamSpec(
+            name="repetition_penalty",
+            label="重复惩罚",
+            kind="number",
+            default=10.0,
+            min=1.0,
+            max=20.0,
+            step=0.1,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 10.0（注意与其他引擎常用 1.05 量级不同）。",
+        ),
+        ParamSpec(
+            name="length_penalty",
+            label="长度惩罚",
+            kind="number",
+            default=0.0,
+            min=-2.0,
+            max=2.0,
+            step=0.1,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 0.0。",
+        ),
+        ParamSpec(
+            name="max_mel_tokens",
+            label="最大 Mel Token 数",
+            kind="number",
+            integer=True,
+            default=1500,
+            min=100,
+            max=6000,
+            step=50,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="官方默认 1500；超出会截断并告警。",
+        ),
+        ParamSpec(
+            name="do_sample",
+            label="随机采样",
+            kind="bool",
+            default=True,
+            layer="engine",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+            help="关闭后走贪心解码（temperature/top_p/top_k 不生效）。",
         ),
         # The sidecar injects reference audio itself (voice resolution);
         # declaring it keeps the wire contract honest instead of invisible.
@@ -141,12 +378,38 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
     ]
 
 
+def _num(params: dict, name: str, lo: float, hi: float, integer: bool = False):
+    """Read a numeric param, clamped into [lo, hi]. None when unset/invalid."""
+    raw = params.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    value = max(lo, min(hi, value))
+    return round(value) if integer else value
+
+
+def _bool(params: dict, name: str) -> bool | None:
+    raw = params.get(name)
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() == "true"
+
+
 def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
     """Canonical -> wire adaptation shared by both IndexTTS adapters.
 
     Returns the (possibly pronunciation-rewritten) text and the extra worker
     payload keys. This is the per-engine adapter the canonical layer
     requires: user-visible values never reach the engine unconverted.
+
+    情感模式联动（issue #37）：ignored_when 在界面上隐藏不适用的参数，但
+    门控的最终裁决在这里 —— 即便前端漏发或重跑带入了陈旧参数，错误模式下
+    的情感参数也到不了引擎。
     """
     params = params or {}
     wire: dict = {}
@@ -168,6 +431,65 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
     ann = params.get("pronunciation")
     if ann and str(ann).strip():
         text = pronunciation.rewrite(text, str(ann), "indextts", log)
+
+    # -- 情感控制（官方 webui 四模式）------------------------------------
+    mode = emo_mode_to_wire(params.get("emo_mode") or EMO_MODE_SAME)
+    if params.get("emo_mode") not in (None, "") and \
+            params.get("emo_mode") not in EMO_MODE_WIRE_KEYS and \
+            params.get("emo_mode") not in EMO_MODE_CHOICES:
+        log(f"参数：未知情感模式 {params.get('emo_mode')!r}，按「与参考音频相同」处理")
+    emo_weight = _num(params, "emo_weight", 0.0, 1.0)
+    if emo_weight is None:
+        # The official webui default rides along whenever a mode uses alpha
+        # mixing (the UI only sends explicitly touched values).
+        emo_weight = 0.65
+
+    if mode == "reference-audio":
+        emo_audio = params.get("emo_audio")
+        if not emo_audio:
+            raise ValueError(
+                "情感模式为「情感参考音频」但未提供情感参考音频；请上传或切换情感模式"
+            )
+        wire["emo_audio_prompt"] = str(emo_audio)
+        if emo_weight is not None:
+            wire["emo_alpha"] = emo_weight
+    elif mode == "vector":
+        vector = emo_vector_to_wire(params.get("emo_vector"))
+        if vector is None:
+            raise ValueError("情感模式为「情感向量」但情感向量无效；请设置 8 个 0–1 的滑条")
+        wire["emo_vector"] = vector
+        if emo_weight is not None:
+            wire["emo_alpha"] = emo_weight
+    elif mode == "text":
+        wire["use_emo_text"] = True
+        emo_text = params.get("emo_text")
+        if emo_text and str(emo_text).strip():
+            wire["emo_text"] = str(emo_text).strip()
+        emo_random = _bool(params, "emo_random")
+        if emo_random is not None:
+            wire["use_random"] = emo_random
+        if emo_weight is not None:
+            wire["emo_alpha"] = emo_weight
+    # mode == "same-as-reference": no emotion overrides at all — upstream
+    # forces emo_alpha=1.0 and uses the speaker reference as emotion source.
+
+    # -- 引擎专属层：采样参数（仅在用户显式给出时转发）-------------------
+    num_wire = {
+        "temperature": _num(params, "temperature", 0.1, 2.0),
+        "top_p": _num(params, "top_p", 0.0, 1.0),
+        "top_k": _num(params, "top_k", 0, 100, integer=True),
+        "num_beams": _num(params, "num_beams", 1, 10, integer=True),
+        "repetition_penalty": _num(params, "repetition_penalty", 1.0, 20.0),
+        "length_penalty": _num(params, "length_penalty", -2.0, 2.0),
+        "max_mel_tokens": _num(params, "max_mel_tokens", 100, 6000, integer=True),
+    }
+    for key, value in num_wire.items():
+        if value is not None:
+            wire[key] = value
+    do_sample = _bool(params, "do_sample")
+    if do_sample is not None:
+        wire["do_sample"] = do_sample
+
     return text, wire
 
 

@@ -34,6 +34,8 @@ PARAM_KINDS = (
     "textarea",  # long multi-line text, optional `max_length`
     "number",  # min/max/step, `integer` distinguishes int/float
     "bool",  # checkbox
+    "array",  # fixed-order array of `items` scalars (emo_vector[8]); value rides as a comma-joined string
+    "audio",  # generation-time audio upload; value is a sidecar-side uploaded file reference
     "output",  # read-only display of an engine-produced value (e.g. CoT gen_text)
 )
 
@@ -139,6 +141,17 @@ class ParamSpec:
             raise ValueError(f"ParamSpec {self.name}: exposed specs require applies_to")
         if self.layer not in ("canonical", "engine"):
             raise ValueError(f"ParamSpec {self.name}: layer must be canonical|engine")
+        if self.kind == "array" and (not self.items or self.max_items is None):
+            raise ValueError(
+                f"ParamSpec {self.name}: array specs require items and max_items"
+            )
+        if self.kind == "array" and self.max_items != len(self.items):
+            raise ValueError(
+                f"ParamSpec {self.name}: array max_items ({self.max_items}) must "
+                f"equal len(items) ({len(self.items)}) — the order is fixed (ADR-0018)"
+            )
+        if self.kind == "audio" and self.default not in (None, ""):
+            raise ValueError(f"ParamSpec {self.name}: audio specs default to no file")
         if self.layer == "canonical" and self.to_wire is None:
             # Decision 1: every canonical parameter must ship with its
             # per-engine adapter; without a mapping the raw user value would

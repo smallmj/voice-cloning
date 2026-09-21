@@ -70,7 +70,8 @@ def _load(model_dir: str):
     from indextts.infer_v2_5 import IndexTTS2
 
     tts = IndexTTS2(cfg_path=os.path.join(model_dir, "config.yaml"), model_dir=model_dir,
-                    use_bf16=True, use_cuda_kernel=False, use_torch_compile=False)
+                    use_bf16=True, use_cuda_kernel=False, use_torch_compile=False,
+                    use_qwen_emo=True)  # 情感描述文本模式需要 QwenEmotion（issue #37）
     _state["tts"] = tts
     common.log(f"indextts-2.5: model loaded in {time.monotonic() - started:.1f}s")
     return tts

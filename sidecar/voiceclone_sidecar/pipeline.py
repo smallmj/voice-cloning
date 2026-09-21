@@ -103,6 +103,20 @@ async def run_generation(
     # engine adapter sees the text — adapters cannot bypass it.
     normalized_text = normalize_text(text)
 
+    # Issue #37: the generation-time 情感参考音频 upload rides params as a
+    # BARE FILENAME (what POST /uploads/audio returned). Resolve it here,
+    # inside the audio dir, or refuse: a params value that names a path
+    # must never reach outside the library (no traversal, no arbitrary
+    # file read by any engine).
+    emo_audio_ref = params.get("emo_audio")
+    if emo_audio_ref:
+        if "/" in emo_audio_ref or "\\" in emo_audio_ref or emo_audio_ref in (".", ".."):
+            raise HTTPException(status_code=422, detail="emo_audio 引用不合法")
+        resolved = (ctx.audio_dir / emo_audio_ref).resolve()
+        if not resolved.is_file():
+            raise HTTPException(status_code=422, detail="情感参考音频不存在或已删除；请重新上传")
+        params["emo_audio"] = str(resolved)
+
     generation_id = generation_id or uuid.uuid4().hex
 
     # BYOK cloud engines: the key must exist, and the voice needs its

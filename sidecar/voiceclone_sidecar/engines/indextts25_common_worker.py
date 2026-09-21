@@ -114,6 +114,26 @@ def run_synthesis(request: dict, load, memory_report, log=log,
     duration_factor = request.get("duration_factor")
     if duration_factor:
         infer_kwargs["duration_factor"] = duration_factor
+    # 情感控制 + 采样参数（issue #37）：the sidecar's prepare_synthesis
+    # already gated and converted them per emotion mode; forward only what
+    # arrived so upstream defaults stay authoritative for the rest.
+    _FLOAT_KEYS = ("emo_alpha", "temperature", "top_p", "repetition_penalty", "length_penalty")
+    _INT_KEYS = ("top_k", "num_beams", "max_mel_tokens")
+    for key in _FLOAT_KEYS + _INT_KEYS:
+        if request.get(key) is not None:
+            infer_kwargs[key] = float(request[key]) if key in _FLOAT_KEYS else int(request[key])
+    if request.get("emo_audio_prompt"):
+        infer_kwargs["emo_audio_prompt"] = request["emo_audio_prompt"]
+    if request.get("emo_vector") is not None:
+        infer_kwargs["emo_vector"] = [float(v) for v in request["emo_vector"]]
+    if request.get("use_emo_text"):
+        infer_kwargs["use_emo_text"] = True
+        if request.get("emo_text"):
+            infer_kwargs["emo_text"] = str(request["emo_text"])
+    if request.get("use_random"):
+        infer_kwargs["use_random"] = True
+    if request.get("do_sample") is not None:
+        infer_kwargs["do_sample"] = bool(request["do_sample"])
     tts.infer(
         spk_audio_prompt=request.get("ref_audio"),
         text=request["text"],

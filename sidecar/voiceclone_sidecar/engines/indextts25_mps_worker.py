@@ -76,6 +76,9 @@ def _load(model_dir: str):
         device="mps",
         use_cuda_kernel=False,  # CUDA-only fused kernel; never on MPS
         use_torch_compile=False,
+        # 情感描述文本模式需要 QwenEmotion（issue #37）；权重本就随主权重
+        # 一起下载（qwen0.6bemo4-merge），构造期开启即可用。
+        use_qwen_emo=True,
     )
     _state["tts"] = tts
     common.log(f"indextts-2.5: model loaded in {time.monotonic() - started:.1f}s")

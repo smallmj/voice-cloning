@@ -195,6 +195,36 @@ export function splitParamLayers(params: ParamSpecInfo[] | undefined | null): Pa
   };
 }
 
+/** Issue #37: evaluate one `ignored_when` predicate, e.g. `emo_mode!=情感向量`
+ * or `emo_mode==same-as-reference`. The compared value is the CURRENT param
+ * value, falling back to the spec default — exactly what the engine adapter
+ * will see. */
+function predicateHolds(
+  predicate: string,
+  specs: ParamSpecInfo[],
+  values: Record<string, string>,
+): boolean {
+  const m = /^([\w.]+)(==|!=)(.+)$/.exec(predicate.trim());
+  if (!m) return false; // unknown predicate: never hide on it
+  const [, name, op, expected] = m;
+  const spec = specs.find((p) => p.name === name);
+  const current = values[name] ?? (spec ? String(spec.default ?? "") : "");
+  return op === "==" ? current === expected : current !== expected;
+}
+
+/** Issue #37: the specs whose ignored_when conditions are NOT all satisfied —
+ * i.e. what the engine will actually honour right now. The UI hides specs
+ * whose predicates ALL hold (same rule the engine enforces again in
+ * prepare_synthesis); unknown predicates never hide anything. */
+export function visibleParamSpecs(
+  specs: ParamSpecInfo[],
+  values: Record<string, string>,
+): ParamSpecInfo[] {
+  return specs.filter(
+    (p) => !p.ignored_when.length || !p.ignored_when.every((pred) => predicateHolds(pred, specs, values)),
+  );
+}
+
 /** Only exposed, still-declared parameters may ride a generate request —
  * remembered values (ADR-0018 decision 6) or rerun state must never leak a
  * parameter the engine no longer exposes. */

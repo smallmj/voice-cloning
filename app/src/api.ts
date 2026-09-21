@@ -33,7 +33,7 @@ export interface ParamSpecInfo {
   label: string;
   // Issue #23 / ADR-0018: canonical | engine layers plus the expanded
   // control surface (bool, textarea, ranges, units, not-exposed data).
-  kind: "select" | "text" | "textarea" | "number" | "bool" | "output";
+  kind: "select" | "text" | "textarea" | "number" | "bool" | "array" | "audio" | "output";
   layer: "canonical" | "engine";
   group: string;
   wire_path: string;

@@ -167,6 +167,14 @@
           "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
           "date": "2026-09-18",
           "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
+        },
+        {
+          "field": "情感控制与采样参数",
+          "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500、do_sample true",
+          "verification": "verified",
+          "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
+          "date": "2026-09-21",
+          "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
         }
       ],
       "performance": [
@@ -347,6 +355,14 @@
           "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
           "date": "2026-09-18",
           "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
+        },
+        {
+          "field": "情感控制与采样参数",
+          "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500、do_sample true",
+          "verification": "verified",
+          "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
+          "date": "2026-09-21",
+          "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
         }
       ],
       "performance": [

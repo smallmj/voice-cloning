@@ -7,7 +7,7 @@ and directly unit-testable without booting the app (issue #20).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from ..context import AppContext
@@ -27,6 +27,20 @@ def build_router(ctx: AppContext) -> APIRouter:
         if not isinstance(text, str):
             raise HTTPException(status_code=422, detail="text must be a string")
         return normalize_with_flag(text)
+
+    @router.post("/uploads/audio", dependencies=[Depends(ctx.require_auth)])
+    async def upload_audio(file: UploadFile | None = None) -> dict:
+        """Issue #37: generation-time audio upload (情感参考音频).
+
+        The file is spooled into the audio dir by the shared upload seam and
+        referenced by BARE FILENAME. The pipeline resolves that name back to
+        an absolute path INSIDE the audio dir — a params value that carries a
+        path can never point outside it (no traversal, no arbitrary read).
+        """
+        path = await ctx.read_upload(file, max_bytes=100 * 1024 * 1024)
+        if path is None:
+            raise HTTPException(status_code=422, detail="audio file is required")
+        return {"file": path.name, "size_bytes": path.stat().st_size}
 
     @router.post("/generations", dependencies=[Depends(ctx.require_auth)])
     async def create_generation(body: dict) -> dict:

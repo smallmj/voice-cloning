@@ -236,6 +236,39 @@ describe("parameter layers (issue #23 / ADR-0018)", () => {
   });
 });
 
+// --- issue #37: ignored_when mode linkage --------------------------------------
+
+import { visibleParamSpecs } from "./ui";
+
+describe("visibleParamSpecs (issue #37 ignored_when)", () => {
+  const specs = [
+    spec({ name: "emo_mode", kind: "select", choices: ["与参考音频相同", "情感向量"], default: "与参考音频相同" }),
+    spec({ name: "emo_vector", ignored_when: ["emo_mode!=情感向量"] }),
+  ];
+
+  it("hides specs whose ignored_when predicates all hold", () => {
+    expect(visibleParamSpecs(specs, {}).map((p) => p.name)).toEqual(["emo_mode"]);
+  });
+
+  it("shows the gated spec once the mode matches", () => {
+    expect(visibleParamSpecs(specs, { emo_mode: "情感向量" }).map((p) => p.name)).toEqual([
+      "emo_mode",
+      "emo_vector",
+    ]);
+  });
+
+  it("never hides on an unknown predicate", () => {
+    const weird = [
+      spec({ name: "x", ignored_when: ["???garbage"] }),
+    ];
+    expect(visibleParamSpecs(weird, {}).map((p) => p.name)).toEqual(["x"]);
+  });
+
+  it("keeps specs without ignored_when always visible", () => {
+    expect(visibleParamSpecs([spec({ name: "temperature" })], {})).toHaveLength(1);
+  });
+});
+
 // --- install progress rendering (issue #35) -----------------------------------
 
 import { formatBytes, progressPercent } from "./install-progress";

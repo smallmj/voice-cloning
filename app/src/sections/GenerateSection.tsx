@@ -8,7 +8,7 @@ import type {
   Voice,
 } from "../api";
 import { CompareSection } from "../components/CompareSection";
-import { reasonLabel, splitParamLayers } from "../ui";
+import { reasonLabel, splitParamLayers, visibleParamSpecs } from "../ui";
 import { Waveform } from "../components/Waveform";
 import { JumpLink } from "../components/bits";
 import type { SectionId } from "../ui";
@@ -28,6 +28,7 @@ export function GenerateSection({
   onTextChange,
   engineParams,
   onEngineParamChange,
+  onEngineAudioUpload,
   normalized,
   record,
   generating,
@@ -53,6 +54,9 @@ export function GenerateSection({
   onTextChange: (text: string) => void;
   engineParams: Record<string, string>;
   onEngineParamChange: (name: string, value: string) => void;
+  // Issue #37: upload a generation-time audio input (情感参考音频) and
+  // store the returned file reference as the param value.
+  onEngineAudioUpload: (name: string, file: File) => void;
   normalized: NormalizeResult | null;
   record: GenerationRecord | null;
   generating: boolean;
@@ -155,23 +159,34 @@ export function GenerateSection({
       </div>
       {(() => {
         const layers = splitParamLayers(selectedEngineInfo?.params);
+        // Issue #37: ignored_when is honoured in the UI too — specs whose
+        // predicates all hold (e.g. the emotion params of a different mode)
+        // are hidden; the engine re-enforces the same rule server-side.
+        const shown = visibleParamSpecs(
+          [...layers.canonical, ...layers.engine],
+          engineParams,
+        );
+        const canonical = shown.filter((p) => p.layer === "canonical");
+        const engine = shown.filter((p) => p.layer === "engine");
         return (
           <>
             <ParamFields
-              specs={layers.canonical}
+              specs={canonical}
               engineParams={engineParams}
               onEngineParamChange={onEngineParamChange}
+              onEngineAudioUpload={onEngineAudioUpload}
             />
-            {layers.engine.length > 0 && (
+            {engine.length > 0 && (
               // ADR-0018 decision 1: the engine-specific layer has a FIXED
               // position and starts COLLAPSED — the canonical layer stays
               // the primary surface.
               <details className="engine-params">
-                <summary>引擎专属参数（{layers.engine.length}）</summary>
+                <summary>引擎专属参数（{engine.length}）</summary>
                 <ParamFields
-                  specs={layers.engine}
+                  specs={engine}
                   engineParams={engineParams}
                   onEngineParamChange={onEngineParamChange}
+                  onEngineAudioUpload={onEngineAudioUpload}
                 />
               </details>
             )}
@@ -255,67 +270,125 @@ export function GenerateSection({
  * textarea as a multi-line field, number honours min/max/step (open bounds
  * are clamped server-side by the spec; here they only shape the control).
  * Values stay strings — the engine spec converts to wire.
- * NOT yet rendered: kind:"output" (read-only engine values), `items` object
- * arrays and `group` nesting — no registered engine declares them yet; when
- * one does, extend the switch BELOW rather than letting one render as a
- * lying plain input. */
+ * Issue #37 adds: kind:"array" renders one slider per `items` entry (the
+ * 8-dim emotion vector, fixed order), value stored comma-joined; kind:"audio"
+ * renders a file picker that uploads via onEngineAudioUpload. NOT yet
+ * rendered: kind:"output" and `group` nesting — extend the switch BELOW
+ * rather than letting one render as a lying plain input. */
 function ParamFields({
   specs,
   engineParams,
   onEngineParamChange,
+  onEngineAudioUpload,
 }: {
   specs: ParamSpecInfo[];
   engineParams: Record<string, string>;
   onEngineParamChange: (name: string, value: string) => void;
+  onEngineAudioUpload: (name: string, file: File) => void;
 }) {
   if (specs.length === 0) return null;
   return (
     <>
-      {specs.map((p) => (
-        <div className="param-row" key={p.name}>
-          <label>
-            {p.label}
-            {p.unit ? `（${p.unit}）` : ""}：
-            {p.kind === "select" ? (
-              <select
-                value={engineParams[p.name] ?? String(p.default ?? "")}
-                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
-              >
-                {p.choices.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
+      {specs.map((p) => {
+        if (p.kind === "array") {
+          // Fixed-order item sliders (emo_vector[8]). The value is one
+          // comma-joined string; each slider rewrites its own slot and
+          // clamping is re-done by the engine adapter.
+          const raw = engineParams[p.name] ?? "";
+          const parts = raw ? raw.split(",") : p.items.map(() => "");
+          return (
+            <div className="param-row" key={p.name}>
+              <label>{p.label}：</label>
+              <div className="array-fields">
+                {p.items.map((item, i) => (
+                  <label key={item.name}>
+                    {item.label}
+                    <input
+                      type="number"
+                      min={item.min ?? undefined}
+                      max={item.max ?? undefined}
+                      step={0.05}
+                      value={parts[i] ?? ""}
+                      onChange={(e) => {
+                        const next = p.items.map((_, j) => parts[j] ?? "");
+                        next[i] = e.target.value;
+                        onEngineParamChange(p.name, next.join(","));
+                      }}
+                    />
+                  </label>
                 ))}
-              </select>
-            ) : p.kind === "bool" ? (
-              <input
-                type="checkbox"
-                checked={(engineParams[p.name] ?? String(p.default ?? "false")) === "true"}
-                onChange={(e) =>
-                  onEngineParamChange(p.name, e.target.checked ? "true" : "false")
-                }
-              />
-            ) : p.kind === "textarea" ? (
-              <textarea
-                rows={3}
-                maxLength={p.max_length ?? undefined}
-                value={engineParams[p.name] ?? String(p.default ?? "")}
-                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
-              />
-            ) : (
-              <input
-                type={p.kind === "number" ? "number" : "text"}
-                min={p.min ?? undefined}
-                max={p.max ?? undefined}
-                step={p.step ?? (p.integer ? 1 : undefined)}
-                value={engineParams[p.name] ?? String(p.default ?? "")}
-                onChange={(e) => onEngineParamChange(p.name, e.target.value)}
-              />
-            )}
-          </label>
-          {p.help && <span className="hint">{p.help}</span>}
-        </div>
-      ))}
+              </div>
+              {p.help && <span className="hint">{p.help}</span>}
+            </div>
+          );
+        }
+        if (p.kind === "audio") {
+          return (
+            <div className="param-row" key={p.name}>
+              <label>
+                {p.label}：
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) onEngineAudioUpload(p.name, file);
+                  }}
+                />
+              </label>
+              {engineParams[p.name] && (
+                <span className="hint">已选择：{engineParams[p.name]}</span>
+              )}
+              {p.help && <span className="hint">{p.help}</span>}
+            </div>
+          );
+        }
+        return (
+          <div className="param-row" key={p.name}>
+            <label>
+              {p.label}
+              {p.unit ? `（${p.unit}）` : ""}：
+              {p.kind === "select" ? (
+                <select
+                  value={engineParams[p.name] ?? String(p.default ?? "")}
+                  onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+                >
+                  {p.choices.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              ) : p.kind === "bool" ? (
+                <input
+                  type="checkbox"
+                  checked={(engineParams[p.name] ?? String(p.default ?? "false")) === "true"}
+                  onChange={(e) =>
+                    onEngineParamChange(p.name, e.target.checked ? "true" : "false")
+                  }
+                />
+              ) : p.kind === "textarea" ? (
+                <textarea
+                  rows={3}
+                  maxLength={p.max_length ?? undefined}
+                  value={engineParams[p.name] ?? String(p.default ?? "")}
+                  onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+                />
+              ) : (
+                <input
+                  type={p.kind === "number" ? "number" : "text"}
+                  min={p.min ?? undefined}
+                  max={p.max ?? undefined}
+                  step={p.step ?? (p.integer ? 1 : undefined)}
+                  value={engineParams[p.name] ?? String(p.default ?? "")}
+                  onChange={(e) => onEngineParamChange(p.name, e.target.value)}
+                />
+              )}
+            </label>
+            {p.help && <span className="hint">{p.help}</span>}
+          </div>
+        );
+      })}
     </>
   );
 }

@@ -13,7 +13,7 @@ import { EnginesSection } from "./sections/EnginesSection";
 import { GenerateSection } from "./sections/GenerateSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { VoicesSection } from "./sections/VoicesSection";
-import { apiJson, authHeaders } from "./client";
+import { apiJson, authHeaders, errorDetail } from "./client";
 import {
   buildRerunState,
   clampSidebarWidth,
@@ -315,6 +315,27 @@ export default function App() {
     }
   }
 
+  // Issue #37: upload a generation-time audio input (情感参考音频). The
+  // sidecar answers with a bare filename inside its audio dir; that name is
+  // stored as the param value and the pipeline resolves it server-side.
+  async function uploadEngineAudio(name: string, file: File) {
+    if (!baseUrl || !token) return;
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const res = await fetch(`${baseUrl}/uploads/audio`, {
+        method: "POST",
+        headers: authHeaders(token), // no Content-Type: the browser sets the multipart boundary
+        body,
+      });
+      if (!res.ok) throw new Error(await errorDetail(res, `HTTP ${res.status}`));
+      const data = (await res.json()) as { file: string };
+      setEngineParams((prev) => ({ ...prev, [name]: data.file }));
+    } catch (err) {
+      setGenerateError(`情感参考音频上传失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   async function generate() {
     if (!baseUrl || !token || !selectedEngine || generating) return;
     setGenerating(true);
@@ -517,6 +538,9 @@ export default function App() {
               engineParams={engineParams}
               onEngineParamChange={(name, value) =>
                 setEngineParams((prev) => ({ ...prev, [name]: value }))
+              }
+              onEngineAudioUpload={(name, file) =>
+                void uploadEngineAudio(name, file)
               }
               normalized={normalized}
               record={record}

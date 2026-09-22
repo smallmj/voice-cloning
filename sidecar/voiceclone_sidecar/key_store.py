@@ -39,16 +39,16 @@ class MemoryBackend(KeyBackend):
     """In-memory backend for tests and as an explicit fallback target."""
 
     def __init__(self) -> None:
-        self._secrets: dict[tuple[str, str], str] = {}
+        self._entries: dict[tuple[str, str], str] = {}
 
     def get(self, service: str, account: str) -> str | None:
-        return self._secrets.get((service, account))
+        return self._entries.get((service, account))
 
     def set(self, service: str, account: str, value: str) -> None:
-        self._secrets[(service, account)] = value
+        self._entries[(service, account)] = value
 
     def delete(self, service: str, account: str) -> None:
-        self._secrets.pop((service, account), None)
+        self._entries.pop((service, account), None)
 
 
 class KeyringBackend(KeyBackend):

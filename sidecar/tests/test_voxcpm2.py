@@ -308,3 +308,236 @@ def test_prepare_synthesis_forwards_seed_for_worker_side_handling(engine):
     _text, wire = voxcpm2_base.prepare_synthesis("你好", {"seed": 7}, lambda m: None)
     assert wire["seed"] == 7  # consumed by the worker via torch.manual_seed
     assert "denoise" not in wire  # stays a declared no-op, never forwarded
+
+
+# --- issue #56: control_instruction 参数 + 归一化后拼接时序 -------------------
+
+
+def test_control_instruction_param_declaration(engine):
+    """引擎层参数：string 多行（textarea）、默认空、默认折叠在引擎层；
+    help 含工单要求的文案。"""
+    spec = next(s for s in engine.param_specs() if s.name == "control_instruction")
+    assert spec.exposed is True
+    assert spec.kind == "textarea"
+    assert spec.default in ("", None)
+    assert spec.layer == "engine"
+    assert spec.applies_to is not None
+    for token in ("建议英文描述", "warm female voice", "音色设计", "克隆风格控制"):
+        assert token in spec.help, token
+
+
+def test_control_instruction_is_appended_after_normalization(engine):
+    """拼接时序锁定（spec #54 / ADR-0008）：正文先归一化、后拼控制指令。
+    prepare_synthesis 收到的就是归一化后的正文；含数字的英文指令必须原样
+    到达引擎（永不经归一化层），且格式为官方语法 `(指令)正文`。"""
+    normalized_body = "今天是二零二四年三月五日"  # pipeline 归一化产物
+    text, _wire = voxcpm2_base.prepare_synthesis(
+        normalized_body,
+        {"control_instruction": "a 30-year-old warm voice"},
+        lambda m: None,
+    )
+    assert text == "(a 30-year-old warm voice)今天是二零二四年三月五日"
+
+
+def test_control_instruction_empty_is_never_sent(engine):
+    """空值不下发：既无括号前缀，也不出现在 wire 参数里。"""
+    for params in ({}, {"control_instruction": ""}, {"control_instruction": "   "}):
+        text, wire = voxcpm2_base.prepare_synthesis("你好", params, lambda m: None)
+        assert text == "你好"
+        assert "control_instruction" not in wire
+
+
+def test_control_instruction_concatenates_with_pronunciation_rewrite(engine):
+    """与发音标注改写同时序：指令在最前，标注改写作用在正文。"""
+    text, _wire = voxcpm2_base.prepare_synthesis(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+        lambda m: None,
+    )
+    assert text == "(warm female voice){ni3}好世界"
+
+
+def test_control_instruction_help_is_user_facing(engine):
+    """Review 修复：help 是用户可见文案——不带 spec/ADR/issue 等内部引用，
+    也没有重复句（同一短句只出现一次）。"""
+    spec = next(s for s in engine.param_specs() if s.name == "control_instruction")
+    for token in ("spec #", "ADR-", "issue #"):
+        assert token not in spec.help, token
+    assert spec.help.count("用于音色设计与克隆风格控制") == 1
+
+
+def test_full_synthesis_text_returns_the_complete_text_for_preview(engine):
+    """US19（issue #54 review 修复）：预览钩子返回将要合成的完整文本——
+    与 prepare_synthesis 走同一个 adapt_synthesis_text，归一化后的正文 +
+    发音标注改写 + 控制指令前缀，预览与真实合成不可能漂移。"""
+    full = engine.full_synthesis_text(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+    )
+    assert full == "(warm female voice){ni3}好世界"
+    # 与 prepare_synthesis 的文本路径逐字节一致（同一函数的同一实现）。
+    adapted, _wire = voxcpm2_base.prepare_synthesis(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+        lambda m: None,
+    )
+    assert full == adapted
+
+
+def test_full_synthesis_text_without_instruction_is_identity(engine):
+    """无控制指令（或缺省参数）时预览文本不变——默认引擎上下文不撒谎。"""
+    for params in (None, {}, {"control_instruction": "  "}):
+        assert engine.full_synthesis_text("你好", params) == "你好"
+
+
+def test_voxcpm2_capabilities_declare_official_30_languages(engine):
+    """语种声明扩为官方 30 语种清单（HF 模型卡 language 字段口径，声明性
+    支持——真机抽查随验证工单，不加语言选择 UI）。清单在生产侧只定义一份
+    （voxcpm2_base.VOXCPM2_LANGUAGES）；capabilities 与测试都从它派生，
+    互锁的是「capabilities 忠实于唯一常量」这一层。"""
+    official = voxcpm2_base.VOXCPM2_LANGUAGES
+    assert len(official) == 30
+    assert len(set(official)) == 30  # the single source carries no duplicates
+    caps = engine.capabilities()
+    assert len(caps.languages) == 30
+    assert set(caps.languages) == set(official)
+    assert caps.languages == official  # order also pinned to the one source
+
+
+# --- issue #57: 原生 Voice Design（无参考生成） ------------------------------
+
+
+class _RecordingSupervisor:
+    """Fake worker seam: records payloads, writes a real playable WAV."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+        self.payloads: list[dict] = []
+
+    def request(self, payload: dict, on_log=None, timeout_s=None) -> dict:
+        self.payloads.append(payload)
+        out = self.tmp_path / "audio" / Path(payload["output"]).name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        from voiceclone_sidecar.engines.fake import write_tone_wav
+
+        write_tone_wav(out, 0.6)
+        return {"audio_path": str(out), "sample_rate": 48000}
+
+
+def _design_engine(tmp_path: Path) -> tuple[VoxCPM2MpsEngine, _RecordingSupervisor]:
+    eng = VoxCPM2MpsEngine(output_dir=tmp_path / "audio", root=tmp_path / "runtime", env={})
+    sup = _RecordingSupervisor(tmp_path)
+    eng.is_installed = lambda: True
+    eng._get_supervisor = lambda: sup
+    return eng, sup
+
+
+def test_capabilities_declare_voice_design(engine):
+    """能力位：基类声明（MPS/CUDA 共享），/engines、/voices/design 门禁据此放行。"""
+    assert engine.capabilities().voice_design is True
+
+
+def test_design_voice_sends_parenthesized_prefix_without_reference(tmp_path):
+    """design_voice = 控制指令括号前缀 + 试听文本，无参考音频；描述与试听
+    文本不经归一化（design 调用不走管线，逐字到达引擎）。"""
+    eng, sup = _design_engine(tmp_path)
+    result = eng.design_voice(
+        "Warm female voice with 2.5Hz pacing, 数字 123 保持原样",
+        "晚上好，欢迎收听。",
+        lambda m: None,
+    )
+    payload = sup.payloads[0]
+    assert payload["design"] is True
+    assert "ref_audio" not in payload
+    assert "prompt_text" not in payload
+    # 描述（含数字与英文）+ 试听文本原样拼接，永不经归一化层。
+    assert payload["text"] == "(Warm female voice with 2.5Hz pacing, 数字 123 保持原样)晚上好，欢迎收听。"
+    # 返回契约：本地生成 voice_id + 预览样本路径 + transcript=试听文本。
+    assert result["voice_id"].startswith("voxcpm2-design-")
+    assert Path(result["sample_audio_path"]).name.startswith("design-")
+    assert result["transcript"] == "晚上好，欢迎收听。"
+
+
+def test_design_voice_rejects_empty_description_or_preview(tmp_path):
+    eng, sup = _design_engine(tmp_path)
+    with pytest.raises(RuntimeError, match="声音描述"):
+        eng.design_voice("  ", "晚上好", lambda m: None)
+    with pytest.raises(RuntimeError, match="试听文本"):
+        eng.design_voice("低沉男声", "  ", lambda m: None)
+    assert sup.payloads == []  # nothing reached the worker
+
+
+def test_design_voice_requires_installed_engine(tmp_path):
+    eng = VoxCPM2MpsEngine(output_dir=tmp_path / "audio", root=tmp_path / "runtime", env={})
+    with pytest.raises(RuntimeError, match="not installed"):
+        eng.design_voice("低沉男声", "晚上好", lambda m: None)
+
+
+def test_synthesize_payload_never_sets_design_flag(tmp_path):
+    """普通合成的强制 ref_audio 不变，且永不携带 design 标记——design 是
+    design_voice 的专用入口。"""
+    eng, sup = _design_engine(tmp_path)
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g57", text="你好", params={"ref_audio": "/tmp/ref.wav"}
+        ),
+        lambda m: None,
+    )
+    payload = sup.payloads[0]
+    assert "design" not in payload
+    assert payload["ref_audio"] == str(Path("/tmp/ref.wav").resolve())
+
+
+def test_worker_design_path_generates_without_reference(monkeypatch):
+    """worker 无参考生成路径：design=True 时 generate() 不带 reference_wav_path。"""
+    import types
+
+    from voiceclone_sidecar.engines import voxcpm2_worker as worker
+
+    sf_stub = types.SimpleNamespace(
+        write=lambda path, wav, sr, subtype=None: None
+    )
+    monkeypatch.setitem(sys.modules, "soundfile", sf_stub)
+    monkeypatch.setattr(
+        worker.common, "verify_wav_output", lambda out, log, label: {"ok": True}
+    )
+    calls: list[dict] = []
+
+    class FakeModel:
+        tts_model = types.SimpleNamespace(sample_rate=48000)
+
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return [0.0] * 480
+
+    result = worker._synthesis(
+        {
+            "output": "/tmp/out.wav",
+            "design": True,  # no ref_audio — the design entry
+            "model_dir": "/tmp/weights",
+            "text": "(warm female voice)晚上好。",
+        },
+        lambda model_dir: FakeModel(),
+        lambda: {},
+        lambda msg: None,
+    )
+    assert result["audio_path"] == "/tmp/out.wav"
+    assert calls[0]["text"] == "(warm female voice)晚上好。"
+    assert "reference_wav_path" not in calls[0]
+
+
+def test_worker_without_design_still_requires_reference(monkeypatch):
+    """非 design 场景的强制 ref_audio 不变（无 ref_audio 且无 design → 报错）。"""
+    import types
+
+    from voiceclone_sidecar.engines import voxcpm2_worker as worker
+
+    monkeypatch.setitem(sys.modules, "soundfile", types.SimpleNamespace(write=lambda *a, **k: None))
+
+    with pytest.raises(RuntimeError, match="参考音频"):
+        worker._synthesis(
+            {"output": "/tmp/out.wav", "model_dir": "/tmp/weights", "text": "你好"},
+            lambda model_dir: None,
+            lambda: {},
+            lambda msg: None,
+        )

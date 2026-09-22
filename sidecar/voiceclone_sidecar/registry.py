@@ -69,6 +69,20 @@ class Engine(abc.ABC):
         """Run one text -> audio generation. Use ``log(msg)`` to emit
         progress lines; they are streamed to the UI over WebSocket."""
 
+    def full_synthesis_text(self, normalized_text: str, params: dict | None = None) -> str:
+        """The COMPLETE text this engine will synthesize for the given
+        ALREADY-normalized text (ADR-0008: the pipeline normalizes centrally)
+        and generation params — including any engine-adapter text shaping
+        such as VoxCPM2's control-instruction prefix (US19, issue #54).
+
+        The /normalize preview calls this when the UI supplies engine
+        context, so the preview shows exactly what the engine will hear.
+        Engines whose adapters only map wire parameters (default) return the
+        text unchanged; engines that reshape the text override this with the
+        SAME helper their ``synthesize`` path runs, so preview and synthesis
+        can never drift apart."""
+        return normalized_text
+
     def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
         """Prepare the reference on this engine and return binding extras.
 
@@ -189,7 +203,7 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
     import sys
 
     if key_store is None:
-        from .secrets import KeyStore
+        from .key_store import KeyStore
 
         key_store = KeyStore()
 
@@ -264,10 +278,13 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
         # without models/keys — but it must never surface in production
         # lists, and its transcribe() must never reach a user's voice
         # library. Everything below exists only under the test switch.
-        from .engines.fake import FakeEngine, FakeRefTextEngine
+        from .engines.fake import FakeEngine, FakeInstructEngine, FakeRefTextEngine
 
         registry.register(FakeEngine(output_dir=output_dir))
         registry.register(FakeRefTextEngine(output_dir=output_dir))
+        # US19 seam (issue #54): an engine that reshapes the text, so the
+        # /normalize engine-context preview is contract-tested end to end.
+        registry.register(FakeInstructEngine(output_dir=output_dir))
 
         # Contract-test seam: a BYOK cloud-shaped engine for the issue-#9
         # surface (keys, billing disclosure, cloud bindings, voice_id).

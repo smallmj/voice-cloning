@@ -58,18 +58,22 @@
 | language | (c) | 上游仅区分 "Chinese"/"en"，写死 Chinese（其余 unverified 维持） |
 | seed | 已有 (a) | — |
 
-### 2.3 voxcpm2-mps / -cuda（现 3 exposed）
+### 2.3 voxcpm2-mps / -cuda（终态 9 exposed + no-op/breaks-pipeline 披露；#49/#50/#56/#57/#59 真机全部落地，与 `sidecar/tests/test_local_param_surface.py` 锁一致）
 
 | 候选 | 类 | 决策 |
 |---|---|---|
-| **seed 修复/验证** | (b) bug | §1.2，本轮必修 |
-| min_len / max_len（生成长度上下限） | (b) | 真机验证后定 UI 语义（max_len 与 200 字/请求 vendor 上限的关系）；验证不过不声明 |
-| retry_badcase / retry_badcase_max_times / retry_badcase_ratio_threshold（坏例重试） | (b) | 真机验证后定（默认值上游 core 层 True / model 层 False 不一致，需实测） |
-| denoise | 维持 (b) | 翻 exposed 需引入 ZipEnhancer（`load_denoiser=True` 拉 ModelScope 模型，与离线承诺冲突）——真机验证时一并裁决 |
+| **seed 修复/验证** | 已 exposed | §1.2 bug 已修：上游 `_generate` 无 seed 形参、直传 TypeError（真机确认），改走 worker 侧 `torch.manual_seed`（issue #49）；复现性真机锁定——同参数多次输出逐字节一致（MPS ×4、CUDA ×3，#59） |
+| cfg_value / inference_timesteps | 已 exposed | 引擎侧旋钮，真机验证通过（#59 V7 设定/复现组） |
+| min_len / max_len（生成长度上下限） | 已 exposed | 3090 真机验证通过（issue #50）；max_len 与 200 字/请求 vendor 上限关系在 help 中披露 |
+| retry_badcase / retry_badcase_max_times / retry_badcase_ratio_threshold（坏例重试） | 已 exposed | 真机实测定调（issue #50）：默认值不一致以上游 core 层为准在 help 披露 |
+| denoise | no-op | `load_denoiser=False` 恒定（ZipEnhancer 拉取 ModelScope 模型与离线承诺冲突），实测 byte-identical（#50 V7）——不暴露，保留防伪数据 |
 | normalize | (c) | breaks-pipeline（wetext；{ni3} 音素语法要求 False） |
 | denoise_output | (c) | wrong-mode（denoise 只作用于参考音频） |
-| LoRA 权重 | (c) | 超出复刻产品范围 |
-| language | (c) | 上游无语言参数（30 语种跟随文本） |
+| ref_audio / ref_text | (c) | server-injected |
+| **control_instruction（控制指令，issue #56 已落地）** | 已声明 exposed | 引擎层 textarea（多行）、默认空、空值不下发；官方语法 `(指令)正文`，在归一化之后于引擎适配层（`control_prefix`，`prepare_synthesis` 与 voice design 共用）拼接进正文开头，永不经归一化层（含数字的英文指令原样到达引擎，拼接时序由测试锁定）；归一化预览经 `full_synthesis_text` 钩子如实展示拼接后的完整待合成文本（US19，#54 review 修复） |
+| **pronunciation（英文发音标注，issue #56 扩展）** | 已声明 exposed | canonical 参数入口走英文 CMUDict 离线路由（`world=W ER1 L D` → `{W ER1 L D}`，坏标注降级原文）；标注由适配层在归一化之后改写正文——#59 反例实测：把 `{W ER1 L D}` 直接写进正文会被中心归一化层破坏（`ER1`→`ER一升`），证明必须走 canonical 入口。**数据披露（「不支持是数据」）**：内置词典为 CMUdict 0.7b 的精简子集（离线随仓库分发，运行期不下载），未收录词降级原文并记录日志；英文 key 匹配为大小写不敏感的整词替换（正文 `World`/`WORLD` 与标注 key `world` 同样命中，`worldwide` 不受影响，测试锁定） |
+| language | (c) | 上游无语言参数：30 语种跟随文本（官方清单口径，声明性支持）；中/英/粤语/四川话已双平台真机抽查（生成成功，口音听感待人工复核，#59），其余 26 语种未逐语种验证 |
+| **design_voice（Voice Design，issue #57 已落地）** | 引擎能力 | `voice_design` capability + `POST /voices/design`：无参考音频从文本描述设计音色 → `origin=designed` 入档（预览样本、`design.voice_prompt`）→ 绑定复用合成；MPS sidecar 全链路 + CUDA worker 等价路径真机验证（#59 V5） |
 
 ### 2.4 dots-tts-cuda（现 4 exposed + 3 防伪 no-op + server-injected；四引擎中最完备，无缺口）
 

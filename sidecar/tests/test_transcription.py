@@ -278,6 +278,11 @@ def test_generation_auto_fills_ref_text_from_transcript(client):
 def test_generation_with_ref_text_engine_fails_actionably_without_transcription(client):
     """Local provider uninstalled + no transcript ⇒ a 409 that says what to do,
     never a silent send-to-cloud fallback."""
+    # The "uninstalled" precondition is REAL, not assumed: conftest points the
+    # sidecar's VOICECLONE_RUNTIME_ROOT at a temp dir, so the local ASR tool
+    # is never installed in the tested app. (Historically this test passed for
+    # the wrong reason — the issue #61 stdlib-shadow crash stood in for the
+    # precondition — and the shadowing fix surfaced that.)
     client.put("/transcription/provider", json={"provider": "local"})
     voice = create_voice(client, seconds=4.0)
     r = client.post(
@@ -306,6 +311,8 @@ def test_generation_does_not_reuse_placeholder_transcript(client):
     Instead the pipeline re-transcribes — and fails with an actionable 409
     when no transcription provider is available, rather than shipping a
     broken clone."""
+    # The local provider is genuinely uninstalled in the tested app — see the
+    # sibling test above (conftest's hermetic VOICECLONE_RUNTIME_ROOT).
     voice = create_voice(client, seconds=4.0)
     # Transcribe via the fake engine provider: the placeholder gets stored.
     client.put("/transcription/provider", json={"provider": "fake"})
@@ -385,9 +392,9 @@ def cloud_client(tmp_path):
     import httpx
     from fastapi.testclient import TestClient
 
+    from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
     from voiceclone_sidecar.main import create_app
     from voiceclone_sidecar.registry import default_registry
-    from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
     store = KeyStore(backend=MemoryBackend())
     store.set("qwen3-tts-vc-cloud", "sk-test")

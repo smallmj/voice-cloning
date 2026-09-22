@@ -606,10 +606,10 @@
         },
         {
           "field": "语种与方言",
-          "value": "30 种语言 + 9 种中文方言（粤/川/吴等，方言按方言词汇书写）；厂商口径，本仓库尚未实测",
+          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
           "verification": "vendor",
-          "source": "上游 README；官方 usage guide",
-          "date": "2026-09-20"
+          "source": "上游 README；官方 usage guide；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 真机抽查）",
+          "date": "2026-09-22"
         },
         {
           "field": "文本归一化",
@@ -624,7 +624,7 @@
           "verification": "verified",
           "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 真机验证脚本（issues #49/#50）",
           "date": "2026-09-22",
-          "note": "真机验证（2026-09-22，VoxCPM 2.0.3 钉扎版本；Mac MPS + Windows RTX 3090 双机）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上模型加载后首次生成会偏离同 seed 复现，预热后含首次请求均逐字节一致；MPS 无预热亦一致）；V2 min_len/max_len/retry_badcase* 直传被接受且 core 层默认 True/3/6.0 经 core 直传生效；V7 denoise=True 与不开输出逐字节相同（denoiser 未装载，静默 no-op）。3090 端到端性能验证仍随 voxcpm2-cuda（unverified）"
+          "note": "真机验证（2026-09-22，VoxCPM 2.0.3 钉扎版本；Mac MPS + Windows RTX 3090 双机）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上模型加载后首次生成会偏离同 seed 复现，预热后含首次请求均逐字节一致；MPS 无预热亦一致）；V2 min_len/max_len/retry_badcase* 直传被接受且 core 层默认 True/3/6.0 经 core 直传生效；V7 denoise=True 与不开输出逐字节相同（denoiser 未装载，静默 no-op）。issue #59 复验（MPS sidecar 全链路）：seed=42 同参数 4 次输出 PCM 逐字节一致"
         },
         {
           "field": "主观听感 (MOS)",
@@ -632,6 +632,37 @@
           "verification": "unknown",
           "source": "issue #25 待办",
           "date": "2026-09-20"
+        },
+        {
+          "field": "控制指令（control_instruction）",
+          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；真机验证（MPS sidecar 全链路 + CUDA worker 等价路径，2026-09-22）：带指令合成成功（指令含数字 `30-year-old` 原样保留、正文日期归一化正常）、无指令基线与旧路径一致",
+          "verification": "measured",
+          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2）",
+          "date": "2026-09-22",
+          "note": "指令符合度（听感）待人工复核；产物在 /tmp/voxcpm2-verify/"
+        },
+        {
+          "field": "CMUDict/发音标注（英文）",
+          "value": "canonical 发音标注入口（world=W ER1 L D）经 pronunciation.rewrite → voxcpm 路由改写为 {W ER1 L D} 花括号音素、在归一化之后由适配层拼接（issue #56 路由）；真机验证（MPS sidecar，2026-09-22）：标注合成成功、无崩坏例。反例核实：把花括号语法直接写进正文会被中心归一化层破坏（ER1→ER一升），证明标注必须走 canonical 参数入口——与设计一致",
+          "verification": "measured",
+          "source": "voiceclone_sidecar/pronunciation.py _voxcpm_phoneme_tag；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V3 正例+反例）",
+          "date": "2026-09-22",
+          "note": "读音是否受控（听感）待人工复核"
+        },
+        {
+          "field": "非语言标签透传",
+          "value": "正文含 [laughing]、[sigh] 原样透传（中心归一化层前后不变，模型自动跟随）；真机验证（MPS+CUDA，2026-09-22）：合成成功、无崩坏例",
+          "verification": "measured",
+          "source": "docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V4）",
+          "date": "2026-09-22",
+          "note": "非语言声音是否可闻（听感）待人工复核"
+        },
+        {
+          "field": "voice_design（原生音色设计）",
+          "value": "issue #57 原生 Voice Design 端到端真机验证（MPS sidecar 全链路，2026-09-22）：POST /voices/design 无参考生成（`(描述)试听文本`）→ 返回 origin=designed 音色（预览样本即参考，sha256 da87f625…）→ 绑定 voxcpm2-mps → 用设计音色再合成成功；CUDA worker 等价路径（无参考 generate）同日跑通",
+          "verification": "measured",
+          "source": "engines/voxcpm2_base.py design_voice；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V5）",
+          "date": "2026-09-22"
         }
       ],
       "performance": [
@@ -666,17 +697,17 @@
         {
           "field": "Windows 兼容",
           "value": "无硬性阻碍（无 flash-attn / pynini / 编译型 wheel），但社区有分散报告：#184（Win11 多种报错）、#258（RTX 5090 不稳定）；官方 Windows 安装器仍为社区 PR #349 未合并",
-          "verification": "verified",
-          "source": "github.com/OpenBMB/VoxCPM/issues/184, /issues/258, PR #349",
-          "date": "2026-09-20",
-          "note": "RTX 3090 实测未完成前不得标为已核实（同 indextts-25-cuda 口径）"
+          "verification": "measured",
+          "source": "github.com/OpenBMB/VoxCPM/issues/184, /issues/258, PR #349；RTX 3090 实机首装全链路（torch 2.8.0+cu128 + voxcpm 2.0.3 + 权重）V1–V7 全部执行成功：docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md",
+          "date": "2026-09-22",
+          "note": "2026-09-22 RTX 3090 实测完成，由 verified 升级 measured：首装 + worker 等价脚本 15/15 项成功，无静音/削波"
         },
         {
           "field": "能力面",
-          "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据",
+          "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据；语种声明扩为官方 30 语种全量清单（HF 模型卡口径）——声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（RTX 3090 实机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
           "verification": "verified",
-          "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）",
-          "date": "2026-09-20"
+          "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 CUDA）",
+          "date": "2026-09-22"
         },
         {
           "field": "生成参数",
@@ -684,17 +715,29 @@
           "verification": "verified",
           "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 3090 真机验证脚本（issues #49/#50）；参数面与 voxcpm2-mps 共享基类（测试 test_cuda_and_mps_share_the_base 锁定）",
           "date": "2026-09-22",
-          "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。3090 端到端性能数字仍为 unverified（performance 条目）。issue #52 证据终态核对时补齐此前缺失的本条"
+          "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。issue #52 证据终态核对时补齐此前缺失的本条。issue #59 复验（RTX 3090）：seed=42 同参数 3 次输出逐字节一致（含首次请求）；性能已实测见 performance 条目"
+        },
+        {
+          "field": "控制指令（control_instruction）",
+          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；RTX 3090 实机验证（2026-09-22，worker 等价路径）：带指令（含数字 `30-year-old`）合成成功、无指令基线一致",
+          "verification": "measured",
+          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2 CUDA）",
+          "date": "2026-09-22",
+          "note": "指令符合度（听感）待人工复核；CMUDict/非语言标签/voice_design 在 3090 上同日跑通（V3/V4/V5），逐格证据同 MPS 对应条目"
         }
       ],
       "performance": [
         {
-          "env": "RTX 3090（待实测，issue #25）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unverified",
-          "source": "3090 实测未跑；上游 README 宣称 ~8 GB VRAM（vendor 口径）",
-          "date": "2026-09-20"
+          "env": "RTX 3090 24GB（fp32，optimize=False，单段纯 generate 口径，timesteps=10 缺省）",
+          "rtf": 1.74,
+          "rtf_range": [
+            1.72,
+            1.76
+          ],
+          "peak_vram_bytes": 5970935808,
+          "verification": "measured",
+          "source": "issue #59 真机验证（2026-09-22，worker 等价脚本，torch 2.8.0+cu128）：14 段 RTF 1.72–1.76；timesteps=20 时 RTF 3.09–3.11；torch.cuda.max_memory_allocated 全流程峰值 5695 MiB。与 MPS 实测 0.75 口径不同（MPS 为 17 项回归端到端口径），如实记录",
+          "date": "2026-09-22"
         }
       ],
       "notes": "与 MPS 变体共享引擎基类与权重下载链（torch 走 ADR-0002 CUDA wheel 精确 URL 轴）。"

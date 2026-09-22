@@ -122,7 +122,10 @@ def test_voxcpm2_request_surface_matches_audit():
         engine,
         ("cfg_value", "inference_timesteps", "min_len", "max_len",
          "retry_badcase", "retry_badcase_max_times",
-         "retry_badcase_ratio_threshold", "seed"),
+         "retry_badcase_ratio_threshold", "seed",
+         # issue #56: engine-layer multi-line control instruction (Voice
+         # Design / style control); concatenated AFTER normalization.
+         "control_instruction"),
         {"denoise": "no-op", "normalize": "breaks-pipeline",
          "denoise_output": "wrong-mode", "ref_audio": "server-injected",
          "ref_text": "server-injected"},
@@ -228,6 +231,50 @@ def test_matrix_voxcpm2_generation_params_claim_is_real_machine_backed():
         value = ev["value"]
         for token in ("seed", "cfg_value", "inference_timesteps", "retry_badcase"):
             assert token in value, (engine_id, token)
+
+
+def test_matrix_voxcpm2_languages_claim_is_declarative_official_list():
+    """Issue #56: the 30-language claim is the OFFICIAL list, marked
+    declarative (官方口径) — real-machine spot checks live in the
+    verification ticket, per the honest-marking rule. The list itself is
+    defined ONCE in production (voxcpm2_base.VOXCPM2_LANGUAGES); this lock
+    derives from that constant instead of repeating a literal copy."""
+    from voiceclone_sidecar.engines.voxcpm2_base import VOXCPM2_LANGUAGES
+
+    official = set(VOXCPM2_LANGUAGES)
+    assert len(VOXCPM2_LANGUAGES) == 30
+    for engine_id in ("voxcpm2-mps", "voxcpm2-cuda"):
+        engine = (VoxCPM2MpsEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
+                  if engine_id == "voxcpm2-mps" else None)
+        if engine is not None:
+            langs = set(engine.capabilities().languages)
+            assert langs == official, engine_id
+        # mps carries the dedicated 语种与方言 entry; cuda shares the
+        # surface via its 能力面 entry (same model, same declaration).
+        ev = _evidence_entry(
+            engine_id,
+            "语种与方言" if engine_id == "voxcpm2-mps" else "能力面",
+        )
+        assert ev["verification"] in ("vendor", "verified")
+        assert "声明性支持（官方口径）" in ev["value"], engine_id
+        # issue #59: spot checks (zh/en/yue/sichuan, MPS+CUDA) are DONE —
+        # the honest marking moved from "见验证工单" (pending) to "真机抽查
+        # 已完成", with the remaining languages explicitly 未逐语种验证.
+        assert "真机抽查已完成" in ev["value"], engine_id
+        assert "未逐语种验证" in ev["value"], engine_id
+
+
+def test_matrix_voxcpm2_control_instruction_is_declared_with_timing():
+    """Issue #56: control_instruction is an engine-layer declared param,
+    concatenated AFTER normalization (never normalized itself); issue #59
+    moved the real-machine run to measured — listening judgment stays with
+    the human review note."""
+    for engine_id in ("voxcpm2-mps", "voxcpm2-cuda"):
+        ev = _evidence_entry(engine_id, "控制指令（control_instruction）")
+        assert ev["verification"] in ("verified", "vendor", "measured")
+        for token in ("control_instruction", "归一化之后", "(指令)正文"):
+            assert token in ev["value"], (engine_id, token)
+        assert "听感" in ev["note"], engine_id
 
 
 def test_matrix_fireredtts3_quality_params_claim_is_real_machine_backed():

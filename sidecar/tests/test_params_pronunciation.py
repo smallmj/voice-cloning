@@ -229,3 +229,72 @@ def test_fake_key_engine_spec_has_applies_to():
     spec = FakeKeyEngine().param_specs()[0]
     assert spec.applies_to is not None
     assert spec.exposed
+
+
+# --- issue #56: 英文 CMUDict 发音标注路由 -------------------------------------
+
+
+def test_parse_annotations_accepts_english_pipe_form():
+    """工单 #56 形态：`词|ARPAbet`（`|` 也可作行内分隔符）与 `词=值` 共用入口。"""
+    ann, errors = parse_annotations("world|W ER1 L D")
+    assert ann == {"world": "W ER1 L D"}
+    assert errors == []
+    ann2, errors2 = parse_annotations("world = world|W ER1 L D")
+    assert ann2 == {"world": "world|W ER1 L D"}
+    assert errors2 == []
+
+
+def test_voxcpm_explicit_arpabet_annotation():
+    """`world|W ER1 L D` -> `{W ER1 L D}`（全大写 + 重音数字，官方音素语法）。"""
+    out = rewrite("hello world", "world|W ER1 L D", "voxcpm")
+    assert out == "hello {W ER1 L D}"
+
+
+def test_voxcpm_cmudict_lookup_uses_bundled_offline_dictionary():
+    """标注值为纯英文单词时查仓库打包的精简 CMUDict（离线、无网络）。"""
+    from voiceclone_sidecar import pronunciation
+
+    phones = pronunciation.cmudict_lookup("world")
+    assert tuple(phones) == ("W", "ER1", "L", "D")
+    out = rewrite("hello world", "world=world", "voxcpm")
+    assert out == "hello {W ER1 L D}"
+
+
+def test_voxcpm_bad_english_annotation_degrades_to_original_text():
+    """坏标注（词典未收录 / 音素非法）降级原文，不阻塞生成；仅记日志。"""
+    logs: list[str] = []
+    out = rewrite("hello world", "zzzqqx=zzzqqx", "voxcpm", log=logs.append)
+    assert out == "hello world"  # 原文保留
+    assert logs and "zzzqqx" in logs[0]
+    out2 = rewrite("hello world", "world|not a phoneme", "voxcpm", log=logs.append)
+    assert out2 == "hello world"
+
+
+def test_chinese_and_english_annotations_share_one_entry_and_route_by_value():
+    """同一标注块内中文拼音与英文 CMUDict 共存，按标注值内容分流词典。"""
+    out = rewrite(
+        "你好 world",
+        "你=ni3\nworld|W ER1 L D",
+        "voxcpm",
+    )
+    assert out == "{ni3}好 {W ER1 L D}"
+
+
+def test_english_annotation_replaces_whole_words_only():
+    """英文词替换按词边界进行：world 不误伤 worldwide。"""
+    out = rewrite("worldwide world", "world|W ER1 L D", "voxcpm")
+    assert out == "worldwide {W ER1 L D}"
+
+
+def test_english_annotations_only_apply_to_voxcpm_grammar():
+    """CMUDict 路由是 voxcpm 专属扩展；其他语法保持既有行为（pinyin 值）。"""
+    assert rewrite("银行", "行=xing2", "indextts") == "银<行|XING2>"
+
+
+def test_english_annotation_matches_case_insensitively_whole_words():
+    """Review 锁定（issue #54 review 修复 8）：英文标注的整词替换是大小写
+    不敏感的——正文 World / WORLD 与标注 key world 同样命中（语义披露在
+    docs/audit/local-engine-param-gap-audit.md §2.3），词边界语义不变：
+    worldwide 不受影响。"""
+    out = rewrite("World worldwide WORLD", "world|W ER1 L D", "voxcpm")
+    assert out == "{W ER1 L D} worldwide {W ER1 L D}"

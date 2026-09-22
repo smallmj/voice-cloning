@@ -130,7 +130,11 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
     import soundfile as sf
 
     output = request["output"]
-    if not request.get("ref_audio"):
+    # Voice Design (issue #57) is the ONLY reference-less entry: the engine
+    # base sets ``design`` for its design_voice() calls and for nothing else;
+    # plain synthesize keeps enforcing ref_audio (zero-shot cloning engine).
+    design = bool(request.get("design"))
+    if not design and not request.get("ref_audio"):
         raise RuntimeError(
             "VoxCPM2 是零样本复刻引擎，必须提供参考音频：请选择一个音色（或先创建音色）再生成"
         )
@@ -169,11 +173,16 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
     if request.get("retry_badcase_ratio_threshold") not in (None, ""):
         kwargs["retry_badcase_ratio_threshold"] = float(request["retry_badcase_ratio_threshold"])
 
-    wav = model.generate(
-        text=request["text"],
-        reference_wav_path=request["ref_audio"],
-        **kwargs,
-    )
+    if design:
+        # No-reference generation (Voice Design): text = "(description)preview",
+        # no reference_wav_path / prompt pair — the model invents the timbre.
+        wav = model.generate(text=request["text"], **kwargs)
+    else:
+        wav = model.generate(
+            text=request["text"],
+            reference_wav_path=request["ref_audio"],
+            **kwargs,
+        )
     sr = int(model.tts_model.sample_rate)
     sf.write(output, wav, sr, subtype="PCM_16")
     log(f"voxcpm2: synthesized in {time.monotonic() - started:.1f}s")

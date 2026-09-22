@@ -63,7 +63,7 @@ def _minimax_ctx(tmp_path):
     import httpx
 
     from voiceclone_sidecar.engines.minimax_cloud import MiniMaxCloudEngine
-    from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
+    from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
 
     def wav_bytes():
         buf = io.BytesIO()

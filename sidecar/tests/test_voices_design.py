@@ -190,3 +190,113 @@ def test_failed_design_leaves_no_orphaned_voice(client):
     assert r.status_code == 500
     listed = client.get("/voices").json()["voices"]
     assert all(v["name"] != "会失败" for v in listed)
+
+
+# --- issue #57: VoxCPM2 原生 Voice Design（/voices/design 端到端） -------------
+
+
+def _voxcpm2_design_app(tmp_path):
+    """In-process app with the real VoxCPM2 MPS engine whose worker seam is
+    faked (no model weights, per the testing decisions of spec #54)."""
+
+    from voiceclone_sidecar.engines import fake as fake_mod
+    from voiceclone_sidecar.engines.voxcpm2_mps import VoxCPM2MpsEngine
+    from voiceclone_sidecar.main import create_app
+    from voiceclone_sidecar.registry import Registry
+
+    engine = VoxCPM2MpsEngine(output_dir=tmp_path / "audio", root=tmp_path / "runtime", env={})
+    payloads: list[dict] = []
+
+    class _Sup:
+        def request(self, payload: dict, on_log=None, timeout_s=None) -> dict:
+            payloads.append(payload)
+            out = tmp_path / "audio" / f"design-{len(payloads)}.wav"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            fake_mod.write_tone_wav(out, 0.6)
+            return {"audio_path": str(out), "sample_rate": 48000}
+
+    engine.is_installed = lambda: True
+    engine._get_supervisor = lambda: _Sup()
+    registry = Registry()
+    registry.register(engine)
+    return create_app(registry, token="t", audio_dir=tmp_path / "audio"), payloads
+
+
+def test_design_voice_e2e_voxcpm2(tmp_path):
+    app, payloads = _voxcpm2_design_app(tmp_path)
+    from fastapi.testclient import TestClient
+
+    with TestClient(app, headers={"Authorization": "Bearer t"}) as c:
+        r = c.post(
+            "/voices/design",
+            json={
+                "engine_id": "voxcpm2-mps",
+                "name": "设计的音色",
+                "description": "低沉缓慢的男声",
+                "voice_prompt": "低沉、缓慢、有磁性的男声",
+                "preview_text": "欢迎收听今晚的节目。",
+            },
+        )
+        assert r.status_code == 200, r.text
+        voice = r.json()
+        assert voice["origin"] == "designed"
+        assert voice["design"]["engine_id"] == "voxcpm2-mps"
+        assert voice["design"]["preview_text"] == "欢迎收听今晚的节目。"
+        # ADR-0010: the preview sample became the reference, transcript attached.
+        ref = voice["reference"]
+        assert ref["format"] == "wav" and ref["sha256"]
+        assert ref["transcript"] == "欢迎收听今晚的节目。"
+        assert voice["bindings"]["voxcpm2-mps"]["voice_id"].startswith("voxcpm2-design-")
+
+        # The design call reached the worker with the official prefix syntax,
+        # no reference audio, and verbatim (never-normalized) description.
+        assert len(payloads) == 1
+        assert payloads[0]["design"] is True
+        assert "ref_audio" not in payloads[0]
+        assert payloads[0]["text"] == "(低沉、缓慢、有磁性的男声)欢迎收听今晚的节目。"
+
+        # ADR-0010 hardening: later synthesis of the designed voice runs the
+        # existing pure reference-cloning channel — ref_audio is the sample,
+        # and the design flag is gone (pipeline untouched).
+        gen = c.post(
+            "/generations",
+            json={"engine_id": "voxcpm2-mps", "text": "设计音色也能生成。", "voice_id": voice["id"]},
+        )
+        assert gen.status_code == 200, gen.text
+        assert gen.json()["status"] == "succeeded"
+        clone_payloads = payloads[1:]
+        assert clone_payloads and all("design" not in p for p in clone_payloads)
+        assert all(p.get("ref_audio") for p in clone_payloads)
+
+
+def test_capability_matrix_includes_voxcpm2_voice_design(client):
+    """/capability-matrix 合并运行时声明：voice_design=True 如实上报。"""
+    engines = client.get("/engines").json()["engines"]
+    by_id = {e["id"]: e for e in engines}
+    if "voxcpm2-mps" not in by_id:  # registered only on Apple Silicon
+        import pytest
+
+        pytest.skip("voxcpm2-mps not registered on this platform")
+    assert by_id["voxcpm2-mps"]["capabilities"]["voice_design"] is True
+
+
+# --- capability/implementation contract (spec #54 user story 16) --------------
+
+
+def test_every_voice_design_capable_engine_implements_design_voice(tmp_path):
+    """契约：任何声明 voice_design=True 的引擎必须自己实现 design_voice —
+    声明为真、调用即 NotImplementedError 的错位声明（issue #57）不允许再出现。
+    遍历默认注册表的全部引擎。"""
+    from voiceclone_sidecar.registry import Engine, default_registry
+
+    base_impl = Engine.design_voice
+    registry = default_registry(output_dir=tmp_path, env={})
+    checked = 0
+    for engine in registry.list():
+        if engine.capabilities().voice_design:
+            assert type(engine).design_voice is not base_impl, (
+                f"engine {engine.engine_id} declares voice_design=True but does "
+                "not implement design_voice"
+            )
+            checked += 1
+    assert checked >= 1  # the fake engine at minimum

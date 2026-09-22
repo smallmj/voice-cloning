@@ -59,6 +59,11 @@ CASES: list[tuple[str, str]] = [
     ("半场得到50分", "半场得到五十分"),
     ("这条视频时长2分30秒", "这条视频时长二分钟三十秒"),
     ("$0.99", "零美元九十九美分"),
+    # --- issue #56 ①非语言标签：方括号英文标签是正文一部分，原样透传 ---
+    ("[laughing]", "[laughing]"),
+    ("他讲到一半[laughing]停了一下", "他讲到一半[laughing]停了一下"),
+    ("他叹了口气[sigh]然后说3个苹果", "他叹了口气[sigh]然后说三个苹果"),
+    ("今天25°C[sigh]别提了", "今天二十五摄氏度[sigh]别提了"),
     # --- 已是规范写法：不产生副作用 ---
     ("今天是二零二四年三月五日", "今天是二零二四年三月五日"),
     ("三个苹果", "三个苹果"),
@@ -107,3 +112,73 @@ def test_generations_use_normalized_text(client, sidecar):
     assert r.status_code == 200
     record = r.json()
     assert record["normalized_text"] == "今天是二零二四年三月五日，共三条"
+
+
+def test_english_description_with_digits_is_protected_by_fixed_ordering(client):
+    """Issue #56 ②：含数字的英文描述（如 "a 30-year-old voice"）不被归一化
+    改成中文。
+
+    这个保证**不来自归一化层本身**（ADR-0008 层的职责是中文正文的数字/日期/
+    单位，纯英文串里的数字仍会被转读——下方第一段断言锁定该现状，防止有人
+    误以为本层提供了跨语言保护），而是来自固定的拼接时序（spec #54 /
+    CONTEXT.md「控制指令」词条）：先归一化正文、后在引擎适配层拼接控制指令，
+    控制指令永不经归一化。引擎侧时序锁定见
+    test_voxcpm2.py::test_control_instruction_is_appended_after_normalization。
+    """
+    r = client.post("/normalize", json={"text": "a 30-year-old voice"})
+    assert r.json()["normalized"] == "a 三十-year-old voice"  # 本层现状：会转读
+    # ③快速路径：无数字文本（含纯标签文本）走 no-op 快速路径，changed=False。
+    r2 = client.post("/normalize", json={"text": "[laughing] [sigh]"})
+    assert r2.json() == {"normalized": "[laughing] [sigh]", "changed": False}
+
+
+# --- US19: 归一化预览如实显示将要合成的完整文本（issue #54 review 修复）------
+
+
+def test_normalize_with_engine_context_shows_control_instruction_prefix(client):
+    """US19：带引擎上下文（engine_id + 与生成一致的 params）时，预览返回
+    引擎适配层拼出的完整待合成文本——控制指令前缀如实可见，不再只显示
+    归一化后的正文。fake-instruct 是测试缝隙引擎，其适配层与 VoxCPM2 一样
+    在归一化后的正文前拼 `(指令)`。"""
+    r = client.post(
+        "/normalize",
+        json={
+            "text": "今天卖出3个苹果",
+            "engine_id": "fake-instruct",
+            "params": {"control_instruction": "warm female voice"},
+        },
+    )
+    body = r.json()
+    assert body["normalized"] == "(warm female voice)今天卖出三个苹果"
+    assert body["changed"] is True
+    assert body["engine_adapter_applied"] is True
+
+
+def test_normalize_engine_context_without_instruction_is_plain_preview(client):
+    """无控制指令时引擎上下文不改写文本，披露位为 False——预览不撒谎也
+    不多嘴。"""
+    r = client.post(
+        "/normalize",
+        json={"text": "今天卖出3个苹果", "engine_id": "fake-instruct", "params": {}},
+    )
+    assert r.json() == {
+        "normalized": "今天卖出三个苹果",
+        "changed": True,
+        "engine_adapter_applied": False,
+    }
+
+
+def test_normalize_without_engine_context_keeps_legacy_shape(client):
+    """不带引擎上下文（或 engine_id 未知）时保持既有形状——旧调用方与
+    回归数据表不受影响。"""
+    r = client.post("/normalize", json={"text": "3个苹果"})
+    assert r.json() == {"normalized": "三个苹果", "changed": True}
+    r2 = client.post(
+        "/normalize",
+        json={
+            "text": "3个苹果",
+            "engine_id": "no-such-engine",
+            "params": {"control_instruction": "x"},
+        },
+    )
+    assert r2.json() == {"normalized": "三个苹果", "changed": True}

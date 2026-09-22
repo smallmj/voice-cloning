@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from voiceclone_sidecar.secrets import (
+from voiceclone_sidecar.key_store import (
     KeyStore,
     KeyStoreError,
     MemoryBackend,

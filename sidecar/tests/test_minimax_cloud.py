@@ -44,8 +44,8 @@ from voiceclone_sidecar.engines.minimax_cloud import (
     TARGET_MODEL,
     MiniMaxCloudEngine,
 )
+from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
 from voiceclone_sidecar.registry import GenerationRequest
-from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
 
 def tmp_dir():

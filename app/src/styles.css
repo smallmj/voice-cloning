@@ -817,3 +817,17 @@ details.matrix-group > summary {
 details.matrix-group > summary::-webkit-details-marker { display: revert; }
 details.matrix-group > summary:hover strong { opacity: 0.85; }
 .matrix-group-body { padding-top: var(--sp-2); }
+
+/* Issue #57: non-verbal tag quick-insert buttons under the generate text
+   field — compact chip row, reuses existing button base + design tokens. */
+.nv-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.nv-tags .nv-tag {
+  font-size: var(--fs-sm);
+  padding: 1px var(--sp-2);
+  background: none;
+}

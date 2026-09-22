@@ -61,3 +61,9 @@
 
 - 设计文档、ADR、研究笔记：随仓库以 AGPL-3.0 授权。
 - 图标/占位头像若无另行标注，为仓库自绘或公有领域素材。
+
+## 8. 打包的第三方数据文件（issue #56）
+
+| 文件 | 来源 | 许可证 |
+| --- | --- | --- |
+| `sidecar/voiceclone_sidecar/data/cmudict-mini.dict.gz` | CMUdict 0.7b（经 PyPI `cmudict==1.1.3` 附带数据精简生成；精简口径见同目录 `cmudict-mini.dict.gz.README.md`） | BSD 风格（Carnegie Mellon University，原文见 `cmudict-mini-LICENSE`）。仅作词典数据再分发，保留版权声明于本目录 |

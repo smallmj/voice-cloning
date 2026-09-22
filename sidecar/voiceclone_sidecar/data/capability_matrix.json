@@ -606,10 +606,10 @@
         },
         {
           "field": "语种与方言",
-          "value": "30 种语言 + 9 种中文方言（粤/川/吴等，方言按方言词汇书写）；厂商口径，本仓库尚未实测",
+          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径），真机抽查见验证工单——中文/英文/主流方言随回归验证，其余语种未逐语种验证",
           "verification": "vendor",
           "source": "上游 README；官方 usage guide",
-          "date": "2026-09-20"
+          "date": "2026-09-22"
         },
         {
           "field": "文本归一化",
@@ -632,6 +632,14 @@
           "verification": "unknown",
           "source": "issue #25 待办",
           "date": "2026-09-20"
+        },
+        {
+          "field": "控制指令（control_instruction）",
+          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；真机听感随验证工单",
+          "verification": "verified",
+          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）",
+          "date": "2026-09-22",
+          "note": "真机听感验收（设计/克隆音色 + 控制指令）随验证工单"
         }
       ],
       "performance": [
@@ -673,7 +681,7 @@
         },
         {
           "field": "能力面",
-          "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据",
+          "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据；语种声明扩为官方 30 语种全量清单（HF 模型卡口径）——声明性支持（官方口径），真机抽查见验证工单（issue #56）",
           "verification": "verified",
           "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）",
           "date": "2026-09-20"
@@ -685,6 +693,14 @@
           "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 3090 真机验证脚本（issues #49/#50）；参数面与 voxcpm2-mps 共享基类（测试 test_cuda_and_mps_share_the_base 锁定）",
           "date": "2026-09-22",
           "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。3090 端到端性能数字仍为 unverified（performance 条目）。issue #52 证据终态核对时补齐此前缺失的本条"
+        },
+        {
+          "field": "控制指令（control_instruction）",
+          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；真机听感随验证工单",
+          "verification": "verified",
+          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）",
+          "date": "2026-09-22",
+          "note": "真机听感验收（设计/克隆音色 + 控制指令）随验证工单"
         }
       ],
       "performance": [

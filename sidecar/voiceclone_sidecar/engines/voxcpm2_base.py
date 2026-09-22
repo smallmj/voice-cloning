@@ -170,6 +170,15 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
         ),
         ParamSpec(
+            name="control_instruction",
+            label="控制指令",
+            kind="textarea",
+            default="",
+            layer="engine",
+            help="控制指令（VoxCPM 官方语法，英文圆括号前缀）：写在待合成文本开头的自然语言声音描述，用于音色设计与克隆风格控制；建议英文描述（如 warm female voice）；用于音色设计与克隆风格控制。在文本归一化之后拼接进正文开头（永不经归一化层，spec #54 / ADR-0008 时序），克隆与设计音色通用。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+        ),
+        ParamSpec(
             name="seed",
             label="随机种子",
             kind="number",
@@ -225,6 +234,14 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
     """Canonical -> wire adaptation: pronunciation rewriting + params.
 
     The user-visible values never reach the engine unconverted (ADR-0018).
+
+    Fixed ordering (spec #54 / CONTEXT.md「控制指令」「发音标注」): the text
+    arriving here is ALREADY normalized (the pipeline applies the ADR-0008
+    layer centrally before any engine adapter runs). Pronunciation rewriting
+    and the control-instruction prefix are appended HERE, after
+    normalization — a control instruction containing digits or English
+    descriptions therefore never passes through the normalization layer and
+    reaches the engine verbatim.
     """
     params = params or {}
     wire: dict = {}
@@ -233,6 +250,12 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
         # {ni3} phoneme syntax is only valid with normalize=False — the
         # adapter OWNS that invariant (upstream usage guide).
         text = pronunciation.rewrite(text, str(ann), "voxcpm", log)
+    # Control instruction: official `(instruction)text` parenthesized prefix,
+    # concatenated AFTER normalization (see docstring). Empty value is never
+    # forwarded — neither into the text nor onto the wire.
+    control = str(params.get("control_instruction") or "").strip()
+    if control:
+        text = f"({control}){text}"
     for key in (
         "cfg_value",
         "inference_timesteps",
@@ -291,9 +314,16 @@ class VoxCPM2EngineBase(InstallableEngine):
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
-            # 30 languages vendor-verified; zh/en are the ones the vendor
-            # itself emphasizes and the only ones we could exercise here.
-            languages=("zh", "en"),
+            # Official 30-language list (issue #56; the `language` field of
+            # the HF model card openbmb/VoxCPM2 — declarative support per
+            # the vendor's own claim; real-machine spot checks are tracked
+            # by the verification ticket. No language selector: the model
+            # follows the text itself, there is NO language argument).
+            languages=(
+                "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el",
+                "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no",
+                "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
+            ),
             voice_cloning=True,
             voice_design=False,
             pronunciation_control=True,  # {ni3} phoneme syntax (verified)

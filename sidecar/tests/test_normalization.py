@@ -59,6 +59,11 @@ CASES: list[tuple[str, str]] = [
     ("半场得到50分", "半场得到五十分"),
     ("这条视频时长2分30秒", "这条视频时长二分钟三十秒"),
     ("$0.99", "零美元九十九美分"),
+    # --- issue #56 ①非语言标签：方括号英文标签是正文一部分，原样透传 ---
+    ("[laughing]", "[laughing]"),
+    ("他讲到一半[laughing]停了一下", "他讲到一半[laughing]停了一下"),
+    ("他叹了口气[sigh]然后说3个苹果", "他叹了口气[sigh]然后说三个苹果"),
+    ("今天25°C[sigh]别提了", "今天二十五摄氏度[sigh]别提了"),
     # --- 已是规范写法：不产生副作用 ---
     ("今天是二零二四年三月五日", "今天是二零二四年三月五日"),
     ("三个苹果", "三个苹果"),
@@ -107,3 +112,21 @@ def test_generations_use_normalized_text(client, sidecar):
     assert r.status_code == 200
     record = r.json()
     assert record["normalized_text"] == "今天是二零二四年三月五日，共三条"
+
+
+def test_english_description_with_digits_is_protected_by_fixed_ordering(client):
+    """Issue #56 ②：含数字的英文描述（如 "a 30-year-old voice"）不被归一化
+    改成中文。
+
+    这个保证**不来自归一化层本身**（ADR-0008 层的职责是中文正文的数字/日期/
+    单位，纯英文串里的数字仍会被转读——下方第一段断言锁定该现状，防止有人
+    误以为本层提供了跨语言保护），而是来自固定的拼接时序（spec #54 /
+    CONTEXT.md「控制指令」词条）：先归一化正文、后在引擎适配层拼接控制指令，
+    控制指令永不经归一化。引擎侧时序锁定见
+    test_voxcpm2.py::test_control_instruction_is_appended_after_normalization。
+    """
+    r = client.post("/normalize", json={"text": "a 30-year-old voice"})
+    assert r.json()["normalized"] == "a 三十-year-old voice"  # 本层现状：会转读
+    # ③快速路径：无数字文本（含纯标签文本）走 no-op 快速路径，changed=False。
+    r2 = client.post("/normalize", json={"text": "[laughing] [sigh]"})
+    assert r2.json() == {"normalized": "[laughing] [sigh]", "changed": False}

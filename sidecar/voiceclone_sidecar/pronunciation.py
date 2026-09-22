@@ -17,10 +17,58 @@ transformation — unit-testable without any model.
 
 from __future__ import annotations
 
+import gzip
 import re
+from functools import lru_cache
+from pathlib import Path
 
 _PINYIN_RE = re.compile(r"^[a-zü]+[1-5]?$")
-_ANN_LINE_RE = re.compile(r"^\s*(\S)\s*[=:]\s*([a-zü]+[1-5]?)\s*$")
+# Line separator is ``=`` / ``:`` (canonical) or ``|`` (issue #56 English
+# form ``词|ARPAbet``). The key is a single CJK character or an English word.
+_ANN_LINE_RE = re.compile(r"^\s*(\S+)\s*([=:|])\s*(.+?)\s*$")
+_ENGLISH_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z'-]*$")
+# The closed ARPAbet phone inventory (CMUdict symbols; stress digits 0/1/2
+# are carried by the token suffix). Validating against the SET — not just
+# the shape — is what makes "NOT A PHONEME" a bad annotation instead of
+# three fake phones.
+_ENGLISH_WORD_RE = re.compile(r"^[A-Za-z][A-Za-z'-]*$")
+
+_ARPABET_PHONES = frozenset(
+    ["AA", "AE", "AH", "AO", "AW", "AY", "B", "CH", "D", "DH", "EH", "ER", "EY", "F", "G", "HH", "IH", "IY", "JH", "K", "L", "M", "N", "NG", "OW", "OY", "P", "R", "S", "SH", "T", "TH", "UH", "UW", "V", "W", "Y", "Z", "ZH"]
+)
+
+
+def _is_arpabet_tokens(tokens: list[str]) -> bool:
+    return bool(tokens) and all(
+        (base := t.rstrip("012")) in _ARPABET_PHONES
+        and (t == base or t[len(base):] in ("0", "1", "2"))
+        for t in tokens
+    )
+
+
+# Bundled slim CMUDict (CMUdict 0.7b subset, offline — see
+# voiceclone_sidecar/data/cmudict-mini.dict.gz.README.md). Runtime NEVER
+# downloads anything: the file ships with the repository.
+_CMUDICT_PATH = Path(__file__).with_name("data") / "cmudict-mini.dict.gz"
+
+
+@lru_cache(maxsize=1)
+def _cmudict() -> dict[str, tuple[str, ...]]:
+    d: dict[str, tuple[str, ...]] = {}
+    with gzip.open(_CMUDICT_PATH, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            word, phones = line.split(" ", 1)
+            d[word] = tuple(phones.split())
+    return d
+
+
+def cmudict_lookup(word: str) -> tuple[str, ...] | None:
+    """ARPAbet phones for an English word from the bundled offline CMUDict,
+    or None when unknown (the annotation degrades to the original text)."""
+    return _cmudict().get(word.lower().strip())
 
 # Standard tone-mark placement: mark the first 'a'; else first 'o'; else
 # first 'e'; else the 'u' of a trailing "iu" / the 'i' of a trailing "ui";
@@ -36,11 +84,20 @@ _MARK_TABLE = {
 
 
 def parse_annotations(spec: str) -> tuple[dict[str, str], list[str]]:
-    """Parse the canonical ``汉字=拼音`` block.
+    """Parse the canonical annotation block (issue #23 + #56).
+
+    Line forms, all sharing this one entry point:
+
+    - ``汉字=拼音`` (or ``汉字:拼音``) — the Chinese pinyin route;
+    - ``词|ARPAbet`` — the issue-#56 English route, explicit phones;
+    - ``词=词2`` / ``词=词2|ARPAbet`` / ``词=ARPAbet`` — English key with a
+      dictionary-lookup word, an explicit ``word|ARPAbet`` pair, or bare
+      ARPAbet tokens.
 
     Returns ``(annotations, errors)``; errors are user-facing strings. An
-    entry is skipped (never half-applied) when it is malformed, when the
-    pinyin fails validation, or when the key is not a single character.
+    entry is skipped (never half-applied) when it is malformed or fails
+    validation. Values are stored raw; the per-grammar ``to_*`` functions
+    route them (pinyin vs. CMUDict) by content.
     """
     annotations: dict[str, str] = {}
     errors: list[str] = []
@@ -51,12 +108,29 @@ def parse_annotations(spec: str) -> tuple[dict[str, str], list[str]]:
         if not m:
             errors.append(f"第 {lineno} 行无法解析：{line.strip()}")
             continue
-        char, pinyin = m.group(1), m.group(2)
-        if not _PINYIN_RE.match(pinyin):
-            errors.append(f"第 {lineno} 行拼音无效：{pinyin}")
-            continue
-        annotations[char] = pinyin
+        key, _sep, value = m.group(1), m.group(2), m.group(3)
+        if _is_pinyin_entry(key, value):
+            annotations[key] = value
+        elif _is_english_entry(key, value):
+            annotations[key.lower()] = value
+        else:
+            errors.append(f"第 {lineno} 行标注无效：{line.strip()}")
     return annotations, errors
+
+
+def _is_pinyin_entry(key: str, value: str) -> bool:
+    """Single CJK character with a valid pinyin value (canonical #23 form)."""
+    return len(key) == 1 and not key.isascii() and bool(_PINYIN_RE.match(value))
+
+
+def _is_english_entry(key: str, value: str) -> bool:
+    if not _ENGLISH_KEY_RE.match(key):
+        return False
+    phones = value.split("|", 1)[1] if "|" in value else value
+    tokens = [t.upper() for t in phones.split()]
+    if _is_arpabet_tokens(tokens):
+        return True  # explicit ARPAbet (``world|W ER1 L D`` or bare tokens)
+    return bool(_ENGLISH_WORD_RE.match(value))  # dictionary-lookup word
 
 
 def _split_tone(pinyin: str) -> tuple[str, int]:
@@ -122,14 +196,52 @@ def to_dots(text: str, annotations: dict[str, str]) -> str:
     return out
 
 
-def to_voxcpm(text: str, annotations: dict[str, str]) -> str:
-    """VoxCPM2 grammar: the annotated character is replaced by a braced
-    pinyin syllable with lowercase tone digit: ``你`` + ``ni3`` -> ``{ni3}``
-    (official phoneme-input syntax; only valid while the engine's
-    ``normalize`` stays False, which this engine's adapter guarantees)."""
+def _voxcpm_phoneme_tag(key: str, value: str, log) -> str | None:
+    """Route one annotation entry to a VoxCPM ``{...}`` phoneme tag.
+
+    Routing is by CONTENT (issue #56): a Chinese entry keeps the pinyin form
+    (lowercase + tone digit); an English entry goes through the CMUDict
+    route — explicit ARPAbet tokens (``world|W ER1 L D`` / bare ``W ER1 L
+    D``) pass through uppercased, a plain word is looked up in the bundled
+    offline dictionary. Returns None for a bad annotation — the caller
+    degrades to the original text.
+    """
+    if len(key) == 1 and not key.isascii():
+        return f"{{{value}}}"  # parse_annotations already validated the pinyin
+    phones = value.split("|", 1)[1] if "|" in value else value
+    tokens = [t.upper() for t in phones.split()]
+    if _is_arpabet_tokens(tokens):
+        return "{" + " ".join(tokens) + "}"
+    hit = cmudict_lookup(value)
+    if hit:
+        return "{" + " ".join(hit) + "}"
+    if log:
+        log(f"发音标注：CMUDict 未收录「{value}」（该词保留原文）")
+    return None
+
+
+def to_voxcpm(text: str, annotations: dict[str, str], log=None) -> str:
+    """VoxCPM2 grammar (issue #23 + #56).
+
+    Chinese: the annotated character is replaced by a braced pinyin syllable
+    with lowercase tone digit: ``你`` + ``ni3`` -> ``{ni3}``. English: the
+    annotated word is replaced by braced ARPAbet phones via the CMUDict
+    route (``world|W ER1 L D`` -> ``{W ER1 L D}``). Both share the same
+    annotation entry and brace syntax (official phoneme input; only valid
+    while the engine's ``normalize`` stays False, which this engine's
+    adapter guarantees). Bad annotations degrade to the original text.
+    """
     out = text
-    for char, pinyin in annotations.items():
-        out = out.replace(char, f"{{{pinyin}}}")
+    for key, value in annotations.items():
+        tag = _voxcpm_phoneme_tag(key, value, log)
+        if tag is None:
+            continue  # degrade: original text stays untouched
+        if len(key) == 1 and not key.isascii():
+            out = out.replace(key, tag)
+        else:
+            # English words replace whole-word occurrences only ("world"
+            # must never eat "worldwide").
+            out = re.sub(rf"\b{re.escape(key)}\b", tag, out, flags=re.IGNORECASE)
     return out
 
 
@@ -150,5 +262,5 @@ def rewrite(text: str, spec: str, grammar: str, log=None) -> str:
     if grammar == "dots":
         return to_dots(text, annotations)
     if grammar == "voxcpm":
-        return to_voxcpm(text, annotations)
+        return to_voxcpm(text, annotations, log)
     raise ValueError(f"unknown pronunciation grammar: {grammar!r}")

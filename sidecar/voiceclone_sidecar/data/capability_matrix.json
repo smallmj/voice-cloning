@@ -677,6 +677,14 @@
           "verification": "verified",
           "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）",
           "date": "2026-09-20"
+        },
+        {
+          "field": "生成参数",
+          "value": "同 voxcpm2-mps 条目（同一基类、同一 ParamSpec 面）：cfg_value/inference_timesteps/min_len/max_len/retry_badcase/max_times/ratio_threshold 均真实生效；seed 不是上游 generate() 参数——可复现性由 worker 侧 torch.manual_seed 实现（issue #49）；denoise 在离线安装形态（load_denoiser=False）下为 no-op（issue #50）",
+          "verification": "verified",
+          "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 3090 真机验证脚本（issues #49/#50）；参数面与 voxcpm2-mps 共享基类（测试 test_cuda_and_mps_share_the_base 锁定）",
+          "date": "2026-09-22",
+          "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。3090 端到端性能数字仍为 unverified（performance 条目）。issue #52 证据终态核对时补齐此前缺失的本条"
         }
       ],
       "performance": [

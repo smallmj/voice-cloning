@@ -18,6 +18,18 @@ _Avoid_: 克隆, voice clone, 复刻
 用文字描述创造一个并不存在的声音，不需要参考音频。
 _Avoid_: 文生音色, 造音, TTS 造音
 
+**控制指令 (Control Instruction)**:
+写在待合成文本开头的自然语言声音描述（VoxCPM 语法为英文圆括号前缀，如 `(warm female voice)`），用于音色设计与克隆声音的风格控制。它是**引擎语法**，在文本归一化之后拼接，永不经归一化层。
+_Avoid_: 风格标签, 情感参数, style prompt
+
+**非语言标签 (Non-verbal Tag)**:
+插入正文中间的英文方括号标记（如 `[laughing]`、`[sigh]`），让引擎发出非语言声音。它是**正文的一部分**，文本归一化与发音标注改写必须原样保留，不得破坏或翻译。
+_Avoid_: 语气词, 拟声词, 特效标记
+
+**发音标注 (Pronunciation Annotation)**:
+用户对单个词的显式读音标注（如 `你|ni3`），由规范层按引擎语法改写为音素（中文拼音 `{ni3}`、英文 CMUDict `{W ER1 L D}`）。它与文本归一化的执行顺序是固定的：先归一化、后标注改写。
+_Avoid_: 音标, 多音字标注, phoneme tag
+
 **参考音频 (Reference Sample)**:
 用于复刻的输入录音。
 _Avoid_: 样本音频, 底模音频, prompt audio, 提示音频

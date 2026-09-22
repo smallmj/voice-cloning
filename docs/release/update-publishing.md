@@ -23,8 +23,8 @@ electron-builder 已在 `app/electron-builder.json5` 配置（`productName: "Voi
 - **不要**在发布前手工重命名 exe/dmg，否则清单中的 sha512 与 URL 全部失配。
 - electron-builder 默认产物名（`version` 取自 `app/package.json`）：
   - macOS：`VoiceClone-<版本>-arm64.dmg`（另有 `VoiceClone-<版本>-arm64-mac.zip`，可选附带）
-  - Windows：`VoiceClone Setup <版本>.exe`
-- 发布资产时直接上传构建目录 `app/release/` 下的原始文件名。
+  - Windows：`VoiceClone Setup <版本>.exe` — **注意**：GitHub 上传时会把资产名里的空格规范化为点号（`VoiceClone.Setup.<版本>.exe`），因此 `latest.yml` 里的 `path`/`url` 必须写成 GitHub 上**实际显示的资产名**（v1.1.0 即用点号形式），否则更新器按清单 URL 下载会 404。
+- 发布资产时直接上传构建目录 `app/release/` 下的原始文件名；electron-builder 未配置 publish 时不会自动生成 `latest*.yml`，需按上方字段手工生成（sha512 = 文件内容的 SHA-512，size = 字节数）。
 
 ## 正式版与预发布版
 

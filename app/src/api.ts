@@ -78,6 +78,9 @@ export interface EngineInfo {
   // disclosure, rendered verbatim on the settings page.
   requires_key?: boolean;
   key_configured?: boolean | null;
+  // Vendor identity (ADR-0015): engines of one vendor share one API key
+  // entry — the engines page groups its key inputs by this label.
+  vendor_label?: string | null;
   billing_note?: string | null;
   data_usage_note?: string | null;
   params?: ParamSpecInfo[];

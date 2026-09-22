@@ -177,6 +177,12 @@ def test_set_provider_accepts_registered_engine_and_persists(client):
 
 
 def test_local_tool_status_reports_uninstalled(client):
+    """Assumes the local tool is not installed on the machine running the
+    tests — the status endpoint reads the REAL runtime root, so once it has
+    been installed (e.g. by a manual smoke test) this contract moves to a
+    clean machine / CI."""
+    if client.get("/transcription/local/status").json()["installed"]:
+        pytest.skip("local transcription tool is installed on this machine")
     r = client.get("/transcription/local/status")
     assert r.status_code == 200
     data = r.json()
@@ -234,6 +240,11 @@ def test_transcribe_via_engine_provider_stores_transcript(client):
 
 
 def test_transcribe_with_uninstalled_local_tool_is_actionable(client):
+    """Same machine-state caveat as test_local_tool_status_reports_uninstalled:
+    the uninstalled-guidance contract is only reachable when the tool is
+    genuinely not installed on this machine's runtime root."""
+    if client.get("/transcription/local/status").json()["installed"]:
+        pytest.skip("local transcription tool is installed on this machine")
     voice = create_voice(client, seconds=4.0)
     r = client.post(f"/voices/{voice['id']}/transcribe", json={})
     assert r.status_code == 409
@@ -493,3 +504,16 @@ def test_cloud_transcribe_without_key_fails_actionably_and_never_falls_back(
         == "qwen3-tts-vc-cloud"
     )
     assert cloud_client.seen == []
+
+
+def test_darwin_model_repo_not_the_removed_one():
+    """Regression (install 'no reaction'): `mlx-community/whisper-small` was
+    removed from the Hub (404 on huggingface.co AND hf-mirror, verified
+    2026-09), so the weights step failed within a second of every install
+    attempt and the engine-page card looked dead. The config must point at a
+    repo that actually resolves (`whisper-small-mlx`, the surviving rename
+    with the same config.json + weights.npz payload)."""
+    cfg = transcription.PLATFORM_CONFIG.get("darwin")
+    if cfg is None:
+        pytest.skip("darwin config not present on this platform")
+    assert cfg["model_repo"] == "mlx-community/whisper-small-mlx"

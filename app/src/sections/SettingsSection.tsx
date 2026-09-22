@@ -152,8 +152,8 @@ export function SettingsSection({
     <section>
       <h2>设置</h2>
       <div className="hint">
-        软件级设置：外观、日志、默认下载源、备份恢复、转写提供方。引擎与转写工具的密钥、安装入口都在「引擎」页的卡片里
-        （云端引擎一律 BYOK：API Key 只保存在本机系统钥匙串中）。
+        软件级设置：外观、日志、默认下载源、备份恢复、转写提供方。云端引擎的厂商 API Key 与本地引擎的安装入口都在「引擎」页
+        （云端引擎一律 BYOK：每个厂商填一次 Key，只保存在本机系统钥匙串中）。
       </div>
 
       <div className="settings-engine">
@@ -306,7 +306,7 @@ export function SettingsSection({
           </label>
           {selectedTransEngineMissingKey && (
             <span className="hint">
-              该云端转写使用已接入引擎的 API Key（不新增密钥）；请先到「引擎」页该引擎卡片内配置该厂商的 API Key。
+              该云端转写使用已接入引擎的 API Key（不新增密钥）；请先到「引擎」页的「厂商 API Key」区配置该厂商的 API Key。
             </span>
           )}
           {/* Issue #42: no install button here — the 引擎 page's transcription

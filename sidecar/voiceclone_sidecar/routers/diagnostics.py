@@ -194,7 +194,7 @@ def build_router(ctx: AppContext) -> APIRouter:
             raise HTTPException(
                 status_code=409,
                 detail=f"engine {engine.engine_id} needs an API key; "
-                "set it on the settings page first",
+                "set it in the vendor API-key area on the engines page first",
             )
         if isinstance(engine, InstallableEngine) and not engine.is_installed():
             raise HTTPException(

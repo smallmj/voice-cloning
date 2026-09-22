@@ -8,6 +8,7 @@ exit code 3 and an actionable message.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -187,3 +188,20 @@ def test_synthesize_refuses_without_reference_audio(engine):
         engine.synthesize(
             GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None
         )
+
+
+def test_worker_constants_do_not_poison_sidecar_env(monkeypatch):
+    """Regression (install 'no reaction'): importing the gate constant out of
+    the worker script dragged indextts25_common_worker — which force-sets
+    os.environ['HF_HUB_OFFLINE']='1' for the worker process — into the
+    sidecar process. Every install-time download child then inherited offline
+    mode and failed instantly. Importing the engine module must NOT flip the
+    sidecar process into HF offline mode."""
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    import importlib
+
+    import voiceclone_sidecar.engines.indextts25_mps as mps
+
+    importlib.reload(mps)
+    assert os.environ.get("HF_HUB_OFFLINE") != "1"
+    assert mps.MPS_GATE_EXIT_CODE == 3

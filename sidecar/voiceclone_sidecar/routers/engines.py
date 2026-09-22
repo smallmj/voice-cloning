@@ -41,6 +41,9 @@ def build_router(ctx: AppContext) -> APIRouter:
                     "installed": e.is_installed() if isinstance(e, InstallableEngine) else True,
                     "requires_key": e.requires_key,
                     "key_configured": keys.get(e.engine_id) is not None if e.requires_key else None,
+                    # Vendor identity (ADR-0015 decision 3): the key UI groups
+                    # engines by vendor so one vendor's key is entered once.
+                    "vendor_label": getattr(e, "vendor_label", None) if e.requires_key else None,
                     "billing_note": e.billing_note,
                     "data_usage_note": e.data_usage_note,
                     "params": [p.to_dict() for p in e.param_specs()],
@@ -163,6 +166,12 @@ def build_router(ctx: AppContext) -> APIRouter:
 
         Reads ``ctx.registry`` (not the captured one) so the listing follows
         a settings-driven registry rebuild.
+
+        The transcription tool is deliberately NOT listed here (issue #42
+        follow-up): it has its own card on the engine page with install AND
+        uninstall, and surfacing it a second time as an always-gray
+        「mlx-whisper（本地）· 未安装 · 卸载」 row in the settings page's
+        local-model list only confused users.
         """
         from ..runtime import paths
 
@@ -171,18 +180,6 @@ def build_router(ctx: AppContext) -> APIRouter:
             if not isinstance(engine, InstallableEngine):
                 continue
             items.append(_model_entry(engine, engine.engine_id, engine.display_name))
-        try:
-            transcriber = ctx.local_transcriber()
-        except Exception:  # noqa: BLE001 - unsupported platform: just omit it
-            transcriber = None
-        if transcriber is not None:
-            items.append(
-                _model_entry(
-                    transcriber,
-                    LOCAL_TOOL_ID,
-                    transcriber.cfg.get("label", LOCAL_TOOL_ID),
-                )
-            )
         return {"models": items, "runtime_root": str(ctx.runtime_root or paths.runtime_root())}
 
     @router.delete("/engines/{engine_id}/model", dependencies=[Depends(ctx.require_auth)])

@@ -52,7 +52,13 @@ PLATFORM_CONFIG: dict[str, dict] = {
     "darwin": {
         "tool": "mlx-whisper",
         "packages": ["mlx-whisper>=0.3"],
-        "model_repo": "mlx-community/whisper-small",
+        # Diagnosed 2026-09: `mlx-community/whisper-small` is gone from the
+        # Hub (404 on huggingface.co AND hf-mirror), so the weights step
+        # failed within a second of every install attempt and the engine-page
+        # card looked dead ("点了没反应"). `whisper-small-mlx` is the surviving
+        # rename with the same payload (config.json + weights.npz), served by
+        # both endpoints (verified 200 via the mirror's revision API).
+        "model_repo": "mlx-community/whisper-small-mlx",
         "python_spec": "3.12",
         "label": "mlx-whisper（本地）",
     },

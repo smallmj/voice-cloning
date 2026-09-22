@@ -152,3 +152,24 @@ def test_generation_streams_logs_over_websocket(client, sidecar, ws_url):
             return gen_id
 
     asyncio.run(asyncio.wait_for(run(), timeout=30))
+
+
+def test_engines_list_exposes_vendor_label_for_keyed_engines(client):
+    """Issue #53: the key UI groups cloud engines by vendor so one vendor's
+    key is entered once (the two Qwen3-TTS cloud engines share 阿里百炼)."""
+    engines = client.get("/engines").json()["engines"]
+    # The fake test doubles mimic the BYOK surface but have no vendor; only
+    # real cloud engines must carry the vendor label the key UI groups by.
+    keyed = [e for e in engines if e["requires_key"] and not e["id"].startswith("fake")]
+    assert keyed, "expected at least one BYOK cloud engine"
+    for e in keyed:
+        assert isinstance(e["vendor_label"], str) and e["vendor_label"]
+    qwen = {
+        e["vendor_label"]
+        for e in engines
+        if e["id"].startswith("qwen3-tts-") and e["requires_key"]
+    }
+    assert qwen == {"阿里百炼"}
+    for e in engines:
+        if not e["requires_key"]:
+            assert e["vendor_label"] is None

@@ -8,6 +8,7 @@ import {
 import { CapabilityMatrixSection } from "../components/CapabilityMatrixSection";
 import { EngineCard } from "../components/EngineCard";
 import { TranscribeToolCard } from "../components/TranscribeToolCard";
+import { VendorKeysSection } from "../components/VendorKeysSection";
 import type { SectionId } from "../ui";
 
 export function EnginesSection({
@@ -34,41 +35,45 @@ export function EnginesSection({
   refreshEngines: () => Promise<void>;
 }) {
   const matrix = useCapabilityMatrix(baseUrl, token);
-  // BYOK keys live in the engine card now (issue #40); values are stored in
-  // the OS key chain via the same endpoints the settings page used.
-  const [keyBusy, setKeyBusy] = useState<Record<string, boolean>>({});
-  const [keyErrors, setKeyErrors] = useState<Record<string, string | null>>({});
+  // Vendor-level BYOK keys (issue #53): one input per vendor, applied to
+  // every engine of that vendor via the same per-engine keychain endpoints.
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
 
-  async function saveKey(engineId: string, key: string) {
+  async function saveKey(engineIds: string[], key: string) {
     if (!key) {
-      setKeyErrors((p) => ({ ...p, [engineId]: "API Key 不能为空" }));
+      setKeyError("API Key 不能为空");
       return;
     }
-    setKeyBusy((p) => ({ ...p, [engineId]: true }));
-    setKeyErrors((p) => ({ ...p, [engineId]: null }));
+    setKeyBusy(true);
+    setKeyError(null);
     try {
-      await apiJson(baseUrl, token, "/settings/keys", {
-        method: "PUT",
-        body: JSON.stringify({ engine_id: engineId, key }),
-      });
+      for (const engineId of engineIds) {
+        await apiJson(baseUrl, token, "/settings/keys", {
+          method: "PUT",
+          body: JSON.stringify({ engine_id: engineId, key }),
+        });
+      }
       await refreshEngines();
     } catch (e) {
-      setKeyErrors((p) => ({ ...p, [engineId]: e instanceof Error ? e.message : String(e) }));
+      setKeyError(e instanceof Error ? e.message : String(e));
     } finally {
-      setKeyBusy((p) => ({ ...p, [engineId]: false }));
+      setKeyBusy(false);
     }
   }
 
-  async function deleteKey(engineId: string) {
-    setKeyBusy((p) => ({ ...p, [engineId]: true }));
-    setKeyErrors((p) => ({ ...p, [engineId]: null }));
+  async function deleteKey(engineIds: string[]) {
+    setKeyBusy(true);
+    setKeyError(null);
     try {
-      await apiJson(baseUrl, token, `/settings/keys/${engineId}`, { method: "DELETE" });
+      for (const engineId of engineIds) {
+        await apiJson(baseUrl, token, `/settings/keys/${engineId}`, { method: "DELETE" });
+      }
       await refreshEngines();
     } catch (e) {
-      setKeyErrors((p) => ({ ...p, [engineId]: e instanceof Error ? e.message : String(e) }));
+      setKeyError(e instanceof Error ? e.message : String(e));
     } finally {
-      setKeyBusy((p) => ({ ...p, [engineId]: false }));
+      setKeyBusy(false);
     }
   }
 
@@ -76,8 +81,15 @@ export function EnginesSection({
     <section>
       <h2>引擎</h2>
       <div className="hint">
-        点击卡片选择用于生成的引擎；在此填写云端引擎密钥、安装本地引擎、查看能力矩阵。
+        点击卡片选择用于生成的引擎；在上方「厂商 API Key」区填写云端密钥、安装本地引擎、查看能力矩阵。
       </div>
+      <VendorKeysSection
+        engines={engines}
+        onSaveKey={saveKey}
+        onDeleteKey={deleteKey}
+        keyBusy={keyBusy}
+        keyError={keyError}
+      />
       <div className="engine-list">
         {engines.map((e) => (
           <EngineCard
@@ -89,10 +101,6 @@ export function EnginesSection({
             matrixEntry={matrixEntryFor(matrix, e.id)}
             onInstall={() => onInstall(e.id)}
             onSelect={() => onSelect(e.id)}
-            onSaveKey={saveKey}
-            onDeleteKey={deleteKey}
-            keyBusy={!!keyBusy[e.id]}
-            keyError={keyErrors[e.id] ?? null}
           />
         ))}
       </div>

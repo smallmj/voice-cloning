@@ -196,7 +196,10 @@ def test_models_listing_shape(client):
     body = client.get("/engines/models").json()
     assert "runtime_root" in body
     ids = {m["id"] for m in body["models"]}
-    assert "transcribe-local" in ids
+    # Issue #42 follow-up: the transcription tool is NOT a local-model row —
+    # it has its own engine-page card (install + uninstall); listing it a
+    # second time produced an always-gray settings-page uninstall button.
+    assert "transcribe-local" not in ids
     for m in body["models"]:
         assert set(m) >= {
             "id", "display_name", "installed", "model_dir",

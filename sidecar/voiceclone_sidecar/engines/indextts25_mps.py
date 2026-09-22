@@ -27,7 +27,12 @@ from __future__ import annotations
 
 from ..runtime import uvman
 from .indextts25_base import TORCH_VERSION, IndexTts25EngineBase
-from .indextts25_mps_worker import MPS_GATE_EXIT_CODE  # noqa: F401 - re-exported for tests
+
+# Import the gate constant from the NEUTRAL module (no side effects). It used
+# to come out of the worker script, which dragged indextts25_common_worker —
+# and its os.environ["HF_HUB_OFFLINE"]="1" — into the sidecar process, so all
+# install-time download children inherited offline mode and failed instantly.
+from .mps_gate import MPS_GATE_EXIT_CODE  # noqa: F401 - re-exported for tests
 
 LOCAL_WEIGHTS_ENV = "VOICECLONE_INDEXTTS25_LOCAL_WEIGHTS"
 

@@ -29,7 +29,10 @@ except ImportError:  # standalone run inside the engine venv
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import indextts25_common_worker as common
 
-MPS_GATE_EXIT_CODE = 3
+try:  # package import when imported as voiceclone_sidecar.engines.*
+    from .mps_gate import MPS_GATE_EXIT_CODE
+except ImportError:  # standalone run inside the engine venv
+    from mps_gate import MPS_GATE_EXIT_CODE
 
 _state = {"tts": None}
 

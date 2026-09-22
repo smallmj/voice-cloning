@@ -62,7 +62,7 @@ class CloudEngineBase:
         """
         return (
             f"引擎 {self.engine_id} 需要{self.vendor_label} API Key；"
-            "请在「设置」页配置后再生成"
+            "请在「引擎」页上方的厂商 API Key 区配置后再生成"
         )
 
     # -- key access ----------------------------------------------------------
@@ -73,7 +73,7 @@ class CloudEngineBase:
         key = self.key_store.get(self.engine_id)
         if not key:
             raise CloudEngineError(
-                f"尚未配置{self.vendor_label} API Key；请在「设置」页填入你的 API Key 后重试"
+                f"尚未配置{self.vendor_label} API Key；请在「引擎」页上方的厂商 API Key 区填入后重试"
             )
         return key
 

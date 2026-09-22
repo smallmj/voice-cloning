@@ -34,9 +34,11 @@ export function CapabilityMatrixSection({
         <div className="settings-list">
           {matrix.engines.map((e) => {
             const installedEngine = engines.find((x) => x.id === e.engine_id);
+            // Issue #53: each engine's evidence collapses behind a native
+            // disclosure triangle so the matrix stops being a wall of rows.
             return (
-              <div className="settings-engine" key={e.engine_id}>
-                <div className="settings-engine-head">
+              <details className="settings-engine matrix-group" key={e.engine_id}>
+                <summary className="settings-engine-head">
                   <strong>{e.display_name}</strong>
                   <span className="badge badge-on">
                     {e.kind === "cloud" ? "云端" : e.kind === "local" ? "本地" : "内置"}
@@ -50,59 +52,61 @@ export function CapabilityMatrixSection({
                         : ""}
                     </span>
                   )}
-                </div>
-                {e.role && <div className="hint">{e.role}</div>}
-                <table className="pref-table">
-                  <thead>
-                    <tr>
-                      <th>维度</th>
-                      <th>结论</th>
-                      <th>验证</th>
-                      <th>来源</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(e.evidence ?? []).map((f, idx) => (
-                      <tr key={idx}>
-                        <td>{f.field}</td>
-                        <td>{f.value}</td>
-                        <td>{VERIFY_LABELS[f.verification]}</td>
-                        <td>
-                          {f.source}
-                          {f.date ? `（${f.date}）` : ""}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {(e.performance ?? []).length > 0 && (
+                </summary>
+                <div className="matrix-group-body">
+                  {e.role && <div className="hint">{e.role}</div>}
                   <table className="pref-table">
                     <thead>
                       <tr>
-                        <th>环境</th>
-                        <th>RTF</th>
-                        <th>峰值显存</th>
+                        <th>维度</th>
+                        <th>结论</th>
                         <th>验证</th>
+                        <th>来源</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {e.performance!.map((p, idx) => (
+                      {(e.evidence ?? []).map((f, idx) => (
                         <tr key={idx}>
-                          <td>{p.env}</td>
-                          <td>{p.rtf != null ? p.rtf : "—"}</td>
+                          <td>{f.field}</td>
+                          <td>{f.value}</td>
+                          <td>{VERIFY_LABELS[f.verification]}</td>
                           <td>
-                            {p.peak_vram_bytes != null
-                              ? `${(p.peak_vram_bytes / 1024 ** 3).toFixed(1)} GB`
-                              : "—"}
+                            {f.source}
+                            {f.date ? `（${f.date}）` : ""}
                           </td>
-                          <td>{VERIFY_LABELS[p.verification]}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                )}
-                {e.notes && <div className="hint">{e.notes}</div>}
-              </div>
+                  {(e.performance ?? []).length > 0 && (
+                    <table className="pref-table">
+                      <thead>
+                        <tr>
+                          <th>环境</th>
+                          <th>RTF</th>
+                          <th>峰值显存</th>
+                          <th>验证</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {e.performance!.map((p, idx) => (
+                          <tr key={idx}>
+                            <td>{p.env}</td>
+                            <td>{p.rtf != null ? p.rtf : "—"}</td>
+                            <td>
+                              {p.peak_vram_bytes != null
+                                ? `${(p.peak_vram_bytes / 1024 ** 3).toFixed(1)} GB`
+                                : "—"}
+                            </td>
+                            <td>{VERIFY_LABELS[p.verification]}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {e.notes && <div className="hint">{e.notes}</div>}
+                </div>
+              </details>
             );
           })}
         </div>

@@ -14,10 +14,6 @@ export function EngineCard({
   matrixEntry,
   onInstall,
   onSelect,
-  onSaveKey,
-  onDeleteKey,
-  keyBusy,
-  keyError,
 }: {
   engine: EngineInfo;
   selected: boolean;
@@ -27,16 +23,10 @@ export function EngineCard({
   matrixEntry: MatrixEngine | null;
   onInstall: () => void;
   onSelect: () => void;
-  /** BYOK key management lives in the card now (issue #40). */
-  onSaveKey: (engineId: string, key: string) => Promise<void>;
-  onDeleteKey: (engineId: string) => Promise<void>;
-  keyBusy: boolean;
-  keyError: string | null;
 }) {
   const c = engine.capabilities;
   const installed = installStatus ? installStatus.installed : (engine.installed ?? true);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
   const detailParagraphs = detailsOpen ? engineDetailParagraphs(engine, matrixEntry) : [];
   return (
     <div
@@ -91,32 +81,10 @@ export function EngineCard({
         <CapBadge label={CAP_LABELS.commercial_license} on={c.commercial_license} />
         <CapBadge label={CAP_LABELS.upload_used_for_training} on={c.upload_used_for_training} />
       </div>
-      {/* Issue #40: key fill/clear moved into the card (same keychain endpoints). */}
-      {engine.requires_key && (
-        <div className="key-row" onClick={(ev) => ev.stopPropagation()}>
-          <input
-            type="password"
-            autoComplete="off"
-            placeholder="粘贴 API Key"
-            value={keyInput}
-            onChange={(ev) => setKeyInput(ev.target.value)}
-          />
-          <button
-            disabled={keyBusy || !keyInput.trim()}
-            onClick={() =>
-              void onSaveKey(engine.id, keyInput.trim()).then(() => setKeyInput(""))
-            }
-          >
-            {keyBusy ? "保存中…" : "保存"}
-          </button>
-          {engine.key_configured && (
-            <button disabled={keyBusy} onClick={() => void onDeleteKey(engine.id)}>
-              清除
-            </button>
-          )}
-          {keyError && <span className="error">{keyError}</span>}
-        </div>
-      )}
+      {/* Issue #53: key inputs moved OUT of the engine card — one row per
+          vendor in VendorKeysSection above the card list (the two Qwen3-TTS
+          cloud engines share one 阿里百炼 key). The card keeps only the
+          configured/missing badge. */}
       {/* Issue #40: per-engine model description lives behind 「详情」. */}
       <button
         className="details-toggle"

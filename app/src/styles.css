@@ -793,3 +793,27 @@ details.engine-params > summary {
   border-color: var(--accent, var(--border));
   font-weight: 600;
 }
+
+/* Issue #53: vendor-level API key area — one row per vendor, above the
+   engine card list. Replaces per-engine key inputs inside the cards. */
+.vendor-keys {
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  display: grid;
+  gap: var(--sp-3);
+}
+.vendor-keys h3 { margin: 0; }
+.vendor-key-row { display: grid; gap: var(--sp-1); }
+
+/* Issue #53: capability-matrix entries collapse behind a native disclosure
+   triangle — the header row stays visible, evidence tables fold away. */
+details.matrix-group > summary {
+  cursor: pointer;
+  list-style: revert; /* keep the triangle */
+}
+details.matrix-group > summary::-webkit-details-marker { display: revert; }
+details.matrix-group > summary:hover strong { opacity: 0.85; }
+.matrix-group-body { padding-top: var(--sp-2); }

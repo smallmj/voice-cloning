@@ -112,8 +112,13 @@ class FireRedTts3MpsEngine(InstallableEngine):
     engine_id = "fireredtts3-mps"
     display_name = "FireRedTTS3-Base（本地 · MPS · 实验性）"
 
-    def __init__(self, output_dir: Path | None = None, root: Path | None = None,
-                 env: dict | None = None, config: EngineConfig | None = None) -> None:
+    def __init__(
+        self,
+        output_dir: Path | None = None,
+        root: Path | None = None,
+        env: dict | None = None,
+        config: EngineConfig | None = None,
+    ) -> None:
         output_dir, env = resolve_seam(config, self.engine_id, output_dir, env)
         self.output_dir = Path(output_dir) if output_dir else None
         self.env = env
@@ -153,6 +158,47 @@ class FireRedTts3MpsEngine(InstallableEngine):
                 max=2**31 - 1,
                 layer="engine",
                 help="留空则不固定种子；同一音色与文本可用相同种子复现结果。",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+            ),
+            # issue #51: 复刻质量三参数（上游 generate() 形参直传，默认值与
+            # 上游一致且默认不发送——#38 口径；MPS 真机验证见 capability matrix）。
+            ParamSpec(
+                name="inference_cfg",
+                label="CFG 引导强度",
+                kind="number",
+                default=2.0,
+                min=1.0,
+                max=5.0,
+                step=0.5,
+                unit="x",
+                layer="engine",
+                help="文本引导强度（上游默认 2.0）。调大发音更贴文本、更稳，调大过头会更机械；与 dots.guidance_scale / voxcpm.cfg_value 同族。",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+            ),
+            ParamSpec(
+                name="n_timesteps",
+                label="扩散步数",
+                kind="number",
+                integer=True,
+                default=10,
+                min=4,
+                max=32,
+                step=1,
+                layer="engine",
+                help="扩散采样步数（上游默认 10）。步数越多音质上限越高，但耗时按比例增加；一般保持默认。",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+            ),
+            ParamSpec(
+                name="cross_fade_ms",
+                label="句间淡入淡出",
+                kind="number",
+                default=50,
+                min=0,
+                max=200,
+                step=10,
+                unit="ms",
+                layer="engine",
+                help="长文本逐句拼接时的交叉淡化时长（上游默认 50 ms）。句间衔接有断裂感可调大。",
                 applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
             ),
             UNEXPOSED_INSTRUCT,
@@ -204,34 +250,46 @@ class FireRedTts3MpsEngine(InstallableEngine):
             uvman.ensure_python(find_uv(log), PYTHON_SPEC, env=self.env, log=log)
 
         def step_venv(log, progress):
-            uvman.create_venv(find_uv(log), self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
+            uvman.create_venv(
+                find_uv(log), self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log
+            )
 
         def step_torch(log, progress):
             uv = find_uv(log)
-            venv_ = uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
+            venv_ = uvman.create_venv(
+                uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log
+            )
             # macOS arm64 wheels from the index bundle MPS; pinned exactly
             # (ADR-0002 rule 1). No explicit wheel downloads.
             uvman.pip_install(
-                uv, venv_,
+                uv,
+                venv_,
                 [f"torch=={TORCH_VERSION}", f"torchaudio=={TORCH_VERSION}"],
-                env=self.env, log=log,
+                env=self.env,
+                log=log,
             )
 
         def step_engine(log, progress):
             """Upstream source + patches + PoC-verified dependency set."""
             uv = find_uv(log)
-            venv_ = uvman.create_venv(uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log)
+            venv_ = uvman.create_venv(
+                uv, self.root, self.engine_id, PYTHON_SPEC, env=self.env, log=log
+            )
             # Dependencies verified as sufficient by the issue-#26 PoC:
             # no flash_attn (zero win_amd64 wheels / MPS-incompatible), no
             # fasttext (optional upstream dep), no torchcodec.
             uvman.pip_install(
-                uv, venv_,
+                uv,
+                venv_,
                 [
                     f"transformers=={TRANSFORMERS_VERSION}",
                     f"einops=={EINOPS_VERSION}",
-                    "regex", "wetext", "soundfile",
+                    "regex",
+                    "wetext",
+                    "soundfile",
                 ],
-                env=self.env, log=log,
+                env=self.env,
+                log=log,
             )
             zip_path = engine_dir / "fireredtts3-main.zip"
             local_upstream = self._local_upstream_root()
@@ -251,7 +309,9 @@ class FireRedTts3MpsEngine(InstallableEngine):
                     zip_path.parent,
                     [
                         self.env.get("VOICECLONE_FIREREDTTS3_URL", ENGINE_PACKAGE_URL),
-                        self.env.get("VOICECLONE_FIREREDTTS3_URL_FALLBACK", ENGINE_PACKAGE_URL_FALLBACK),
+                        self.env.get(
+                            "VOICECLONE_FIREREDTTS3_URL_FALLBACK", ENGINE_PACKAGE_URL_FALLBACK
+                        ),
                     ],
                     progress=lambda name, done, total: progress(f"engine:{name}", done, total),
                     log=log,
@@ -268,7 +328,9 @@ class FireRedTts3MpsEngine(InstallableEngine):
                 log(f"fireredtts3 patch: {line}")
 
         def step_weights(log, progress):
-            chain = sources.weight_sources(REPO, ms_repo=REPO, preferred=sources.weight_pref(self.env))
+            chain = sources.weight_sources(
+                REPO, ms_repo=REPO, preferred=sources.weight_pref(self.env)
+            )
             local = self._local_weights_root()
             for rel in WEIGHTS:
                 if local is not None and copy_from_local(local, rel, weights_dir / rel, log):
@@ -276,8 +338,11 @@ class FireRedTts3MpsEngine(InstallableEngine):
                 log(f"weights: downloading {rel}")
                 downloader.download_file(
                     downloader.DownloadSpec(path=rel, dest_name=rel),
-                    weights_dir, chain,
-                    progress=lambda name, done, total, _n=rel: progress(f"weights:{_n}", done, total),
+                    weights_dir,
+                    chain,
+                    progress=lambda name, done, total, _n=rel: progress(
+                        f"weights:{_n}", done, total
+                    ),
                     log=log,
                 )
             log(f"weights: {len(WEIGHTS)} files ready in {weights_dir}")
@@ -285,9 +350,21 @@ class FireRedTts3MpsEngine(InstallableEngine):
         return [
             installer.InstallStep("python", f"安装 uv 托管的 Python {PYTHON_SPEC}", step_python),
             installer.InstallStep("venv", "创建引擎独立 venv", step_venv, artifact=venv),
-            installer.InstallStep("torch", f"安装 torch/torchaudio {TORCH_VERSION}（PyPI，macOS arm64 自带 MPS）", step_torch, artifact=venv),
-            installer.InstallStep("engine", "下载 FireRedTTS3 上游源码并打补丁（SDPA / MPS / 精度 / seed 守卫）", step_engine, artifact=venv),
-            installer.InstallStep("weights", "准备 FireRedTTS3-Base 权重（约 12.3 GB）", step_weights),
+            installer.InstallStep(
+                "torch",
+                f"安装 torch/torchaudio {TORCH_VERSION}（PyPI，macOS arm64 自带 MPS）",
+                step_torch,
+                artifact=venv,
+            ),
+            installer.InstallStep(
+                "engine",
+                "下载 FireRedTTS3 上游源码并打补丁（SDPA / MPS / 精度 / seed 守卫）",
+                step_engine,
+                artifact=venv,
+            ),
+            installer.InstallStep(
+                "weights", "准备 FireRedTTS3-Base 权重（约 12.3 GB）", step_weights
+            ),
         ]
 
     def install(self, log, progress=None) -> dict:
@@ -323,7 +400,9 @@ class FireRedTts3MpsEngine(InstallableEngine):
         venv = paths.engine_venv_dir(self.root, self.engine_id)
         python = uvman.venv_python(venv)
         if not python.exists():
-            raise RuntimeError(f"engine venv is broken (no python at {python}); reinstall the engine")
+            raise RuntimeError(
+                f"engine venv is broken (no python at {python}); reinstall the engine"
+            )
         worker = Path(__file__).with_name("fireredtts3_mps_worker.py")
         # The PoC measured 11.7 GB peak on MPS; a long-lived worker pinning
         # that much unified memory is worse than a per-process reload for a
@@ -346,6 +425,11 @@ class FireRedTts3MpsEngine(InstallableEngine):
         }
         if params.get("seed") not in (None, ""):
             payload["seed"] = params["seed"]
+        # issue #51: quality params — #38 口径（默认值不发送），上游 generate()
+        # 的默认值（2.0 / 10 / 50）与 ParamSpec 默认一致，缺省即上游默认。
+        for key in ("inference_cfg", "n_timesteps", "cross_fade_ms"):
+            if params.get(key) not in (None, ""):
+                payload[key] = params[key]
         try:
             result = supervisor.request(payload, on_log=log)
         finally:

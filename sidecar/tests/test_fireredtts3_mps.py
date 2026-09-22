@@ -32,7 +32,8 @@ def test_install_step_order(engine):
 def test_torch_and_engine_pins(engine, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        uvman, "pip_install",
+        uvman,
+        "pip_install",
         lambda uv, venv, packages, env=None, log=None: calls.append(list(packages)),
     )
     monkeypatch.setattr(uvman, "find_uv", lambda *a, **k: Path("uv"))
@@ -116,13 +117,17 @@ def test_patch_fails_loudly_on_drift(tmp_path):
 
 def test_synthesize_requires_install(engine):
     with pytest.raises(RuntimeError, match="not installed"):
-        engine.synthesize(GenerationRequest(generation_id="g1", text="你好", params={}), lambda m: None)
+        engine.synthesize(
+            GenerationRequest(generation_id="g1", text="你好", params={}), lambda m: None
+        )
 
 
 def test_synthesize_requires_reference_audio(engine):
     engine.is_installed = lambda: True
     with pytest.raises(RuntimeError, match="参考音频"):
-        engine.synthesize(GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None)
+        engine.synthesize(
+            GenerationRequest(generation_id="g2", text="你好", params={}), lambda m: None
+        )
 
 
 def test_synthesize_requires_reference_text(engine):
@@ -132,7 +137,9 @@ def test_synthesize_requires_reference_text(engine):
     engine.is_installed = lambda: True
     with pytest.raises(RuntimeError, match="参考文本"):
         engine.synthesize(
-            GenerationRequest(generation_id="g3", text="你好", params={"ref_audio": "/tmp/ref.wav"}),
+            GenerationRequest(
+                generation_id="g3", text="你好", params={"ref_audio": "/tmp/ref.wav"}
+            ),
             lambda m: None,
         )
 
@@ -155,8 +162,102 @@ def test_worker_gate_refuses_without_torch(tmp_path):
     worker = Path(fireredtts3_mps.__file__).with_name("fireredtts3_mps_worker.py")
     proc = subprocess.run(
         [sys.executable, "-u", str(worker)],
-        input="", capture_output=True, text=True, timeout=60,
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 3
     assert '"fatal": true' in proc.stdout
     assert "torch is not importable" in proc.stdout
+
+
+# -- issue #51: quality params (inference_cfg / n_timesteps / cross_fade_ms) --
+
+
+def _fake_supervisor(monkeypatch, capture, tmp_path):
+    """Stub WorkerSupervisor so synthesize() records the wire payload."""
+    from voiceclone_sidecar.engines import worker_supervisor as ws
+
+    # synthesize() refuses a broken venv before reaching the supervisor —
+    # fake an engine venv python inside the tmp runtime root.
+    venv_python = tmp_path / "runtime" / "engines" / "fireredtts3-mps" / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("")
+
+    class FakeSupervisor:
+        def __init__(self, command, cwd, idle_timeout_s=0.0, max_requests=0):
+            pass
+
+        def request(self, payload, on_log=None):
+            capture.append(payload)
+            return {"audio_path": payload["output"], "sample_rate": 24000}
+
+        def unload(self):
+            pass
+
+    monkeypatch.setattr(ws, "WorkerSupervisor", FakeSupervisor)
+
+
+def test_synthesize_sends_quality_params(engine, tmp_path, monkeypatch):
+    capture = []
+    _fake_supervisor(monkeypatch, capture, tmp_path)
+    engine.is_installed = lambda: True
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(b"x")
+    engine.synthesize(
+        GenerationRequest(
+            generation_id="g4",
+            text="你好",
+            params={
+                "ref_audio": str(ref),
+                "ref_text": "参考文本",
+                "seed": 7,
+                "inference_cfg": 3.0,
+                "n_timesteps": 20,
+                "cross_fade_ms": 100,
+            },
+        ),
+        lambda m: None,
+    )
+    payload = capture[0]
+    assert payload["seed"] == 7
+    assert payload["inference_cfg"] == 3.0
+    assert payload["n_timesteps"] == 20
+    assert payload["cross_fade_ms"] == 100
+
+
+def test_synthesize_omits_unset_and_default_quality_params(engine, tmp_path, monkeypatch):
+    """#38 口径：默认值不发送——未设置的三个质量参数一律不出现在 wire payload
+    （上游默认 inference_cfg=2.0 / n_timesteps=10 / cross_fade_ms=50 兜底）。"""
+    capture = []
+    _fake_supervisor(monkeypatch, capture, tmp_path)
+    engine.is_installed = lambda: True
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(b"x")
+    engine.synthesize(
+        GenerationRequest(
+            generation_id="g5",
+            text="你好",
+            params={"ref_audio": str(ref), "ref_text": "参考文本"},
+        ),
+        lambda m: None,
+    )
+    payload = capture[0]
+    assert "seed" not in payload
+    assert "inference_cfg" not in payload
+    assert "n_timesteps" not in payload
+    assert "cross_fade_ms" not in payload
+
+
+def test_quality_param_specs_exposed_with_upstream_defaults(engine):
+    specs = {s.name: s for s in engine.param_specs()}
+    assert specs["inference_cfg"].default == 2.0
+    assert specs["inference_cfg"].exposed is True
+    assert specs["inference_cfg"].layer == "engine"
+    assert specs["n_timesteps"].default == 10
+    assert specs["n_timesteps"].integer is True
+    assert specs["cross_fade_ms"].default == 50
+    assert specs["cross_fade_ms"].unit == "ms"
+    for name in ("inference_cfg", "n_timesteps", "cross_fade_ms"):
+        assert specs[name].applies_to is not None

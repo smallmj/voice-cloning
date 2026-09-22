@@ -111,6 +111,16 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
     tts = load(request)
     prompt_audio, prompt_sr = torchaudio.load(str(ref_audio))
     seed = request.get("seed")
+    # issue #51: quality params — absent keys fall back to the upstream
+    # generate() defaults (inference_cfg=2.0 / n_timesteps=10 /
+    # cross_fade_ms=50); the adapter only forwards what the user set (#38).
+    quality: dict = {}
+    if request.get("inference_cfg") not in (None, ""):
+        quality["inference_cfg"] = float(request["inference_cfg"])
+    if request.get("n_timesteps") not in (None, ""):
+        quality["n_timesteps"] = int(request["n_timesteps"])
+    if request.get("cross_fade_ms") not in (None, ""):
+        quality["cross_fade_ms"] = float(request["cross_fade_ms"])
     gen, sr = tts.generate(
         language=request.get("language", "Chinese"),
         prompt_text=ref_text,
@@ -118,6 +128,7 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
         prompt_audio_sr=prompt_sr,
         text=request["text"],
         seed=int(seed) if seed not in (None, "") else None,
+        **quality,
     )
     # Write 16-bit PCM WAV ourselves — same output contract as the other
     # local workers (the peak self-check below refuses empty/silent files).

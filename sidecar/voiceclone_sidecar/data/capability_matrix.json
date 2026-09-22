@@ -528,6 +528,14 @@
           "date": "2026-09-20"
         },
         {
+          "field": "生成参数",
+          "value": "inference_cfg（CFG 引导强度，默认 2.0）、n_timesteps（扩散步数，默认 10）、cross_fade_ms（句间淡入淡出，默认 50）、seed 为真实生效参数，已暴露为引擎层 ParamSpec（默认值不发送，口径同 #38；上游默认与 UI 默认一致兜底）。stop_threshold 为 early-stop 判据：真机 0.1/0.5/0.9 三档输出逐字节相同（stop score 单步跳变越过阈值，取值不敏感），结论=披露不暴露。切句四参数（token_max_n/token_min_n/merge_len/do_split）与 do_clean 明确不声明；do_tn/use_wetext 维持 breaks-pipeline 不暴露（ADR-0018 决策 4）。",
+          "verification": "measured",
+          "source": "上游 generate() 签名（本机 patched checkout core.py L238）+ 真机验证脚本 debug/fw51_verify.py / fw51_verify_r2.py（debug/fw51_out/）",
+          "date": "2026-09-22",
+          "note": "真机验证（2026-09-22，M5 Pro MPS fp32）：V5 inference_cfg=1.0/3.0 与 n_timesteps=4/16 相对基线输出波形差 maxabs 0.92–1.45（明显可听差异），长文本 ASR 显示各档发音/韵律真实不同且均可懂；cross_fade_ms 在两句拼接文本上 0/50/200 ms 输出样点数 545280/544080/540480，与上游 fade_len 公式逐样本吻合（1200/4800 @24 kHz）；V6 stop_threshold 0.1/0.5/0.9 输出逐字节相同（maxabs=0.0）。已知残留：长文本存在上游缺字问题（issue 之外的 fw1 loop 在跟进），与本轮参数无关。"
+        },
+        {
           "field": "Instruct / 文生音色",
           "value": "上游宣传强于 Qwen3-TTS-VD 的文生音色，但 PoC 明确只验 Base 复刻；Instruct 权重未安装、未验证，参数以 wrong-mode 声明不暴露",
           "verification": "unverified",

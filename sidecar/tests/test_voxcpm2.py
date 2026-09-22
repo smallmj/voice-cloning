@@ -150,3 +150,161 @@ def test_cuda_and_mps_share_the_base():
     a = VoxCPM2MpsEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
     b = VoxCPM2CudaEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
     assert a.capabilities().to_dict() == b.capabilities().to_dict()
+
+
+# --- issues #49 / #50: seed fix + validation params (worker payload) --------
+
+
+def _run_worker_synthesis(monkeypatch, request):
+    """Drive the REAL worker _synthesis with a stubbed runtime seam: torch
+    (manual_seed capture), soundfile (write capture) and the post-check."""
+    import types
+
+    from voiceclone_sidecar.engines import voxcpm2_worker as worker
+
+    captured: dict = {}
+    torch_stub = types.SimpleNamespace(
+        manual_seed=lambda s: captured.setdefault("manual_seed", s)
+    )
+    sf_stub = types.SimpleNamespace(
+        write=lambda path, wav, sr, subtype=None: captured.update(
+            written=(str(path), wav, int(sr))
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_stub)
+    monkeypatch.setitem(sys.modules, "soundfile", sf_stub)
+    monkeypatch.setattr(
+        worker.common, "verify_wav_output", lambda out, log, label: {"ok": True}
+    )
+
+    generate_calls: list[dict] = []
+
+    class FakeTTSModel:
+        sample_rate = 48000
+
+    class FakeModel:
+        tts_model = FakeTTSModel()
+
+        def generate(self, **kwargs):
+            generate_calls.append(kwargs)
+            return [0.0] * 480  # no numpy in the sidecar test venv
+
+    request = {
+        "output": "/tmp/out.wav",
+        "ref_audio": "/tmp/ref.wav",
+        "model_dir": "/tmp/weights",
+        **request,
+    }
+    result = worker._synthesis(
+        request, lambda model_dir: FakeModel(), lambda: {}, lambda msg: None
+    )
+    assert result["audio_path"] == "/tmp/out.wav"
+    return captured, generate_calls
+
+
+def test_seed_is_never_passed_to_generate_and_pins_manual_seed(monkeypatch):
+    """Issue #49 regression lock: pinned VoxCPM 2.0.3 _generate() has NO seed
+    parameter and no **kwargs — the old worker sent seed= and would raise
+    TypeError on the real machine. Reproducibility now goes through
+    worker-side torch.manual_seed (verified byte-identical on real synthesis,
+    2026-09-22)."""
+    captured, calls = _run_worker_synthesis(monkeypatch, {"text": "你好", "seed": 42})
+    assert len(calls) == 1
+    assert "seed" not in calls[0]  # the TypeError trigger is gone
+    assert captured["manual_seed"] == 42
+    # 3090 real-machine finding (2026-09-22): same seed is byte-reproducible
+    # with manual_seed + the model-load warmup — the deterministic-algorithm
+    # flags are NOT needed (runs 2+ were identical without them).
+
+
+def test_seed_absent_leaves_rng_untouched(monkeypatch):
+    captured, calls = _run_worker_synthesis(monkeypatch, {"text": "你好"})
+    assert len(calls) == 1
+    assert "manual_seed" not in captured  # random by default
+
+
+def test_load_performs_seed_reproducibility_warmup(monkeypatch):
+    """Issue #49: the FIRST generation after model load deviates from
+    same-seed reruns on CUDA (3090 实测) — the worker must run one throwaway
+    warmup generation at load (synthetic sine reference, 4 timesteps) so the
+    first user request is already byte-reproducible. Upstream masks the same
+    effect with its own warmup when optimize=True; we pin optimize=False."""
+    source = Path(voxcpm2_mps.__file__).with_name("voxcpm2_worker.py").read_text()
+    assert "seed-reproducibility warmup" in source
+    assert "inference_timesteps=4" in source
+    assert "torch.manual_seed(0)" in source
+
+
+def test_validated_length_and_retry_params_are_forwarded(monkeypatch):
+    """Issue #50: min_len/max_len and the retry_badcase triple are real
+    upstream _generate() parameters (2.0.3 signature, real-machine verified)
+    and must reach generate() with their declared types."""
+    _, calls = _run_worker_synthesis(
+        monkeypatch,
+        {
+            "text": "你好",
+            "min_len": 2,
+            "max_len": 4096,
+            "retry_badcase": True,
+            "retry_badcase_max_times": 3,
+            "retry_badcase_ratio_threshold": 6.0,
+        },
+    )
+    assert calls[0]["min_len"] == 2
+    assert calls[0]["max_len"] == 4096
+    assert calls[0]["retry_badcase"] is True
+    assert calls[0]["retry_badcase_max_times"] == 3
+    assert calls[0]["retry_badcase_ratio_threshold"] == 6.0
+
+
+def test_validated_params_absent_when_not_chosen(monkeypatch):
+    _, calls = _run_worker_synthesis(monkeypatch, {"text": "你好"})
+    for key in (
+        "min_len",
+        "max_len",
+        "retry_badcase",
+        "retry_badcase_max_times",
+        "retry_badcase_ratio_threshold",
+    ):
+        assert key not in calls[0]  # upstream defaults apply unchanged
+
+
+# --- issue #50: declaration surface -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,kind,default",
+    [
+        ("min_len", "number", 2),
+        ("max_len", "number", 4096),
+        ("retry_badcase", "bool", True),
+        ("retry_badcase_max_times", "number", 3),
+        ("retry_badcase_ratio_threshold", "number", 6.0),
+    ],
+)
+def test_validation_params_exposed_with_upstream_defaults(engine, name, kind, default):
+    """Declared defaults MUST equal the upstream core-layer defaults
+    (min_len=2, max_len=4096, retry_badcase=True/3/6.0) so the UI shows what
+    the engine actually does."""
+    spec = next(s for s in engine.param_specs() if s.name == name)
+    assert spec.exposed is True
+    assert spec.kind == kind
+    assert spec.default == default
+    assert spec.applies_to is not None
+    assert spec.applies_to.engine == "voxcpm2-mps"
+    assert spec.layer == "engine"  # engine-specific collapsed area
+
+
+def test_denoise_is_no_op_data_after_real_machine_verification(engine):
+    """Issue #50 V7: with load_denoiser=False (offline install), upstream
+    silently skips denoise (self.denoiser is None) — output byte-identical
+    with denoise=True on the real machine (2026-09-22)."""
+    spec = next(s for s in engine.param_specs() if s.name == "denoise")
+    assert spec.exposed is False
+    assert spec.not_exposed_reason == "no-op"
+
+
+def test_prepare_synthesis_forwards_seed_for_worker_side_handling(engine):
+    _text, wire = voxcpm2_base.prepare_synthesis("你好", {"seed": 7}, lambda m: None)
+    assert wire["seed"] == 7  # consumed by the worker via torch.manual_seed
+    assert "denoise" not in wire  # stays a declared no-op, never forwarded

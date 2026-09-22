@@ -612,10 +612,11 @@
         },
         {
           "field": "生成参数",
-          "value": "cfg_value（默认 2.0）、inference_timesteps（默认 10）、denoise（只作用于参考音频）、retry_badcase、seed 均为真实生效参数；未发现文档级 no-op",
+          "value": "cfg_value（默认 2.0）、inference_timesteps（默认 10）、min_len（默认 2）/max_len（默认 4096，token 上限）、retry_badcase/max_times/ratio_threshold（core 层生效默认 True/3/6.0，经 core 直传 model 层）均为真实生效参数；seed 不是上游 generate() 参数（2.0.3 _generate 无 seed 形参也无 **kwargs，直传 TypeError，真机复现）——可复现性由 worker 侧 torch.manual_seed 实现（issue #49 修复）；denoise 在本引擎离线安装形态（load_denoiser=False）下被静默忽略，开/关输出逐字节相同，按 no-op 数据声明（issue #50）",
           "verification": "verified",
-          "source": "src/voxcpm/core.py generate() 签名 + usage guide",
-          "date": "2026-09-20"
+          "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 真机验证脚本（issues #49/#50）",
+          "date": "2026-09-22",
+          "note": "真机验证（2026-09-22，VoxCPM 2.0.3 钉扎版本；Mac MPS + Windows RTX 3090 双机）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上模型加载后首次生成会偏离同 seed 复现，预热后含首次请求均逐字节一致；MPS 无预热亦一致）；V2 min_len/max_len/retry_badcase* 直传被接受且 core 层默认 True/3/6.0 经 core 直传生效；V7 denoise=True 与不开输出逐字节相同（denoiser 未装载，静默 no-op）。3090 端到端性能验证仍随 voxcpm2-cuda（unverified）"
         },
         {
           "field": "主观听感 (MOS)",

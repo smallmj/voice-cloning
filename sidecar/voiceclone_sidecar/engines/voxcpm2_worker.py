@@ -90,6 +90,36 @@ def _load(model_dir: str):
         device=device,
     )
     _state["tts"] = tts
+    # Seed reproducibility warmup (issue #49): on CUDA the FIRST generation
+    # after model load deviates from same-seed reruns (3090 实测 maxabs≈1.36)
+    # — the same reason upstream runs a warmup generate when optimize=True.
+    # One throwaway generation (synthetic 2 s sine as reference, 4 timesteps)
+    # makes even the first seeded user request byte-reproducible (3090 实测
+    # 逐字节一致, 2026-09-22).
+    try:
+        import tempfile
+
+        import numpy as np
+        import torch
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sr = 48000
+            t = np.linspace(0, 2, sr * 2, endpoint=False)
+            sf_data = (0.2 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+            import soundfile as _sf
+
+            _sf.write(tmp.name, sf_data, sr, subtype="PCM_16")
+            warm_ref = tmp.name
+        torch.manual_seed(0)
+        tts.generate(
+            text="这是一次预热。",
+            reference_wav_path=warm_ref,
+            inference_timesteps=4,
+        )
+        os.unlink(warm_ref)
+        common.log("voxcpm2: seed-reproducibility warmup done")
+    except Exception as exc:  # noqa: BLE001 - warmup is best-effort
+        common.log(f"voxcpm2: seed warmup skipped ({exc})")
     common.log(f"voxcpm2: model loaded in {time.monotonic() - started:.1f}s (device={device})")
     return tts
 
@@ -118,8 +148,26 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
         kwargs["cfg_value"] = float(request["cfg_value"])
     if request.get("inference_timesteps") not in (None, ""):
         kwargs["inference_timesteps"] = int(request["inference_timesteps"])
+    # seed is NOT an upstream generate() parameter (pinned 2.0.3 _generate has
+    # no seed arg and no **kwargs — passing it raises TypeError, issue #49).
+    # Reproducibility is done worker-side via torch.manual_seed (dots
+    # seed_everything precedent) plus the model-load warmup in _load(): with
+    # both, same seed + same params is byte-identical on MPS and CUDA from the
+    # very first request (3090 + Mac MPS 真机, 2026-09-22).
     if request.get("seed") not in (None, ""):
-        kwargs["seed"] = int(request["seed"])
+        import torch
+
+        torch.manual_seed(int(request["seed"]))
+    if request.get("min_len") not in (None, ""):
+        kwargs["min_len"] = int(request["min_len"])
+    if request.get("max_len") not in (None, ""):
+        kwargs["max_len"] = int(request["max_len"])
+    if request.get("retry_badcase") not in (None, ""):
+        kwargs["retry_badcase"] = bool(request["retry_badcase"])
+    if request.get("retry_badcase_max_times") not in (None, ""):
+        kwargs["retry_badcase_max_times"] = int(request["retry_badcase_max_times"])
+    if request.get("retry_badcase_ratio_threshold") not in (None, ""):
+        kwargs["retry_badcase_ratio_threshold"] = float(request["retry_badcase_ratio_threshold"])
 
     wav = model.generate(
         text=request["text"],

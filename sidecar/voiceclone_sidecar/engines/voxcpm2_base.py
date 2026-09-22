@@ -105,9 +105,69 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             label="参考音频降噪",
             kind="bool",
             exposed=False,
-            not_exposed_reason="unverified",
+            not_exposed_reason="no-op",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
-            help="上游参数真实存在，但只作用于参考音频且需要 ZipEnhancer 降噪模型（load_denoiser=False 时不安装）；在本引擎的安装形态下行为未验证，暂不暴露。",
+            help="上游参数真实存在，但本引擎离线安装形态 load_denoiser=False（不装 ModelScope 的 ZipEnhancer），denoise=True 被静默忽略——真机实测开与不开输出逐字节相同（issue #50，2026-09-22），故按 no-op 数据声明。",
+        ),
+        ParamSpec(
+            name="min_len",
+            label="最短音频长度",
+            kind="number",
+            integer=True,
+            default=2,
+            min=1,
+            max=60,
+            step=1,
+            layer="engine",
+            help="避免生成过短音频的下限（上游默认 2，token 口径）；一般保持默认即可。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+        ),
+        ParamSpec(
+            name="max_len",
+            label="单段生成长度上限",
+            kind="number",
+            integer=True,
+            default=4096,
+            min=100,
+            max=4096,
+            step=1,
+            layer="engine",
+            help="单次生成的 token 上限（上游默认 4096）。坏例重试开启时实际上限为 min(文本长度×阈值+10, 本值)。与本应用 200 字/请求的分段上限相互独立。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+        ),
+        ParamSpec(
+            name="retry_badcase",
+            label="坏例自动重试",
+            kind="bool",
+            default=True,
+            layer="engine",
+            help="生成结果与文本长度比例失衡时自动重试（上游 core 层默认 True；注意上游 model 层默认 False，实际生效以 core 传参为准，已真机验证）。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+        ),
+        ParamSpec(
+            name="retry_badcase_max_times",
+            label="坏例重试次数上限",
+            kind="number",
+            integer=True,
+            default=3,
+            min=1,
+            max=10,
+            step=1,
+            layer="engine",
+            help="坏例重试的最大尝试次数（上游默认 3）。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
+        ),
+        ParamSpec(
+            name="retry_badcase_ratio_threshold",
+            label="坏例判定阈值",
+            kind="number",
+            default=6.0,
+            min=2.0,
+            max=12.0,
+            step=0.5,
+            layer="engine",
+            help="音频/文本长度比例超过该阈值视为坏例并触发重试（上游默认 6.0）。",
+            applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
         ),
         ParamSpec(
             name="seed",
@@ -117,7 +177,7 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             min=0,
             max=2**31 - 1,
             layer="engine",
-            help="留空则不固定种子；相同种子 + 相同参数可复现结果。",
+            help="留空则不固定种子；相同种子 + 相同参数可复现结果（worker 侧 torch.manual_seed + 加载预热实现——上游 generate() 无 seed 参数，见 issue #49；MPS/CUDA 真机均已逐字节验证）。",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
         ),
         # 「不支持是数据」（ADR-0018 decision 3）。每一条都对应一个真实存在
@@ -173,9 +233,21 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
         # {ni3} phoneme syntax is only valid with normalize=False — the
         # adapter OWNS that invariant (upstream usage guide).
         text = pronunciation.rewrite(text, str(ann), "voxcpm", log)
-    for key in ("cfg_value", "inference_timesteps", "seed"):
+    for key in (
+        "cfg_value",
+        "inference_timesteps",
+        "min_len",
+        "max_len",
+        "retry_badcase",
+        "retry_badcase_max_times",
+        "retry_badcase_ratio_threshold",
+    ):
         if params.get(key) not in (None, ""):
             wire[key] = params[key]
+    # seed is handled worker-side (torch.manual_seed) — upstream generate()
+    # has no seed parameter (issue #49); the worker forwards it separately.
+    if params.get("seed") not in (None, ""):
+        wire["seed"] = params["seed"]
     # denoise is declared-but-not-exposed (no denoiser installed); it is
     # never forwarded — the engine receives only verified parameters.
     return text, wire

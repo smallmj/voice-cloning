@@ -256,19 +256,24 @@ def test_matrix_voxcpm2_languages_claim_is_declarative_official_list():
         )
         assert ev["verification"] in ("vendor", "verified")
         assert "声明性支持（官方口径）" in ev["value"], engine_id
-        assert "真机抽查见验证工单" in ev["value"], engine_id
+        # issue #59: spot checks (zh/en/yue/sichuan, MPS+CUDA) are DONE —
+        # the honest marking moved from "见验证工单" (pending) to "真机抽查
+        # 已完成", with the remaining languages explicitly 未逐语种验证.
+        assert "真机抽查已完成" in ev["value"], engine_id
+        assert "未逐语种验证" in ev["value"], engine_id
 
 
 def test_matrix_voxcpm2_control_instruction_is_declared_with_timing():
     """Issue #56: control_instruction is an engine-layer declared param,
-    concatenated AFTER normalization (never normalized itself); live
-    listening checks are deferred to the verification ticket."""
+    concatenated AFTER normalization (never normalized itself); issue #59
+    moved the real-machine run to measured — listening judgment stays with
+    the human review note."""
     for engine_id in ("voxcpm2-mps", "voxcpm2-cuda"):
         ev = _evidence_entry(engine_id, "控制指令（control_instruction）")
-        assert ev["verification"] in ("verified", "vendor")
+        assert ev["verification"] in ("verified", "vendor", "measured")
         for token in ("control_instruction", "归一化之后", "(指令)正文"):
             assert token in ev["value"], (engine_id, token)
-        assert "验证工单" in ev["value"], engine_id
+        assert "听感" in ev["note"], engine_id
 
 
 def test_matrix_fireredtts3_quality_params_claim_is_real_machine_backed():

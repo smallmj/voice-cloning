@@ -35,6 +35,11 @@ LOG_BUFFER_MIN = 100
 LOG_BUFFER_MAX = 5000
 LOG_BUFFER_DEFAULT = 500
 
+# Issue #65 (spec #62 / ADR-0020): 更新渠道 (Update Channel) modes, validated
+# against the same set the Electron updater module uses.
+ALLOWED_UPDATE_CHANNEL_MODES = ("auto", "official", "mirror")
+DEFAULT_UPDATE_MIRROR_PREFIX = "https://gh-proxy.com/"
+
 
 def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -67,6 +72,26 @@ def _sanitize(raw: dict) -> dict:
         "font_size": _clamp_int_or_none(raw.get("font_size"), FONT_SIZE_MIN, FONT_SIZE_MAX),
         "log_buffer": int(
             _clamp(raw.get("log_buffer"), LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
+        ),
+        # Issue #65 (spec #62 / ADR-0020): updater preferences ride the SAME
+        # settings store as every other software-level preference, so the
+        # main process and the renderer read one source of truth. Validation
+        # mirrors electron/updater.ts: corrupt values degrade to defaults.
+        "updater_channel_mode": (
+            raw.get("updater_channel_mode")
+            if raw.get("updater_channel_mode") in ALLOWED_UPDATE_CHANNEL_MODES
+            else "auto"
+        ),
+        "updater_mirror_prefix": (
+            raw.get("updater_mirror_prefix")
+            if isinstance(raw.get("updater_mirror_prefix"), str)
+            else DEFAULT_UPDATE_MIRROR_PREFIX
+        ),
+        # 跳过此版本: a stored tag is kept only when a non-empty string.
+        "updater_skipped_tag": (
+            raw.get("updater_skipped_tag")
+            if isinstance(raw.get("updater_skipped_tag"), str) and raw.get("updater_skipped_tag")
+            else None
         ),
     }
 
@@ -161,8 +186,35 @@ def build_router(ctx: AppContext) -> APIRouter:
             update["log_buffer"] = int(
                 _clamp(buf, LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
             )
+        # Issue #65: updater preferences. channel_mode is one of the three
+        # 更新渠道 modes; mirror_prefix is the editable 镜像前缀 (must be a
+        # string — empty is allowed and degrades to the auto chain);
+        # skipped_tag persists 跳过此版本 (string or null).
+        if "updater_channel_mode" in body:
+            mode = body["updater_channel_mode"]
+            if mode not in ALLOWED_UPDATE_CHANNEL_MODES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"updater_channel_mode 必须是 {'/'.join(ALLOWED_UPDATE_CHANNEL_MODES)} 之一",
+                )
+            update["updater_channel_mode"] = mode
+        if "updater_mirror_prefix" in body:
+            prefix = body["updater_mirror_prefix"]
+            if not isinstance(prefix, str):
+                raise HTTPException(status_code=422, detail="updater_mirror_prefix 必须是字符串")
+            update["updater_mirror_prefix"] = prefix
+        if "updater_skipped_tag" in body:
+            tag = body["updater_skipped_tag"]
+            if tag is not None and (not isinstance(tag, str) or not tag):
+                raise HTTPException(
+                    status_code=422, detail="updater_skipped_tag 必须为非空字符串或 null"
+                )
+            update["updater_skipped_tag"] = tag
         if not update:
-            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id、engine_params、sidebar_open、sidebar_width、ui_scale、font_size 或 log_buffer 之一")
+            raise HTTPException(
+                status_code=422,
+                detail="至少提供 theme、engine_id、engine_params、sidebar_open、sidebar_width、ui_scale、font_size、log_buffer 或 updater_* 之一",
+            )
         ctx.write_ui_prefs(update)
         return _sanitize(ctx.read_ui_prefs())
 

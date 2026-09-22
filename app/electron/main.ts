@@ -7,11 +7,25 @@
 // - Single-instance lock: a second launch focuses the existing window instead
 //   of starting a second sidecar (per-user dataDir + full-memory JSON stores
 //   mean two sidecars silently lose data).
-import { app, BrowserWindow, ipcMain } from "electron";
-import { spawn, ChildProcess } from "child_process";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { spawn, spawnSync, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as crypto from "crypto";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
+import {
+  checkForUpdate,
+  DEFAULT_MIRROR_PREFIX,
+  GITHUB_REPO,
+  verifySha512,
+  type UpdatePlatform,
+  type UpdaterResult,
+} from "./updater";
+import type { UpdateEvent, UpdateSettings } from "../src/updater-types";
+
+// Release-page fallback opened in the browser when the in-app download or the
+// sha512 verification fails (spec #62 user story 16).
+const RELEASE_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
 let sidecar: ChildProcess | null = null;
 
@@ -227,9 +241,9 @@ function startSidecar(): void {
   });
 }
 
-function notifyRenderer(channel: string, message: string): void {
+function notifyRenderer(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, message);
+    win.webContents.send(channel, payload);
   }
 }
 
@@ -263,12 +277,248 @@ function createWindow(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Online update (issue #65, spec #62 / ADR-0020) — the side-effect shell.
+// ALL logic (channel resolution, semver, asset matching, sha512) lives in
+// electron/updater.ts; this block only wires IPC, persistence, download
+// progress events, installer launch / dmg mount, and the browser fallback.
+// ---------------------------------------------------------------------------
+
+const UPDATER_EVENT_CHANNEL = "updater:event";
+const UPDATER_NEW_VERSION_CHANNEL = "updater:new-version";
+
+let lastUpdateCheck: UpdaterResult | null = null;
+let updateSettings: UpdateSettings = {
+  channelMode: "auto",
+  mirrorPrefix: DEFAULT_MIRROR_PREFIX,
+  skippedTag: null,
+};
+let activeDownload: { controller: AbortController } | null = null;
+
+function updatePlatform(): UpdatePlatform | null {
+  return process.platform === "win32" || process.platform === "darwin" ? process.platform : null;
+}
+
+/** Map the sidecar's flat settings keys onto the renderer-facing shape. */
+function sanitizeUpdateSettings(raw: Record<string, unknown>): UpdateSettings {
+  const mode = raw["updater_channel_mode"];
+  const prefix = raw["updater_mirror_prefix"];
+  const tag = raw["updater_skipped_tag"];
+  return {
+    channelMode: mode === "official" || mode === "mirror" ? mode : "auto",
+    mirrorPrefix: typeof prefix === "string" ? prefix : DEFAULT_MIRROR_PREFIX,
+    skippedTag: typeof tag === "string" && tag !== "" ? tag : null,
+  };
+}
+
+/**
+ * Updater preferences persist in the sidecar's existing settings store
+ * (GET/PUT /settings/ui, the same SQLite key/value block issue #44 uses) —
+ * one source of truth shared with the renderer, never a second store.
+ */
+async function sidecarSettingsRequest(method: "GET" | "PUT", body?: unknown): Promise<Record<string, unknown> | null> {
+  const info = await waitForSidecar(10_000);
+  if (!info) return null;
+  try {
+    const res = await fetch(`${info.baseUrl}/settings/ui`, {
+      method,
+      headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function loadUpdateSettings(): Promise<void> {
+  const raw = await sidecarSettingsRequest("GET");
+  if (raw) updateSettings = sanitizeUpdateSettings(raw);
+}
+
+async function saveUpdateSettings(next: UpdateSettings): Promise<void> {
+  updateSettings = next;
+  await sidecarSettingsRequest("PUT", {
+    updater_channel_mode: next.channelMode,
+    updater_mirror_prefix: next.mirrorPrefix,
+    updater_skipped_tag: next.skippedTag,
+  });
+}
+
+/** Run one check. `manual` checks ignore 跳过此版本 (spec user story 9). */
+async function runUpdateCheck(manual: boolean): Promise<UpdaterResult> {
+  const platform = updatePlatform();
+  if (!platform) {
+    // No installer asset exists for this platform (e.g. linux dev builds).
+    return { status: "unavailable", reason: "no-platform-asset", effectiveChannel: null, attempts: [] };
+  }
+  await loadUpdateSettings();
+  const result = await checkForUpdate({
+    currentVersion: app.getVersion(),
+    channelMode: updateSettings.channelMode,
+    mirrorPrefix: updateSettings.mirrorPrefix,
+    // Startup checks honor the skipped tag; manual checks never do.
+    skippedTag: manual ? null : updateSettings.skippedTag,
+    fetch,
+    platform,
+  });
+  lastUpdateCheck = result;
+  // Only a genuinely-available result opens the dialog state; a skipped
+  // update resolves as status "skipped" and stays silent (spec story 8).
+  if (result.status === "available") {
+    notifyRenderer(UPDATER_NEW_VERSION_CHANNEL, result);
+  }
+  return result;
+}
+
+function updateEvent(event: UpdateEvent): void {
+  notifyRenderer(UPDATER_EVENT_CHANNEL, event);
+}
+
+/** URL prefix of the channel that served the current check result. */
+function channelUrlPrefix(result: Extract<UpdaterResult, { status: "available" }>): string {
+  return result.effectiveChannel === "mirror" ? updateSettings.mirrorPrefix : "";
+}
+
+async function runInstaller(filePath: string): Promise<void> {
+  if (process.platform === "win32") {
+    // NSIS installer: detached so it outlives the app we are about to quit.
+    spawn(filePath, [], { detached: true, stdio: "ignore" }).unref();
+    return;
+  }
+  // macOS: mount the dmg and open the mounted volume in Finder, then explain
+  // the drag-to-Applications step (半自动引导, ADR-0020).
+  const attach = spawnSync("hdiutil", ["attach", filePath, "-nobrowse"], { encoding: "utf8" });
+  const mountMatch = attach.stdout?.match(/\/Volumes\/.+$/m);
+  const mountPath = mountMatch ? mountMatch[0].trim() : null;
+  if (mountPath) {
+    await shell.openPath(mountPath);
+  }
+  await dialog.showMessageBox({
+    type: "info",
+    title: "安装更新",
+    message: "请退出应用后完成安装",
+    detail:
+      "安装镜像已打开。请先退出本应用，然后将应用拖入「应用程序」文件夹完成更新。" +
+      (mountPath ? "" : "\n\n（未能自动打开镜像，请手动双击已下载的 .dmg 文件。）"),
+  });
+}
+
+async function startUpdateDownload(): Promise<void> {
+  if (activeDownload) return; // one download at a time; the UI serializes this
+  try {
+    let available = lastUpdateCheck?.status === "available" ? lastUpdateCheck : null;
+    if (!available) {
+      const result = await runUpdateCheck(true);
+      if (result.status === "available") available = result;
+    }
+    if (!available) {
+      updateEvent({ type: "failed", message: "当前没有可下载的更新" });
+      return;
+    }
+    const controller = new AbortController();
+    activeDownload = { controller };
+    const filePath = path.join(app.getPath("temp"), available.installerName);
+    // The installer downloads through the channel that served the check
+    // (mirror requests go through the editable 镜像前缀).
+    const res = await fetch(`${channelUrlPrefix(available)}${available.installerUrl}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`下载失败（HTTP ${res.status}）`);
+    const total = Number(res.headers.get("content-length") ?? 0);
+    const out = fs.createWriteStream(filePath);
+    let received = 0;
+    let lastPercent = -1;
+    try {
+      for await (const chunk of res.body as unknown as NodeWebReadableStream<Uint8Array>) {
+        received += chunk.byteLength;
+        out.write(chunk);
+        const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0;
+        if (percent !== lastPercent) {
+          lastPercent = percent;
+          updateEvent({ type: "progress", percent, received, total });
+        }
+      }
+      await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+    } finally {
+      out.close();
+    }
+    // sha512 verification against the manifest value captured at check time.
+    // verifySha512 also tells us when the manifest was missing entirely —
+    // that is a warning, not a failure (spec: 无清单则警告但允许继续), so the
+    // installer still runs but the renderer sees the warning flag.
+    const verdict = verifySha512(new Uint8Array(fs.readFileSync(filePath)), available.manifestSha512);
+    if (!verdict.ok && !verdict.warning) {
+      throw new Error("文件校验失败（sha512 不匹配），安装包可能被截断或篡改");
+    }
+    await runInstaller(filePath);
+    updateEvent({ type: "done", ...(verdict.warning ? { warning: verdict.warning } : {}) });
+  } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
+    if (!aborted) {
+      // Fallback: let the user grab the installer from the release page.
+      try {
+        await shell.openExternal(RELEASE_PAGE_URL);
+      } catch {
+        // Even the browser fallback failing must not crash the app.
+      }
+      updateEvent({ type: "failed", message: err instanceof Error ? err.message : String(err) });
+    }
+  } finally {
+    activeDownload = null;
+  }
+}
+
 ipcMain.handle("sidecar:info", async () => waitForSidecar());
+
+ipcMain.handle("updater:status", async () => {
+  await loadUpdateSettings();
+  return { currentVersion: app.getVersion(), lastCheck: lastUpdateCheck, settings: updateSettings };
+});
+
+ipcMain.handle("updater:check", async (_event, manual: boolean) => runUpdateCheck(manual === true));
+
+ipcMain.handle("updater:settings:get", async () => {
+  await loadUpdateSettings();
+  return updateSettings;
+});
+
+ipcMain.handle("updater:settings:set", async (_event, settings: UpdateSettings) => {
+  await saveUpdateSettings(sanitizeUpdateSettings({ ...settings }));
+});
+
+ipcMain.handle("updater:skip", async (_event, tag: string) => {
+  if (typeof tag !== "string" || tag === "") return;
+  await saveUpdateSettings({ ...updateSettings, skippedTag: tag });
+  // The current reminder state flips to "skipped" immediately so a status
+  // read after skipping does not re-offer the same version.
+  if (lastUpdateCheck?.status === "available" && lastUpdateCheck.latestTag === tag) {
+    lastUpdateCheck = {
+      status: "skipped",
+      latestTag: lastUpdateCheck.latestTag,
+      effectiveChannel: lastUpdateCheck.effectiveChannel,
+    };
+  }
+});
+
+ipcMain.handle("updater:download", async () => {
+  // Resolves immediately; progress/completion arrives via updater:event.
+  void startUpdateDownload();
+});
+
+ipcMain.handle("updater:cancel-download", async () => {
+  activeDownload?.controller.abort();
+});
 
 app.whenReady().then(() => {
   if (gotLock) {
     startSidecar();
     createWindow();
+    // Startup update check (spec #62): async, the 5s timeout lives inside the
+    // updater module, and every failure path resolves silently — the window
+    // must never wait on it. The result is pushed via updater:new-version.
+    void runUpdateCheck(false).catch((err) => console.warn("[main] update check failed:", (err as Error).message));
   } else {
     // Another instance owns the sidecar; quit without flashing a window.
     app.quit();

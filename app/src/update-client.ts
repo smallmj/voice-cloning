@@ -19,13 +19,16 @@ import type {
   UpdaterResult,
 } from "./updater-types";
 // Review fix (PR #63 finding 2): mirror-prefix normalization has one source
-// of truth — the pure validator in electron/updater.ts (no Electron imports,
-// safe for the renderer and tests).
-import { DEFAULT_MIRROR_PREFIX as CORE_DEFAULT_MIRROR_PREFIX, sanitizeMirrorPrefix } from "../electron/updater";
+// of truth. The implementation lives in ./updater-types (renderer-safe —
+// electron/updater.ts re-exports it, but importing from there would pull
+// node:crypto/node:path into the browser bundle).
+import {
+  DEFAULT_MIRROR_PREFIX,
+  sanitizeMirrorPrefix,
+} from "./updater-types";
 
-// Keep the renderer-facing constant defined here (tests import it from this
-// module); the core module owns the authoritative value.
-export const DEFAULT_MIRROR_PREFIX = CORE_DEFAULT_MIRROR_PREFIX;
+// Re-exported for the card/tests (same authoritative value).
+export { DEFAULT_MIRROR_PREFIX, sanitizeMirrorPrefix };
 
 export type { UpdateEvent, UpdateSettings, UpdateStatus, UpdaterResult };
 export type UpdateChannelMode = UpdateSettings["channelMode"];

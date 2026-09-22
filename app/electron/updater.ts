@@ -11,25 +11,15 @@ import { gt as semverGt, valid as semverValid } from "semver";
 /** GitHub repo queried for the latest stable release (ADR-0020 仓库常量). */
 export const GITHUB_REPO = "smallmj/voice-cloning";
 
-/** Default mirror prefix (镜像前缀), editable by the user. */
-export const DEFAULT_MIRROR_PREFIX = "https://gh-proxy.com/";
+// DEFAULT_MIRROR_PREFIX + sanitizeMirrorPrefix live in ../src/updater-types so
+// the vite renderer bundle can share them without importing node builtins
+// from this module (vite externalizes those for browser builds).
+import {
+  DEFAULT_MIRROR_PREFIX,
+  sanitizeMirrorPrefix,
+} from "../src/updater-types";
 
-/**
- * Validate + normalize a user-provided 镜像前缀 (review fix, PR #63): the
- * prefix is spliced in front of GitHub API and asset URLs, so anything that
- * is not `https://` + host (+ optional path) would let a typed value change
- * the transport (file://, http://) or the authority. Returns the trimmed
- * value with exactly one trailing slash on success; the fallback on anything
- * else. The user-chosen https mirror is trusted by design (self-inflicted
- * risk — see docs/release/update-publishing.md).
- */
-export function sanitizeMirrorPrefix(prefix: unknown, fallback: string = DEFAULT_MIRROR_PREFIX): string {
-  if (typeof prefix !== "string") return fallback;
-  const trimmed = prefix.trim();
-  // https:// + host (no scheme-relative "//", no whitespace) + optional path.
-  if (!/^https:\/\/[^/\s#?]+(\/[^\s#?]*)?$/.test(trimmed)) return fallback;
-  return `${trimmed.replace(/\/+$/, "")}/`;
-}
+export { DEFAULT_MIRROR_PREFIX, sanitizeMirrorPrefix };
 
 /** GitHub API endpoint for the latest stable (non-prerelease) release. */
 export const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;

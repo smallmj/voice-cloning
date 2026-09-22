@@ -9,6 +9,34 @@ import type { ChannelMode, UpdaterResult } from "../electron/updater";
 
 export type { ChannelMode, UpdaterResult };
 
+// --- renderer-safe runtime constants + pure validator -------------------
+// Lives here (not in electron/updater.ts) so the vite renderer bundle can
+// use it without pulling node:crypto/node:path externalized modules in
+// (electron/updater.ts stays main-process-only at runtime).
+
+/** Default mirror prefix (镜像前缀), editable by the user. */
+export const DEFAULT_MIRROR_PREFIX = "https://gh-proxy.com/";
+
+/**
+ * Validate + normalize a user-provided 镜像前缀 (review fix, PR #63): the
+ * prefix is spliced in front of GitHub API and asset URLs, so anything that
+ * is not `https://` + host (+ optional path) would let a typed value change
+ * the transport (file://, http://) or the authority. Returns the trimmed
+ * value with exactly one trailing slash on success; the fallback on anything
+ * else. The user-chosen https mirror is trusted by design (self-inflicted
+ * risk — see docs/release/update-publishing.md).
+ */
+export function sanitizeMirrorPrefix(
+  prefix: unknown,
+  fallback: string = DEFAULT_MIRROR_PREFIX,
+): string {
+  if (typeof prefix !== "string") return fallback;
+  const trimmed = prefix.trim();
+  // https:// + host (no scheme-relative "//", no whitespace) + optional path.
+  if (!/^https:\/\/[^/\s#?]+(\/[^\s#?]*)?$/.test(trimmed)) return fallback;
+  return `${trimmed.replace(/\/+$/, "")}/`;
+}
+
 /** Update preferences persisted with the sidecar settings store (#44 shape). */
 export interface UpdateSettings {
   /** 更新渠道: auto (default) | official | mirror — NOT 下载源 (ADR-0016). */

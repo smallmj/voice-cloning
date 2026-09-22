@@ -16,12 +16,16 @@ from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "voiceclone_sidecar"
 
+
 def test_no_package_module_shadows_the_stdlib() -> None:
     # sys.stdlib_module_names is the authoritative top-level stdlib set for
-    # the running interpreter (e.g. it knows `context` was removed in py3,
-    # so a module of that name is not a shadow).
+    # the running interpreter — it reflects THIS Python version, so e.g.
+    # `context` (removed from the stdlib in Python 3.0) is correctly absent
+    # and a module of that name is not a shadow.
     stdlib = set(sys.stdlib_module_names)
-    names = {p.stem for p in PACKAGE_DIR.glob("*.py")}
+    # Every package directory counts: a shadowing name in engines/ or
+    # routers/ pollutes sys.path just as hard as a top-level one.
+    names = {p.stem for p in PACKAGE_DIR.rglob("*.py")}
     clash = sorted(names & stdlib)
     assert clash == [], (
         f"module(s) {clash} shadow stdlib modules; subprocess sys.path "

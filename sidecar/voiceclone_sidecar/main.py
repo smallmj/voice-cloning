@@ -35,10 +35,10 @@ from fastapi import FastAPI
 
 from ._version import SIDECAR_VERSION
 from .context import build_context
+from .key_store import KeyStore
 from .registry import Registry, default_registry
 from .routers import install_routers
 from .runtime import paths
-from .secrets import KeyStore
 
 
 def create_app(

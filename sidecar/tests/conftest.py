@@ -40,6 +40,11 @@ def _wait_for_port(port: int, process: subprocess.Popen, timeout: float = 30.0) 
 def sidecar(tmp_path_factory):
     token = secrets.token_urlsafe(16)
     audio_dir = tmp_path_factory.mktemp("audio")
+    # Issue #61: the app process must see a HERMETIC runtime root. Otherwise
+    # a machine with the local ASR tool installed makes "uninstalled local
+    # provider" contracts (409 guidance) unreachable — the gate transcribes
+    # for real instead. Engine installs under test register their own roots.
+    runtime_root = tmp_path_factory.mktemp("runtime")
     process = subprocess.Popen(
         [
             sys.executable,
@@ -52,7 +57,12 @@ def sidecar(tmp_path_factory):
             "--audio-dir",
             str(audio_dir),
         ],
-        env={**os.environ, "VOICECLONE_TEST_ENGINES": "1", "VOICECLONE_KEY_BACKEND": "memory"},
+        env={
+            **os.environ,
+            "VOICECLONE_TEST_ENGINES": "1",
+            "VOICECLONE_KEY_BACKEND": "memory",
+            "VOICECLONE_RUNTIME_ROOT": str(runtime_root),
+        },
         cwd=SIDECAR_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

@@ -25,8 +25,8 @@ from voiceclone_sidecar.engines.qwen_tts_cloud import (
     billed_chars,
     billing_cost,
 )
+from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
 from voiceclone_sidecar.registry import GenerationRequest
-from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
 
 def make_wav_bytes(seconds: float = 0.5, rate: int = 24000) -> bytes:

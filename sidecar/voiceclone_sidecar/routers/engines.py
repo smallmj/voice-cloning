@@ -12,8 +12,8 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..context import AppContext
+from ..key_store import KeyStoreError
 from ..registry import InstallableEngine
-from ..secrets import KeyStoreError
 from ..transcription import LOCAL_TOOL_ID
 
 

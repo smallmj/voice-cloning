@@ -203,7 +203,7 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
     import sys
 
     if key_store is None:
-        from .secrets import KeyStore
+        from .key_store import KeyStore
 
         key_store = KeyStore()
 

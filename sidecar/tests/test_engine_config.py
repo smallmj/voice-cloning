@@ -23,8 +23,8 @@ from voiceclone_sidecar.engines.cloud_base import (
     CloudEngineBase,
     CloudEngineError,
 )
+from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
 from voiceclone_sidecar.registry import default_registry
-from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
 
 @pytest.fixture()

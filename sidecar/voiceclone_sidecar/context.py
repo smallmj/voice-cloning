@@ -26,10 +26,10 @@ from .compare import CompareStore
 from .db import T_APP_STATE, read_kv_block, write_kv_block
 from .generations import GenerationStore
 from .jobs import JobStore
+from .key_store import KeyStore
 from .logbus import LogBus
 from .registry import Registry
 from .regression import RegressionStore
-from .secrets import KeyStore
 from .transcription import (
     DEFAULT_PROVIDER,
     LocalTranscriber,

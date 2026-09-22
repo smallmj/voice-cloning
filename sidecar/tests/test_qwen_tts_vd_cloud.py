@@ -30,8 +30,8 @@ from voiceclone_sidecar.engines.qwen_tts_vd_cloud import (
     CloudEngineError,
     Qwen3TtsVdCloudEngine,
 )
+from voiceclone_sidecar.key_store import KeyStore, MemoryBackend
 from voiceclone_sidecar.registry import GenerationRequest
-from voiceclone_sidecar.secrets import KeyStore, MemoryBackend
 
 
 def wav_b64(seconds: float = 1.0, rate: int = 24000) -> tuple[str, bytes]:

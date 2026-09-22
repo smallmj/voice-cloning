@@ -2,6 +2,46 @@
 
 一款 macOS / Windows 桌面应用（Electron + React 前端 + FastAPI Python sidecar）：用统一界面编排**云端 API** 与**本地模型**，完成声音复刻、音色设计与文字转语音。领域词汇见 [CONTEXT.md](CONTEXT.md)。
 
+## 功能特性（v1.0.0）
+
+- **声音复刻**：上传参考音频克隆音色；参考音频自动诊断 + 自动转写（本地或云端转写提供方）。
+- **音色设计**：不依赖参考音频，用文字描述直接生成音色。
+- **文字转语音**：长文本自动分段、任务队列 / 限流 / 取消，生成历史批量管理。
+- **本地引擎**（按平台自动注册，能力矩阵见 docs）：
+  - Qwen3-TTS（MLX，macOS Apple Silicon）
+  - IndexTTS-2.5（CUDA，Windows NVIDIA；MPS，macOS）
+  - VoxCPM2 / dots.tts / FireRedTTS3（CUDA / MPS 变体）
+- **云端引擎**：多厂商接入（BYOK，厂商级 API Key），音色健康检查与自动重建，按能力矩阵声明式呈现参数。
+- **对比与调优**：跨引擎盲听对比（LUFS 归一化）、偏好画像；文本归一化层与归一化预览。
+- **数据管理**：音色包导出导入、整库备份恢复；存储层 SQLite + 一次性迁移 + 快照备份。
+
+## 下载安装（Release）
+
+从 [GitHub Releases](https://github.com/smallmj/voice-cloning/releases/latest) 下载：
+
+| 平台 | 文件 |
+| --- | --- |
+| macOS（Apple Silicon） | `VoiceClone-<版本>-arm64.dmg` 或 `.zip` |
+| Windows（x64） | `VoiceClone Setup <版本>.exe` |
+
+安装包内嵌钉版 [uv](https://docs.astral.sh/uv/)；首次启动时由 uv 在用户数据目录自动创建 Python 运行时（无需预装 Python）。
+
+### macOS：应用未签名，无法打开？
+
+当前版本未做 Developer ID 签名与公证，首次打开会被 Gatekeeper 拦截。**在终端里运行**（打开一次即可，只需执行一次）：
+
+```bash
+xattr -rd com.apple.quarantine /Applications/VoiceClone.app
+```
+
+该命令移除下载标记（quarantine 属性），之后可正常双击打开。如果应用还没拖进「应用程序」，把命令里的路径换成 `.app` 所在位置即可。
+
+备选方式：在 Finder 中**右键点击**应用 → 「打开」→ 再点「打开」（此方式对部分 macOS 版本可能不再生效，推荐用上面的终端命令）。也可以到「系统设置 → 隐私与安全性」底部点击「仍要打开」。
+
+### Windows：SmartScreen 提示？
+
+安装包未做 Authenticode 签名，SmartScreen 可能显示「Windows 已保护你的电脑」——点击「更多信息」→「仍要运行」即可。
+
 ## 目录结构
 
 ```

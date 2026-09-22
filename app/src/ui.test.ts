@@ -430,3 +430,38 @@ describe("engine card detail paragraphs (issue #40)", () => {
     expect(paragraphs.join("\n")).not.toMatch(/undefined|null/);
   });
 });
+
+// --- issue #57: non-verbal tag quick-insert ------------------------------------
+
+import { insertAtCursor, NONVERBAL_TAGS } from "./ui";
+
+describe("non-verbal tag quick-insert (issue #57)", () => {
+  it("exposes the cookbook-canonical tags, brackets verbatim", () => {
+    expect(NONVERBAL_TAGS).toEqual(["[laughing]", "[sigh]", "[Uhm]", "[Shh]", "[breath]"]);
+  });
+
+  it("inserts at the caret and leaves the caret after the tag", () => {
+    expect(insertAtCursor("你好世界", "[sigh]", 2, 2)).toEqual({
+      text: "你好[sigh]世界",
+      cursor: 2 + "[sigh]".length,
+    });
+    expect(insertAtCursor("", "[laughing]", 0, 0)).toEqual({ text: "[laughing]", cursor: 10 });
+  });
+
+  it("replaces the current selection with the tag", () => {
+    expect(insertAtCursor("abc[XX]def", "[breath]", 3, 7)).toEqual({
+      text: "abc[breath]def",
+      cursor: 3 + "[breath]".length,
+    });
+  });
+
+  it("falls back to appending at the end when no caret is reported", () => {
+    expect(insertAtCursor("abc", "[Uhm]", null)).toEqual({ text: "abc[Uhm]", cursor: 8 });
+    expect(insertAtCursor("abc", "[Shh]", undefined, undefined).text).toBe("abc[Shh]");
+  });
+
+  it("clamps out-of-range caret positions instead of throwing", () => {
+    expect(insertAtCursor("ab", "[sigh]", 99, 99)).toEqual({ text: "ab[sigh]", cursor: 8 });
+    expect(insertAtCursor("ab", "[sigh]", -5, -1).text).toBe("[sigh]ab");
+  });
+});

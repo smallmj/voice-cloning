@@ -343,3 +343,48 @@ export function engineDetailParagraphs(
   return paragraphs;
 }
 
+
+// ---------------------------------------------------------------------------
+// Issue #57: non-verbal tag quick-insert (pure helpers + tag list).
+// ---------------------------------------------------------------------------
+
+/** Cookbook-canonical non-verbal tags, inserted verbatim (English brackets). */
+export const NONVERBAL_TAGS: readonly string[] = [
+  "[laughing]",
+  "[sigh]",
+  "[Uhm]",
+  "[Shh]",
+  "[breath]",
+];
+
+/**
+ * Insert `tag` at the cursor position of a text field (issue #57). The
+ * selection [selectionStart, selectionEnd) is replaced; the caret ends up
+ * right after the inserted tag. Non-numeric / out-of-range positions fall
+ * back to appending at the end, so the function never throws on a field
+ * that reports no caret.
+ */
+export function insertAtCursor(
+  text: string,
+  tag: string,
+  selectionStart: number | null | undefined,
+  selectionEnd: number | null | undefined = selectionStart,
+): { text: string; cursor: number } {
+  const len = text.length;
+  const start =
+    typeof selectionStart === "number" && Number.isFinite(selectionStart)
+      ? Math.min(Math.max(Math.trunc(selectionStart), 0), len)
+      : null;
+  const endRaw =
+    typeof selectionEnd === "number" && Number.isFinite(selectionEnd)
+      ? Math.trunc(selectionEnd)
+      : null;
+  const end = start == null ? null : Math.min(Math.max(endRaw ?? start, start), len);
+  if (start == null || end == null) {
+    return { text: text + tag, cursor: len + tag.length };
+  }
+  return {
+    text: text.slice(0, start) + tag + text.slice(end),
+    cursor: start + tag.length,
+  };
+}

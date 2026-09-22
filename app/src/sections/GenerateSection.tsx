@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type {
   EngineInfo,
   EngineInstallStatus,
@@ -18,7 +19,8 @@ import {
   type SectionId,
 } from "../ui";
 import { Waveform } from "../components/Waveform";
-import { JumpLink } from "../components/bits";
+import { JumpLink, NonverbalTagButtons } from "../components/bits";
+import { insertAtCursor } from "../ui";
 
 export function GenerateSection({
   baseUrl,
@@ -81,6 +83,22 @@ export function GenerateSection({
   onGenerate: () => void;
   onNavigate: (section: SectionId) => void;
 }) {
+  // Issue #57: quick-insert non-verbal tags at the textarea caret.
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const insertTag = (tag: string) => {
+    const el = textRef.current;
+    const result = insertAtCursor(text, tag, el?.selectionStart, el?.selectionEnd);
+    onTextChange(result.text);
+    // Restore the caret after React re-renders with the new value.
+    requestAnimationFrame(() => {
+      const node = textRef.current;
+      if (node) {
+        node.focus();
+        node.setSelectionRange(result.cursor, result.cursor);
+      }
+    });
+  };
+
   const notInstalled =
     selectedEngine != null &&
     installStatus[selectedEngine] != null &&
@@ -235,7 +253,17 @@ export function GenerateSection({
         );
       })()}
 
-      <textarea value={text} onChange={(e) => onTextChange(e.target.value)} rows={4} />
+      {/* Issue #57: quick-insert buttons for common non-verbal tags
+          (engine-agnostic text-editing aid, see CONTEXT.md 术语). */}
+      <div className="generate-text-row">
+        <NonverbalTagButtons onInsert={insertTag} />
+      </div>
+      <textarea
+        ref={textRef}
+        value={text}
+        onChange={(e) => onTextChange(e.target.value)}
+        rows={4}
+      />
 
       {normalized && normalized.changed && (
         <div className="normalize-preview">

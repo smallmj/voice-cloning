@@ -1,0 +1,96 @@
+{
+ "v3": [
+  {
+   "case": "auto-no-code",
+   "lang_code": null,
+   "audio_s": 4.16,
+   "synth_s": 3.67,
+   "ok": true
+  },
+  {
+   "case": "chinese",
+   "lang_code": "chinese",
+   "audio_s": 4.16,
+   "synth_s": 2.27,
+   "ok": true
+  },
+  {
+   "case": "english",
+   "lang_code": "english",
+   "audio_s": 3.76,
+   "synth_s": 2.42,
+   "ok": true
+  },
+  {
+   "case": "french",
+   "lang_code": "french",
+   "audio_s": 4.64,
+   "synth_s": 2.11,
+   "ok": true
+  },
+  {
+   "case": "german",
+   "lang_code": "german",
+   "audio_s": 3.92,
+   "synth_s": 1.77,
+   "ok": true
+  },
+  {
+   "case": "italian",
+   "lang_code": "italian",
+   "audio_s": 4.8,
+   "synth_s": 2.16,
+   "ok": true
+  },
+  {
+   "case": "japanese",
+   "lang_code": "japanese",
+   "audio_s": 4.48,
+   "synth_s": 2.08,
+   "ok": true
+  },
+  {
+   "case": "korean",
+   "lang_code": "korean",
+   "audio_s": 4.64,
+   "synth_s": 2.72,
+   "ok": true
+  },
+  {
+   "case": "portuguese",
+   "lang_code": "portuguese",
+   "audio_s": 3.84,
+   "synth_s": 2.72,
+   "ok": true
+  },
+  {
+   "case": "russian",
+   "lang_code": "russian",
+   "audio_s": 4.32,
+   "synth_s": 2.29,
+   "ok": true
+  },
+  {
+   "case": "spanish",
+   "lang_code": "spanish",
+   "audio_s": 4.0,
+   "synth_s": 1.94,
+   "ok": true
+  },
+  {
+   "case": "mismatch-zh-as-japanese",
+   "lang_code": "japanese",
+   "audio_s": 4.08,
+   "synth_s": 2.2,
+   "ok": true
+  }
+ ],
+ "v4": {
+  "case": "v4-long",
+  "chars": 780,
+  "segments": 1,
+  "audio_s": 153.94,
+  "synth_s": 67.67,
+  "truncated": null
+ }
+}

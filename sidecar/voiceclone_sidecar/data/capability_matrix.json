@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-20",
+  "updated_at": "2026-09-22",
   "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
   "engines": [
     {
@@ -51,6 +51,30 @@
           "source": "docs/audit/2026-09-18-代码审计与优化点.md §4；mlx-audio 源码串明写 \"not directly supported yet\"",
           "date": "2026-09-18",
           "note": "issue #23：以 ParamSpec exposed=False / notExposedReason=no-op 固化为数据"
+        },
+        {
+          "field": "语种参数（lang_code）",
+          "value": "上游 mlx-audio qwen3 Model.generate 不消费语言参数：worker 曾传 language=（落 **kwargs 静默丢弃，audit §1.1），改传正确键 lang_code（小写匹配权重 codec_language_id）后真机验证仍为 no-op——中文文本 + lang_code=japanese 输出仍为中文；模型自动跟随文本语言，10 语种逐一合成均正确（zh/en/de/it/ja/ko/pt/ru/es 经本机 whisper-small ASR 复核，法语转写存疑系 ASR 弱项）。源码核对：0.5.4 与上游 main 的 Model.generate 均未读取 lang_code。",
+          "verification": "measured",
+          "source": "docs/audit/local-engine-param-gap-audit.md §1.1；debug/qwen3-verify/（results.json + asr.json + 13 个 wav）；mlx-audio 0.5.4 及 main 源码（mlx_audio/tts/models/qwen3/qwen3.py）",
+          "date": "2026-09-22",
+          "note": "issue #47：wire 修复落地（lang_code + 小写 + 10 语种 choices + auto=不传），但按 audit 决策 3『验证未通过转 not_exposed』，language 以 exposed=False / no-op 固化；to_wire 映射保留，上游一旦消费 lang_code 即可一行翻回"
+        },
+        {
+          "field": "采样参数（temperature/top_p/top_k/repetition_penalty）",
+          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送——mlx-audio 硬编码的静默默认（0.6/0.8/-1/1.3）与官方 config 不一致，『默认不发送』会让引擎行为偏离 UI 展示；源码核实四参数确实被 make_sampler/make_logits_processors 消费",
+          "verification": "verified",
+          "source": "voiceclone_sidecar/engines/qwen3_tts.py SAMPLING_SPECS；weights/generation_config.json；mlx-audio 0.5.4 qwen3.py L318-322",
+          "date": "2026-09-22",
+          "note": "issue #48；tests/test_qwen3_params.py 锁定传参与默认恒发送口径"
+        },
+        {
+          "field": "max_tokens（上游默认 1200/段）",
+          "value": "不暴露、不声明 spec 行：产品管线 500 字/请求上限下该内部安全帽不构成用户参数。V4 真机实测 780 字（测试文本实际长度，文件名 v4-long-500 指其覆盖 500 字上限场景）长文本单段合成：前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化",
+          "verification": "measured",
+          "source": "debug/qwen3-verify/v4-long-500.wav（780 字实测样本，文件名沿用 500 字上限场景命名）+ asr 转写；results.json v4 条目",
+          "date": "2026-09-22",
+          "note": "issue #48 V4 验收：结论为『披露』——按 fireredtts3 切句参数先例不加 not_exposed 行，以本条证据披露；500 字/请求上限（max_chars_per_request=500）即现有护栏"
         }
       ],
       "performance": [

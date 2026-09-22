@@ -60,17 +60,26 @@ def canonical_speed(engine_id: str, model: str, help: str = "") -> ParamSpec:
 
 
 def canonical_language(engine_id: str, model: str, choices, wire_name: str,
-                       default=None, mode: str = "cloning") -> ParamSpec:
+                       default=None, mode: str = "cloning",
+                       wire_transform=None, exposed: bool = True,
+                       not_exposed_reason: str | None = None) -> ParamSpec:
     """Canonical language control mapped onto the engine's own wire key.
 
     Six engines use six different language schemes and one has no parameter
     at all — so the canonical slot only exists where the engine actually
     has one, and ``to_wire`` carries the per-engine value mapping.
+    ``wire_transform`` post-processes a known choice (e.g. lowercasing for
+    an upstream key that only accepts lowercase, issue #47); an unknown
+    value still maps to None — never a guessed fallback.
+    ``exposed=False`` keeps the mapping as DATA while the UI discloses the
+    ``not_exposed_reason`` (ADR-0018 decision 3, the speed precedent).
     """
     def to_wire(value):
         if value is None or value == "":
             return None
-        return value if value in choices else None
+        if value not in choices:
+            return None
+        return wire_transform(value) if wire_transform else value
 
     return ParamSpec(
         name="language",
@@ -81,6 +90,8 @@ def canonical_language(engine_id: str, model: str, choices, wire_name: str,
         layer="canonical",
         wire_path=wire_name,
         help="发音语言。",
+        exposed=exposed,
+        not_exposed_reason=not_exposed_reason,
         applies_to=AppliesTo(engine=engine_id, model=model, mode=mode),
         to_wire=to_wire,
     )

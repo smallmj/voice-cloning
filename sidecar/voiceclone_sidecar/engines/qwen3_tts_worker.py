@@ -4,7 +4,14 @@ private business.
 
 Protocol: one JSON request on stdin ->
     {"weights_dir": "...", "text": "...", "ref_audio": "...", "ref_text": "...",
-     "output": "...", "language": "zh"}
+     "output": "...", "lang_code": "zh",
+     "temperature": 0.9, "top_p": 1.0, "top_k": 50, "repetition_penalty": 1.05}
+lang_code is OPTIONAL — absence means auto, and the sidecar only sends it
+when the user picked a language (issue #47; V3 verification proved mlx-audio
+never consumes it, so it is normally absent). The four sampling parameters
+are ALWAYS sent by the sidecar, including the declared defaults, because
+mlx-audio's hardcoded silent defaults (0.6/0.8/-1/1.3) differ from the
+official generation_config (0.9/1.0/50/1.05) the UI shows (issue #48).
 Progress lines on stdout are forwarded to the sidecar log bus verbatim; the
 final line is ``RESULT: {json}`` with {"audio_path", "sample_rate"}.
 
@@ -45,13 +52,26 @@ def main() -> None:
     model = load_model(weights_dir)
     log(f"qwen3-tts-mlx: model loaded in {time.monotonic() - started:.1f}s, synthesizing")
 
+    # Issue #47: the upstream qwen3 pipeline key is `lang_code` (NOT
+    # `language` — that lands in **kwargs and is silently dropped); the
+    # lowercase value must match the weight codec_language_id keys. Absent
+    # key = auto. Issue #48: the four sampling parameters are real upstream
+    # form parameters; the sidecar sends them always (declared defaults
+    # included) — forward whatever arrived.
+    generate_kwargs = {}
+    if request.get("lang_code"):
+        generate_kwargs["lang_code"] = str(request["lang_code"]).lower()
+    for name in ("temperature", "top_p", "top_k", "repetition_penalty"):
+        if request.get(name) is not None:
+            generate_kwargs[name] = request[name]
+
     results = list(
         model.generate(
             text=text,
             ref_audio=ref_audio,
             ref_text=ref_text,
-            language=request.get("language", "Chinese"),
             verbose=False,
+            **generate_kwargs,
         )
     )
     import numpy as np

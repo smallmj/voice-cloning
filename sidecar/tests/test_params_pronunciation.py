@@ -216,9 +216,13 @@ def test_mlx_dead_speed_is_data_not_a_slider(registry):
     speed = next(s for s in engine.param_specs() if s.name == "speed")
     assert speed.exposed is False
     assert speed.not_exposed_reason == "no-op"
-    # And the canonical language slot IS exposed and wired to the worker key.
+    # And the language slot carries the (fixed, issue #47) wire mapping as
+    # DATA: lang_code, lowercased — but exposed=False because V3 real-machine
+    # verification proved mlx-audio never consumes lang_code (no-op).
     language = next(s for s in engine.param_specs() if s.name == "language")
-    assert language.exposed and language.to_wire("Chinese") == "Chinese"
+    assert language.exposed is False
+    assert language.not_exposed_reason == "no-op"
+    assert language.to_wire("Chinese") == "chinese"
 
 
 def test_fake_key_engine_spec_has_applies_to():

@@ -1,0 +1,50 @@
+{
+ "auto-no-code": {
+  "language": "zh",
+  "text": "這是一段測試語音,看看它聽起來如何。"
+ },
+ "chinese": {
+  "language": "zh",
+  "text": "這是一段測試語音,看看它聽起來如何。"
+ },
+ "english": {
+  "language": "en",
+  "text": "This is a test sentence. Listen to how it sounds."
+ },
+ "french": {
+  "language": "en",
+  "text": "każdy després"
+ },
+ "german": {
+  "language": "de",
+  "text": "Dies ist ein Test-Satz. Hören Sie, wie er klingt."
+ },
+ "italian": {
+  "language": "it",
+  "text": "Questa è una frase di prova, ascolta come suona."
+ },
+ "japanese": {
+  "language": "ja",
+  "text": "これはテストの分です どのように聞こえるか聞いてください"
+ },
+ "korean": {
+  "language": "ko",
+  "text": "이것은 테스트 문장입니다. 어떻게 들리는지 들어보세요."
+ },
+ "portuguese": {
+  "language": "pt",
+  "text": "Esta é uma frase de test ou saquou-me sua."
+ },
+ "russian": {
+  "language": "ru",
+  "text": "Это тестовое предложение, послушайте, как оно звучит."
+ },
+ "spanish": {
+  "language": "es",
+  "text": "Esta es una frase de prueba. Escucha cómo suena."
+ },
+ "mismatch-zh-as-japanese": {
+  "language": "zh",
+  "text": "測試一旦測試語音,看看它聽起來如何。"
+ }
+}

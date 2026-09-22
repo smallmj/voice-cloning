@@ -38,6 +38,9 @@ def _wait_for_port(port: int, process: subprocess.Popen, timeout: float = 30.0) 
 
 @pytest.fixture(scope="session")
 def sidecar(tmp_path_factory):
+    # `=` form: a token_urlsafe value can start with "-", which argparse
+    # would misread as an option when passed as a separate argv item
+    # (intermittent "--token: expected one argument" CI failures).
     token = secrets.token_urlsafe(16)
     audio_dir = tmp_path_factory.mktemp("audio")
     # Issue #61: the app process must see a HERMETIC runtime root. Otherwise
@@ -52,8 +55,7 @@ def sidecar(tmp_path_factory):
             "voiceclone_sidecar",
             "--port",
             "0",
-            "--token",
-            token,
+            f"--token={token}",
             "--audio-dir",
             str(audio_dir),
         ],

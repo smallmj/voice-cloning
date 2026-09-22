@@ -63,10 +63,56 @@ WEIGHTS_FILES = [
 IDLE_TIMEOUT_S = 300.0
 MAX_REQUESTS_PER_WORKER = 20
 
-# Vendor guidance: split long text into sentences — long single requests
-# cause speed-up/buzzing. 200 chars/request is our conservative vendor-based
+# 200 chars/request is our conservative vendor-based
 # cap (verification level: vendor — recorded in the capability matrix).
 MAX_CHARS_PER_REQUEST = 200
+
+# Official 30-language list (issue #56; the `language` field of the HF model
+# card openbmb/VoxCPM2 — declarative support per the vendor's own claim;
+# real-machine spot checks are tracked by the verification ticket). Defined
+# ONCE here: capabilities() and every test derive from this tuple, so the
+# claim and the declaration cannot drift apart. No language selector: the
+# model follows the text itself, there is NO language argument.
+VOXCPM2_LANGUAGES: tuple[str, ...] = (
+    "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el",
+    "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no",
+    "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
+)
+
+
+def control_prefix(instruction: str, text: str) -> str:
+    """Official VoxCPM2 parenthesized-prefix syntax: ``(instruction)text``.
+
+    Single source for EVERY call site that builds this shape (generation
+    adapter and voice design alike). An empty/blank instruction returns the
+    text unchanged — an empty prefix is never emitted.
+    """
+    instruction = (instruction or "").strip()
+    return f"({instruction}){text}" if instruction else text
+
+
+def adapt_synthesis_text(text: str, params: dict | None, log=None) -> str:
+    """Text-path adaptation shared by ``prepare_synthesis`` and the
+    :meth:`Engine.full_synthesis_text` preview hook (US19, issue #54).
+
+    The text arriving here is ALREADY normalized (the pipeline applies the
+    ADR-0008 layer centrally before any engine adapter runs). Pronunciation
+    rewriting and the control-instruction prefix are applied HERE, after
+    normalization — a control instruction containing digits or English
+    descriptions therefore never passes through the normalization layer and
+    reaches the engine verbatim. Because the preview hook calls exactly this
+    function, the normalization preview can never disagree with what
+    ``prepare_synthesis`` will send.
+    """
+    params = params or {}
+    ann = params.get("pronunciation")
+    if ann and str(ann).strip():
+        # {ni3} phoneme syntax is only valid with normalize=False — the
+        # adapter OWNS that invariant (upstream usage guide).
+        text = pronunciation.rewrite(text, str(ann), "voxcpm", log)
+    # Control instruction: official `(instruction)text` parenthesized prefix.
+    # Empty value is never forwarded — neither into the text nor onto the wire.
+    return control_prefix(str(params.get("control_instruction") or ""), text)
 
 
 def param_specs_for(engine_id: str) -> list[ParamSpec]:
@@ -175,7 +221,7 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             kind="textarea",
             default="",
             layer="engine",
-            help="控制指令（VoxCPM 官方语法，英文圆括号前缀）：写在待合成文本开头的自然语言声音描述，用于音色设计与克隆风格控制；建议英文描述（如 warm female voice）；用于音色设计与克隆风格控制。在文本归一化之后拼接进正文开头（永不经归一化层，spec #54 / ADR-0008 时序），克隆与设计音色通用。",
+            help="控制指令（VoxCPM 官方语法）：写在待合成文本开头的自然语言声音描述，用于音色设计与克隆风格控制；以英文圆括号前缀拼接（如 (warm female voice)），建议英文描述。在文本归一化之后拼接进正文开头，指令本身永不被归一化改写；归一化预览会显示拼接后的完整待合成文本。",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
         ),
         ParamSpec(
@@ -235,27 +281,14 @@ def prepare_synthesis(text: str, params: dict, log) -> tuple[str, dict]:
 
     The user-visible values never reach the engine unconverted (ADR-0018).
 
-    Fixed ordering (spec #54 / CONTEXT.md「控制指令」「发音标注」): the text
-    arriving here is ALREADY normalized (the pipeline applies the ADR-0008
-    layer centrally before any engine adapter runs). Pronunciation rewriting
-    and the control-instruction prefix are appended HERE, after
-    normalization — a control instruction containing digits or English
-    descriptions therefore never passes through the normalization layer and
-    reaches the engine verbatim.
+    The text-path work (pronunciation rewriting + control-instruction
+    prefix, applied after normalization) lives in :func:`adapt_synthesis_text`
+    so the /normalize preview hook shares one implementation; this function
+    only adds the wire-parameter mapping on top.
     """
+    text = adapt_synthesis_text(text, params, log)
     params = params or {}
     wire: dict = {}
-    ann = params.get("pronunciation")
-    if ann and str(ann).strip():
-        # {ni3} phoneme syntax is only valid with normalize=False — the
-        # adapter OWNS that invariant (upstream usage guide).
-        text = pronunciation.rewrite(text, str(ann), "voxcpm", log)
-    # Control instruction: official `(instruction)text` parenthesized prefix,
-    # concatenated AFTER normalization (see docstring). Empty value is never
-    # forwarded — neither into the text nor onto the wire.
-    control = str(params.get("control_instruction") or "").strip()
-    if control:
-        text = f"({control}){text}"
     for key in (
         "cfg_value",
         "inference_timesteps",
@@ -314,16 +347,9 @@ class VoxCPM2EngineBase(InstallableEngine):
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
-            # Official 30-language list (issue #56; the `language` field of
-            # the HF model card openbmb/VoxCPM2 — declarative support per
-            # the vendor's own claim; real-machine spot checks are tracked
-            # by the verification ticket. No language selector: the model
-            # follows the text itself, there is NO language argument).
-            languages=(
-                "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el",
-                "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no",
-                "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
-            ),
+            # Official 30-language list — one shared tuple (see
+            # VOXCPM2_LANGUAGES above for the provenance).
+            languages=VOXCPM2_LANGUAGES,
             voice_cloning=True,
             # Native Voice Design (issue #57): description + preview text,
             # NO reference audio — official `(description)text` syntax.
@@ -343,6 +369,14 @@ class VoxCPM2EngineBase(InstallableEngine):
 
     def param_specs(self) -> list[ParamSpec]:
         return param_specs_for(self.engine_id)
+
+    def full_synthesis_text(self, text: str, params: dict | None = None) -> str:
+        """US19 (issue #54): the COMPLETE text this engine will synthesize,
+        given already-normalized text + generation params — pronunciation
+        rewriting and the control-instruction prefix included, via the exact
+        same :func:`adapt_synthesis_text` the synthesis path runs. The
+        /normalize preview therefore shows what the engine will hear."""
+        return adapt_synthesis_text(text, params)
 
     # -- install surface ----------------------------------------------------
 
@@ -531,7 +565,7 @@ class VoxCPM2EngineBase(InstallableEngine):
             # sets it and keeps enforcing ref_audio.
             "design": True,
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
-            "text": f"({description}){preview_text}",
+            "text": control_prefix(description, preview_text),
             "output": str(out_path),
         }
         log("voxcpm2: 音色设计 = 无参考生成（控制指令前缀 + 试听文本）")

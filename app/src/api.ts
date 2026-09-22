@@ -151,6 +151,11 @@ export interface GenerationBatchDeleteResult {
 export interface NormalizeResult {
   normalized: string;
   changed: boolean;
+  /** US19 (issue #54): present only when the request carried engine context
+   * (engine_id + params). True when the engine adapter changed the
+   * normalized text on top of it — e.g. a control-instruction prefix — so
+   * `normalized` here is the COMPLETE text the engine will synthesize. */
+  engine_adapter_applied?: boolean;
 }
 
 export type LogLevel = "info" | "warn" | "error";

@@ -125,6 +125,21 @@ class FakeRefTextEngine(FakeEngine):
         return Capabilities(**{**caps.to_dict(), "requires_reference_text": True})
 
 
+class FakeInstructEngine(FakeEngine):
+    """Test seam: an engine whose adapter reshapes the text the way VoxCPM2
+    does — a control-instruction parenthesized prefix (US19, issue #54).
+
+    Registered only when VOICECLONE_TEST_ENGINES=1; it lets the /normalize
+    engine-context preview be tested end to end without a real model."""
+
+    engine_id = "fake-instruct"
+    display_name = "Fake Engine (control instruction)"
+
+    def full_synthesis_text(self, normalized_text: str, params: dict | None = None) -> str:
+        control = str((params or {}).get("control_instruction") or "").strip()
+        return f"({control}){normalized_text}" if control else normalized_text
+
+
 class FakeKeyEngine(FakeEngine):
     """Test seam: a BYOK cloud-shaped engine.
 

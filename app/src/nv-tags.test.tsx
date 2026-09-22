@@ -21,23 +21,13 @@ describe("NonverbalTagButtons (issue #57)", () => {
     expect(html).toContain("nv-tag");
   });
 
-  it("onInsert receives the tag verbatim, and that tag inserts at the cursor", () => {
-    // renderToStaticMarkup drops event handlers, so verify the click path in
-    // two halves: (1) the handler wiring — the component passes each tag
-    // through unchanged; (2) the insert — pure insertAtCursor (issue #57).
-    const inserted: string[] = [];
-    const markup = renderToStaticMarkup(
-      <NonverbalTagButtons onInsert={(tag) => inserted.push(tag)} />,
-    );
-    expect(markup).toContain("nv-tag");
-    for (const tag of NONVERBAL_TAGS) {
-      insertAtCursor("", tag, 0, 0); // insertion shape locked in ui.test.ts
-      expect(NONVERBAL_TAGS).toContain(tag);
-    }
-    // handler wiring: simulate what onClick does for the first button
-    inserted.push(NONVERBAL_TAGS[0]);
-    expect(inserted).toEqual(["[laughing]"]);
-  });
+  // (The former third case here was dead code: renderToStaticMarkup drops
+  // onClick, so it could only re-assert what cases 1/2 + the pure
+  // insertAtCursor checks below already cover. The real handler is the
+  // one-liner `onClick={() => onInsert(tag)}`, type-checked by tsc — a real
+  // click assertion would need a DOM environment (jsdom) this suite does
+  // not ship; deleted in the issue-#54 review pass rather than kept
+  // pretending to test wiring.)
 
   it("every tag inserts correctly at the cursor (click-equivalent flow)", () => {
     for (const tag of NONVERBAL_TAGS) {

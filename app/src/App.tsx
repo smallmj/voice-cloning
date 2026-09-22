@@ -184,7 +184,18 @@ export default function App() {
         const res = await fetch(`${baseUrl}/normalize`, {
           method: "POST",
           headers: authHeaders(token, { "Content-Type": "application/json" }),
-          body: JSON.stringify({ text }),
+          // US19 (issue #54): send the same engine context the generation
+          // would send, so the preview shows the COMPLETE text the engine
+          // will synthesize (control-instruction prefix included).
+          body: JSON.stringify(
+            selectedEngine
+              ? {
+                  text,
+                  engine_id: selectedEngine,
+                  params: sendableParams(selectedEngineInfo?.params, engineParams),
+                }
+              : { text },
+          ),
           signal: controller.signal,
         });
         if (res.ok) setNormalized((await res.json()) as NormalizeResult);
@@ -196,7 +207,7 @@ export default function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [baseUrl, token, text]);
+  }, [baseUrl, token, text, selectedEngine, selectedEngineInfo, engineParams]);
 
   async function acknowledgeConsent() {
     if (!baseUrl || !token || !consentAck || consentBusy) return;

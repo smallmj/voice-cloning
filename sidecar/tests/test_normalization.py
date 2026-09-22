@@ -130,3 +130,55 @@ def test_english_description_with_digits_is_protected_by_fixed_ordering(client):
     # ③快速路径：无数字文本（含纯标签文本）走 no-op 快速路径，changed=False。
     r2 = client.post("/normalize", json={"text": "[laughing] [sigh]"})
     assert r2.json() == {"normalized": "[laughing] [sigh]", "changed": False}
+
+
+# --- US19: 归一化预览如实显示将要合成的完整文本（issue #54 review 修复）------
+
+
+def test_normalize_with_engine_context_shows_control_instruction_prefix(client):
+    """US19：带引擎上下文（engine_id + 与生成一致的 params）时，预览返回
+    引擎适配层拼出的完整待合成文本——控制指令前缀如实可见，不再只显示
+    归一化后的正文。fake-instruct 是测试缝隙引擎，其适配层与 VoxCPM2 一样
+    在归一化后的正文前拼 `(指令)`。"""
+    r = client.post(
+        "/normalize",
+        json={
+            "text": "今天卖出3个苹果",
+            "engine_id": "fake-instruct",
+            "params": {"control_instruction": "warm female voice"},
+        },
+    )
+    body = r.json()
+    assert body["normalized"] == "(warm female voice)今天卖出三个苹果"
+    assert body["changed"] is True
+    assert body["engine_adapter_applied"] is True
+
+
+def test_normalize_engine_context_without_instruction_is_plain_preview(client):
+    """无控制指令时引擎上下文不改写文本，披露位为 False——预览不撒谎也
+    不多嘴。"""
+    r = client.post(
+        "/normalize",
+        json={"text": "今天卖出3个苹果", "engine_id": "fake-instruct", "params": {}},
+    )
+    assert r.json() == {
+        "normalized": "今天卖出三个苹果",
+        "changed": True,
+        "engine_adapter_applied": False,
+    }
+
+
+def test_normalize_without_engine_context_keeps_legacy_shape(client):
+    """不带引擎上下文（或 engine_id 未知）时保持既有形状——旧调用方与
+    回归数据表不受影响。"""
+    r = client.post("/normalize", json={"text": "3个苹果"})
+    assert r.json() == {"normalized": "三个苹果", "changed": True}
+    r2 = client.post(
+        "/normalize",
+        json={
+            "text": "3个苹果",
+            "engine_id": "no-such-engine",
+            "params": {"control_instruction": "x"},
+        },
+    )
+    assert r2.json() == {"normalized": "三个苹果", "changed": True}

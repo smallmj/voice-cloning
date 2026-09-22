@@ -90,13 +90,8 @@ export function AboutUpdateCard({ initialState }: { initialState?: UpdateUiState
       // push event for a skipped tag simply re-renders the known result).
       dispatch({
         type: "check-result",
-        result: {
-          type: "available",
-          latestTag: r.latestTag,
-          releaseNotes: r.releaseNotes,
-          effectiveChannel: r.effectiveChannel,
-          warning: r.warning,
-        },
+        // r IS the real available result (status discriminant) — pass through.
+        result: r,
       });
     });
     return () => {
@@ -144,14 +139,14 @@ export function AboutUpdateCard({ initialState }: { initialState?: UpdateUiState
   }
 
   async function handleSkip() {
-    if (!result || result.type !== "available" || skipBusy) return;
+    if (!result || result.status !== "available" || skipBusy) return;
     setSkipBusy(true);
     try {
       await skipVersion(result.latestTag);
       dispatch({
         type: "check-result",
         result: {
-          type: "skipped",
+          status: "skipped",
           latestTag: result.latestTag,
           effectiveChannel: result.effectiveChannel,
         },
@@ -163,7 +158,7 @@ export function AboutUpdateCard({ initialState }: { initialState?: UpdateUiState
 
   const result: UpdaterResult | null = state.result;
   const notes =
-    result?.type === "available" && result.releaseNotes
+    result?.status === "available" && result.releaseNotes
       ? releaseNotesParagraphs(result.releaseNotes)
       : [];
 
@@ -182,17 +177,17 @@ export function AboutUpdateCard({ initialState }: { initialState?: UpdateUiState
           当前版本：
           <code>{currentVersion ?? "…"}</code>
         </span>
-        {state.phase === "up-to-date" && state.result?.type === "up-to-date" && (
+        {state.phase === "up-to-date" && state.result?.status === "up-to-date" && (
           <span>
             最新版本：<code>{state.result.latestTag}</code> — <strong>已是最新</strong>
           </span>
         )}
-        {state.phase === "available" && state.result?.type === "available" && (
+        {state.phase === "available" && state.result?.status === "available" && (
           <span>
             最新版本：<code>{state.result.latestTag}</code>（有可用更新）
           </span>
         )}
-        {state.phase === "skipped" && state.result?.type === "skipped" && (
+        {state.phase === "skipped" && state.result?.status === "skipped" && (
           <span>
             最新版本：<code>{state.result.latestTag}</code>（已跳过此版本）
           </span>
@@ -249,7 +244,7 @@ export function AboutUpdateCard({ initialState }: { initialState?: UpdateUiState
       )}
 
       {/* available view: notes + effective channel + warning + actions */}
-      {state.phase === "available" && result?.type === "available" && (
+      {state.phase === "available" && result?.status === "available" && (
         <div className="update-available">
           <div>实际生效渠道：{effectiveChannelLabel(result.effectiveChannel)}</div>
           {result.warning === "manifest-missing" && (

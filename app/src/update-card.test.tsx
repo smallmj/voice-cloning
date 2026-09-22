@@ -18,7 +18,22 @@ import {
   settingsForMirrorChange,
   updateReducer,
 } from "./update-client";
+import type { UpdaterResult } from "./updater-types";
 import { renderCard, type CardHarness } from "./test-support/update-card-dom";
+
+
+/** UpdaterAvailable fixture with the required fields filled. */
+const avail = (
+  over: Partial<Extract<UpdaterResult, { status: "available" }>> & { latestTag: string },
+): Extract<UpdaterResult, { status: "available" }> => ({
+  status: "available" as const,
+  releaseNotes: "",
+  installerUrl: "https://gh-proxy.com/x/VoiceClone-Setup-0.2.0.exe",
+  installerName: "VoiceClone Setup 0.2.0.exe",
+  manifestSha512: "abc",
+  effectiveChannel: "mirror",
+  ...over,
+});
 
 const BASE_SETTINGS: UpdateSettings = {
   channelMode: "auto",
@@ -74,7 +89,7 @@ describe("updateReducer (issue #66)", () => {
     let s = updateReducer(initialUpdateState, { type: "check-start" });
     s = updateReducer(s, {
       type: "check-result",
-      result: { type: "available", latestTag: "v0.2.0", effectiveChannel: "mirror" },
+      result: avail({ latestTag: "v0.2.0", effectiveChannel: "mirror" }),
     });
     s = updateReducer(s, { type: "download-start" });
     expect(s.phase).toBe("downloading");
@@ -100,7 +115,7 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h, html } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: { type: "up-to-date", latestTag: "0.1.9", effectiveChannel: "auto" },
+        lastCheck: { status: "up-to-date", latestTag: "0.1.9", effectiveChannel: "mirror" },
         settings: BASE_SETTINGS,
       },
     });
@@ -114,14 +129,13 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h, html } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           releaseNotes: "修复了大文件转写\n\n新增历史导出",
           effectiveChannel: "mirror",
           installerName: "VoiceClone-0.2.0.exe",
           manifestSha512: "abc",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -138,12 +152,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h, html } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           releaseNotes: "<script>alert(1)</script> 带标签的说明",
           effectiveChannel: "mirror",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -157,10 +170,10 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
       status: {
         currentVersion: "0.1.9",
         lastCheck: {
-          type: "unavailable",
-          reason: "network",
+          status: "unavailable",
+          reason: "network-error",
           effectiveChannel: "mirror",
-          attempts: 2,
+          attempts: [],
         },
         settings: BASE_SETTINGS,
       },
@@ -176,7 +189,7 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
       status: { currentVersion: "0.1.9", lastCheck: null, settings: BASE_SETTINGS },
       checkForUpdate: async (manual) => {
         calls.push(manual);
-        return { type: "up-to-date", latestTag: "0.1.9", effectiveChannel: "auto" };
+        return { status: "up-to-date", latestTag: "0.1.9", effectiveChannel: "mirror" };
       },
     });
     await h.clickButton("检查更新");
@@ -201,12 +214,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h, html } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           effectiveChannel: "mirror",
           installerName: "VoiceClone-0.2.0.exe",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -232,12 +244,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           effectiveChannel: "official",
           installerName: "VoiceClone-0.2.0.dmg",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -249,12 +260,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const h2 = await renderCard({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           effectiveChannel: "official",
           installerName: "VoiceClone-0.2.0.dmg",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -271,12 +281,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h } = await open({
       status: {
         currentVersion: "0.1.9",
-        lastCheck: {
-          type: "available",
+        lastCheck: avail({
           latestTag: "0.2.0",
           effectiveChannel: "mirror",
           installerName: "VoiceClone-0.2.0.exe",
-        },
+        }),
         settings: BASE_SETTINGS,
       },
     });
@@ -290,12 +299,11 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     const { h } = await open({
       status: { currentVersion: "0.1.9", lastCheck: null, settings: BASE_SETTINGS },
     });
-    h.pushNewVersion({
-      type: "available",
+    h.pushNewVersion(avail({
       latestTag: "0.2.0",
       releaseNotes: "启动检测发现新版本",
       effectiveChannel: "mirror",
-    });
+    }));
     expect(h.html()).toContain("0.2.0");
     expect(h.html()).toContain("启动检测发现新版本");
     await h.unmount();

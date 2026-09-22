@@ -51,7 +51,7 @@ export async function renderCard(overrides: CardMockOverrides = {}): Promise<Car
     getUpdateStatus: async () => overrides.status ?? null,
     checkForUpdate:
       overrides.checkForUpdate ??
-      (async () => ({ type: "up-to-date" as const, latestTag: "0", effectiveChannel: "auto" })),
+      (async () => ({ status: "up-to-date" as const, latestTag: "0", effectiveChannel: "mirror" })),
     saveUpdateSettings: async (s: UpdateSettings) => {
       savedSettings.push(s);
       overrides.saveUpdateSettings?.(s);

@@ -8,62 +8,25 @@
 export const DEFAULT_MIRROR_PREFIX = "https://gh-proxy.com/";
 export const RELEASES_PAGE_URL = "https://github.com/smallmj/voice-cloning/releases/latest";
 
-export type UpdateChannelMode = "auto" | "official" | "mirror";
+// Merger note (PR #63): types now come from ./updater-types — the single
+// source of truth that mirrors the real preload bridge (issue #65). The
+// UpdaterResult discriminant is `status` (events keep `type`).
 
-export interface UpdateSettings {
-  channelMode: UpdateChannelMode;
-  mirrorPrefix: string;
-  skippedTag: string | null;
-}
+import type {
+  UpdateBridge,
+  UpdateEvent,
+  UpdateSettings,
+  UpdateStatus,
+  UpdaterResult,
+} from "./updater-types";
 
-/** UpdaterResult variants (contract #66). The discriminant is `type`, the
- * same field name the event payloads use. */
-export type UpdaterResult =
-  | {
-      type: "available";
-      latestTag: string;
-      releaseNotes?: string;
-      installerUrl?: string;
-      installerName?: string;
-      effectiveChannel: string;
-      manifestSha512?: string;
-      warning?: string;
-    }
-  | { type: "unavailable"; reason: string; effectiveChannel: string; attempts: number }
-  | { type: "up-to-date"; latestTag: string; effectiveChannel: string }
-  | { type: "skipped"; latestTag: string; effectiveChannel: string };
-
-export type UpdateEvent =
-  | { type: "progress"; percent: number; received: number; total: number }
-  | { type: "done"; warning?: "manifest-missing" }
-  | { type: "failed"; message: string };
-
-export interface NewVersionInfo {
-  type: "available";
-  latestTag: string;
-  releaseNotes?: string;
-  effectiveChannel: string;
-  warning?: string;
-}
-
-export interface UpdateStatus {
-  currentVersion: string;
-  lastCheck: UpdaterResult | null;
-  settings: UpdateSettings;
-}
+export type { UpdateEvent, UpdateSettings, UpdateStatus, UpdaterResult };
+export type UpdateChannelMode = UpdateSettings["channelMode"];
+export type NewVersionInfo = Extract<UpdaterResult, { status: "available" }>;
 
 // --- guarded preload bridge -------------------------------------------
 
-interface VoicecloneUpdaterApi {
-  getUpdateStatus?: () => Promise<UpdateStatus>;
-  checkForUpdate?: (manual: boolean) => Promise<UpdaterResult>;
-  saveUpdateSettings?: (s: UpdateSettings) => Promise<void>;
-  skipVersion?: (tag: string) => Promise<void>;
-  startUpdateDownload?: () => Promise<void>;
-  cancelUpdateDownload?: () => Promise<void>;
-  onUpdateEvent?: (cb: (e: UpdateEvent) => void) => void;
-  onNewVersionAvailable?: (cb: (r: NewVersionInfo) => void) => void;
-}
+type VoicecloneUpdaterApi = Partial<UpdateBridge>;
 
 function updaterApi(): VoicecloneUpdaterApi | null {
   if (typeof window === "undefined") return null;
@@ -216,7 +179,7 @@ export function updateReducer(state: UpdateUiState, action: UpdateUiAction): Upd
     case "check-result":
       return {
         ...initialUpdateState,
-        phase: action.result.type,
+        phase: action.result.status,
         result: action.result,
       };
     case "download-start":

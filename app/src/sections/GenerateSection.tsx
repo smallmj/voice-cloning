@@ -3,7 +3,6 @@ import type {
   EngineInfo,
   EngineInstallStatus,
   GenerationRecord,
-  LogEvent,
   NormalizeResult,
   ParamSpecInfo,
   Voice,

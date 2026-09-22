@@ -70,6 +70,11 @@ def sidecar(tmp_path_factory):
     )
     try:
         line = process.stdout.readline()
+        if not line.strip():
+            # Empty handshake = the sidecar died at startup. Surface stderr,
+            # otherwise CI shows only a bare JSONDecodeError with no cause.
+            stderr = process.stderr.read() if process.poll() is not None else "(still running)"
+            raise RuntimeError(f"sidecar produced no handshake line; stderr:\n{stderr}")
         handshake = json.loads(line)
         assert handshake["event"] == "ready", line
         port = handshake["port"]

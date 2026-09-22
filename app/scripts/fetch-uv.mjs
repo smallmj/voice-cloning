@@ -81,7 +81,8 @@ async function fetchUv(target) {
     return outPath;
   }
   mkdirSync(outDir, { recursive: true });
-  const archiveName = `uv-${triple}.tar.gz`;
+  // uv official releases ship .zip for Windows and .tar.gz elsewhere.
+  const archiveName = `uv-${triple}${platform === "win32" ? ".zip" : ".tar.gz"}`;
   const archive = path.join(outDir, archiveName);
   const mirror = process.env[MIRROR_ENV];
   const urls = mirror ? [mirror, `${BASE}/${archiveName}`] : [`${BASE}/${archiveName}`];
@@ -99,7 +100,7 @@ async function fetchUv(target) {
   // Extract just the uv binary from the tar.gz.
   const tmp = path.join(outDir, "_extract");
   mkdirSync(tmp, { recursive: true });
-  execFileSync("tar", ["-xzf", archive, "-C", tmp]);
+  execFileSync("tar", ["-xf", archive, "-C", tmp]);
   const found = findFile(tmp, exe);
   if (!found) throw new Error(`${exe} not found inside ${archive}`);
   renameSync(found, outPath);

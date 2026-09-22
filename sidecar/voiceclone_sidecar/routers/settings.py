@@ -12,6 +12,8 @@ makes the change take effect without restarting the sidecar.
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import engine_config, sources
@@ -39,6 +41,24 @@ LOG_BUFFER_DEFAULT = 500
 # against the same set the Electron updater module uses.
 ALLOWED_UPDATE_CHANNEL_MODES = ("auto", "official", "mirror")
 DEFAULT_UPDATE_MIRROR_PREFIX = "https://gh-proxy.com/"
+
+# PR #63 review fix: the 镜像前缀 is spliced in front of GitHub API/asset URLs
+# by the Electron updater, so it must stay `https://` + host (+ optional
+# path). file://, http://, scheme-relative or whitespace values are rejected
+# (PUT → 422); corrupt stored values degrade to the default on read. The
+# same regex lives in app/electron/updater.ts (sanitizeMirrorPrefix).
+MIRROR_PREFIX_PATTERN = r"https://[^/\s#?]+(/[^\s#?]*)?"
+
+
+def _sanitize_mirror_prefix(value) -> str:
+    """Validate + normalize a mirror prefix; falls back to the default for
+    anything that is not a valid https://host[/path] string."""
+    if not isinstance(value, str):
+        return DEFAULT_UPDATE_MIRROR_PREFIX
+    trimmed = value.strip()
+    if not re.fullmatch(MIRROR_PREFIX_PATTERN, trimmed):
+        return DEFAULT_UPDATE_MIRROR_PREFIX
+    return trimmed.rstrip("/") + "/"
 
 
 def _is_number(value) -> bool:
@@ -82,11 +102,7 @@ def _sanitize(raw: dict) -> dict:
             if raw.get("updater_channel_mode") in ALLOWED_UPDATE_CHANNEL_MODES
             else "auto"
         ),
-        "updater_mirror_prefix": (
-            raw.get("updater_mirror_prefix")
-            if isinstance(raw.get("updater_mirror_prefix"), str)
-            else DEFAULT_UPDATE_MIRROR_PREFIX
-        ),
+        "updater_mirror_prefix": _sanitize_mirror_prefix(raw.get("updater_mirror_prefix")),
         # 跳过此版本: a stored tag is kept only when a non-empty string.
         "updater_skipped_tag": (
             raw.get("updater_skipped_tag")
@@ -200,9 +216,24 @@ def build_router(ctx: AppContext) -> APIRouter:
             update["updater_channel_mode"] = mode
         if "updater_mirror_prefix" in body:
             prefix = body["updater_mirror_prefix"]
+            # PR #63 review fix: must be https://host[/path] — the updater
+            # splices this value in front of GitHub URLs, so anything else
+            # (file://, http://, whitespace, scheme-relative) is refused and
+            # never persisted. An emptied field stores the default (the
+            # renderer's 「镜像不可编辑为空」 rule); a valid value is
+            # normalized to a single trailing slash.
             if not isinstance(prefix, str):
                 raise HTTPException(status_code=422, detail="updater_mirror_prefix 必须是字符串")
-            update["updater_mirror_prefix"] = prefix
+            trimmed = prefix.strip()
+            if trimmed == "":
+                update["updater_mirror_prefix"] = DEFAULT_UPDATE_MIRROR_PREFIX
+            elif re.fullmatch(MIRROR_PREFIX_PATTERN, trimmed) is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="updater_mirror_prefix 必须是 https:// 开头的镜像地址（如 https://gh-proxy.com/）",
+                )
+            else:
+                update["updater_mirror_prefix"] = trimmed.rstrip("/") + "/"
         if "updater_skipped_tag" in body:
             tag = body["updater_skipped_tag"]
             if tag is not None and (not isinstance(tag, str) or not tag):

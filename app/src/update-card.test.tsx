@@ -13,6 +13,7 @@ import {
   type UpdateSettings,
   effectiveChannelLabel,
   initialUpdateState,
+  onUpdateEvent,
   releaseNotesParagraphs,
   settingsForChannelChange,
   settingsForMirrorChange,
@@ -32,6 +33,7 @@ const avail = (
   installerName: "VoiceClone Setup 0.2.0.exe",
   manifestSha512: "abc",
   effectiveChannel: "mirror",
+  resolvedPrefix: "https://gh-proxy.com/",
   ...over,
 });
 
@@ -81,6 +83,15 @@ describe("update-client pure helpers (issue #66)", () => {
     expect(settingsForMirrorChange(BASE_SETTINGS, " https://my-proxy.example/ ").mirrorPrefix).toBe(
       "https://my-proxy.example/",
     );
+  });
+
+  // PR #63 review fix (finding 2): the renderer applies the same validator as
+  // the main process and sidecar — non-https schemes can never persist.
+  it("rejects file:// and http:// mirror prefixes, falling back to the default", () => {
+    expect(settingsForMirrorChange(BASE_SETTINGS, "file:///etc/passwd").mirrorPrefix).toBe(DEFAULT_MIRROR_PREFIX);
+    expect(settingsForMirrorChange(BASE_SETTINGS, "http://insecure.example/").mirrorPrefix).toBe(DEFAULT_MIRROR_PREFIX);
+    expect(settingsForMirrorChange(BASE_SETTINGS, "//scheme-relative.example/").mirrorPrefix).toBe(DEFAULT_MIRROR_PREFIX);
+    expect(settingsForMirrorChange(BASE_SETTINGS, " https://ok.example/prefix ").mirrorPrefix).toBe("https://ok.example/prefix/");
   });
 });
 
@@ -307,5 +318,35 @@ describe("AboutUpdateCard (issue #66, jsdom)", () => {
     expect(h.html()).toContain("0.2.0");
     expect(h.html()).toContain("启动检测发现新版本");
     await h.unmount();
+  });
+});
+
+// PR #63 review fix (finding 3): the update-client subscriptions must return
+// a REAL unsubscribe so components stop listening on unmount (no listener
+// stacking on remount).
+describe("update-client unsubscribe (PR #63 review fix)", () => {
+  it("AboutUpdateCard removes both listeners on unmount", async () => {
+    const h = await renderCard({
+      status: { currentVersion: "0.1.9", lastCheck: null, settings: BASE_SETTINGS },
+    });
+    expect(h.subscriptionsAdded).toBe(2);
+    expect(h.subscriptionsRemoved).toBe(0);
+    await h.unmount();
+    expect(h.subscriptionsRemoved).toBe(2);
+  });
+
+  it("the returned unsubscribe stops further event delivery", async () => {
+    const seen: UpdateEvent[] = [];
+    const off = onUpdateEvent((e) => seen.push(e));
+    const h = await renderCard(); // replaces the bridge; keep the earlier off bound to the first
+    void h;
+    // The first subscription was made against the bridge that renderCard
+    // just overwrote, so exercise unsubscribe against a fresh bridge pair.
+    const off2 = onUpdateEvent((e) => seen.push(e));
+    off2();
+    off();
+    h.pushEvent({ type: "failed", message: "不应到达" });
+    await h.unmount();
+    expect(seen).toEqual([]);
   });
 });

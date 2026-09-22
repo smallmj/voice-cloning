@@ -11,8 +11,11 @@ import {
   matchAssets,
   parseManifestSha512,
   resolveChannelChain,
+  resolveInstallerFileName,
+  sanitizeMirrorPrefix,
   sha512Hex,
   verifySha512,
+  verifySha512Hex,
   type FetchLike,
   type LatestReleaseJson,
   type ReleaseAsset,
@@ -286,5 +289,76 @@ describe("checkForUpdate", () => {
     if (r.status !== "available") return;
     expect(r.installerName).toBe(MAC_INSTALLER.name);
     expect(r.manifestSha512).toBe(SHA);
+  });
+});
+
+describe("sanitizeMirrorPrefix (PR #63 review fix: prefix validation)", () => {
+  it("accepts https://host and https://host/path, trimmed, single trailing slash", () => {
+    expect(sanitizeMirrorPrefix("https://gh-proxy.com/")).toBe("https://gh-proxy.com/");
+    expect(sanitizeMirrorPrefix("  https://my.example  ")).toBe("https://my.example/");
+    expect(sanitizeMirrorPrefix("https://my.example/prefix")).toBe("https://my.example/prefix/");
+    expect(sanitizeMirrorPrefix("https://my.example/prefix//")).toBe("https://my.example/prefix/");
+  });
+
+  it("rejects file://, http://, scheme-relative and garbage → default", () => {
+    for (const bad of ["file:///etc", "http://insecure.example/", "//evil.example/", "ftp://x/", "https://", "javascript:alert(1)", "   ", 42, null]) {
+      expect(sanitizeMirrorPrefix(bad as unknown as string)).toBe(DEFAULT_MIRROR_PREFIX);
+    }
+  });
+
+  it("falls back to a caller-provided fallback", () => {
+    expect(sanitizeMirrorPrefix("nope", "https://fallback.example/")).toBe("https://fallback.example/");
+  });
+});
+
+describe("resolveInstallerFileName (PR #63 review fix: traversal guard)", () => {
+  it("accepts a plain installer name with the platform extension", () => {
+    expect(resolveInstallerFileName("VoiceClone Setup 0.2.0.exe", "win32")).toBe("VoiceClone Setup 0.2.0.exe");
+    expect(resolveInstallerFileName("VoiceClone-0.2.0.dmg", "darwin")).toBe("VoiceClone-0.2.0.dmg");
+  });
+
+  it("rejects path traversal and subdirectory names", () => {
+    expect(resolveInstallerFileName("../../evil.exe", "win32")).toBeNull();
+    expect(resolveInstallerFileName("sub/evil.exe", "win32")).toBeNull();
+    expect(resolveInstallerFileName("..\\evil.dmg", "darwin")).toBeNull();
+  });
+
+  it("rejects a platform-extension mismatch", () => {
+    expect(resolveInstallerFileName("VoiceClone.Setup.0.2.0.exe", "darwin")).toBeNull();
+    expect(resolveInstallerFileName("VoiceClone-0.2.0.dmg", "win32")).toBeNull();
+    expect(resolveInstallerFileName("latest.yml", "win32")).toBeNull();
+    expect(resolveInstallerFileName("", "win32")).toBeNull();
+  });
+});
+
+describe("verifySha512Hex (PR #63 review fix: incremental hashing)", () => {
+  it("matches verifySha512 semantics, including the missing-manifest warning", () => {
+    const data = new TextEncoder().encode("installer bytes");
+    expect(verifySha512Hex(sha512Hex(data), sha512Hex(data)).ok).toBe(true);
+    expect(verifySha512Hex("0".repeat(128), sha512Hex(data)).ok).toBe(false);
+    expect(verifySha512Hex(sha512Hex(data), null)).toEqual({ ok: false, warning: "manifest-missing" });
+  });
+});
+
+describe("available result carries the resolved channel prefix (PR #63 review fix: finding 6)", () => {
+  it("mirror-served results expose the mirror prefix; official results the empty prefix", async () => {
+    const fetch = fakeFetch({
+      [API]: { json: releaseJson() },
+      [MANIFEST.browser_download_url]: { text: MANIFEST_YML },
+    });
+    const r = await checkForUpdate({ ...base, fetch, channelMode: "official" });
+    expect(r.status).toBe("available");
+    if (r.status !== "available") return;
+    expect(r.effectiveChannel).toBe("official");
+    expect(r.resolvedPrefix).toBe("");
+
+    const fetchMirror = fakeFetch({
+      [`https://my.example/${API}`]: { json: releaseJson() },
+      [`https://my.example/${MANIFEST.browser_download_url}`]: { text: MANIFEST_YML },
+    });
+    const r2 = await checkForUpdate({ ...base, fetch: fetchMirror, channelMode: "mirror", mirrorPrefix: "https://my.example/" });
+    expect(r2.status).toBe("available");
+    if (r2.status !== "available") return;
+    expect(r2.resolvedPrefix).toBe("https://my.example/");
   });
 });

@@ -5,6 +5,7 @@
 // This module does NO IO except the injected fetch, and imports nothing from
 // Electron — main.ts (ticket #65/#66) calls into it and owns all side effects.
 import { createHash } from "node:crypto";
+import * as path from "node:path";
 import { gt as semverGt, valid as semverValid } from "semver";
 
 /** GitHub repo queried for the latest stable release (ADR-0020 仓库常量). */
@@ -12,6 +13,23 @@ export const GITHUB_REPO = "smallmj/voice-cloning";
 
 /** Default mirror prefix (镜像前缀), editable by the user. */
 export const DEFAULT_MIRROR_PREFIX = "https://gh-proxy.com/";
+
+/**
+ * Validate + normalize a user-provided 镜像前缀 (review fix, PR #63): the
+ * prefix is spliced in front of GitHub API and asset URLs, so anything that
+ * is not `https://` + host (+ optional path) would let a typed value change
+ * the transport (file://, http://) or the authority. Returns the trimmed
+ * value with exactly one trailing slash on success; the fallback on anything
+ * else. The user-chosen https mirror is trusted by design (self-inflicted
+ * risk — see docs/release/update-publishing.md).
+ */
+export function sanitizeMirrorPrefix(prefix: unknown, fallback: string = DEFAULT_MIRROR_PREFIX): string {
+  if (typeof prefix !== "string") return fallback;
+  const trimmed = prefix.trim();
+  // https:// + host (no scheme-relative "//", no whitespace) + optional path.
+  if (!/^https:\/\/[^/\s#?]+(\/[^\s#?]*)?$/.test(trimmed)) return fallback;
+  return `${trimmed.replace(/\/+$/, "")}/`;
+}
 
 /** GitHub API endpoint for the latest stable (non-prerelease) release. */
 export const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
@@ -89,10 +107,19 @@ export interface VerifySha512Result {
  * hash is a warning, not a failure (spec: 无清单则警告但允许继续).
  */
 export function verifySha512(data: Uint8Array, expectedSha512: string | null | undefined): VerifySha512Result {
+  return verifySha512Hex(sha512Hex(data), expectedSha512);
+}
+
+/**
+ * Same verdict for an already-computed hex digest (review fix PR #63 finding
+ * 8: the download streams through an incremental hash, so main.ts never
+ * re-reads the whole installer just to verify it).
+ */
+export function verifySha512Hex(digestHex: string, expectedSha512: string | null | undefined): VerifySha512Result {
   if (expectedSha512 == null || expectedSha512.trim() === "") {
     return { ok: false, warning: "manifest-missing" };
   }
-  return { ok: sha512Hex(data).toLowerCase() === expectedSha512.trim().toLowerCase() };
+  return { ok: digestHex.toLowerCase() === expectedSha512.trim().toLowerCase() };
 }
 
 /**
@@ -116,6 +143,27 @@ function installerExtension(platform: UpdatePlatform): ".exe" | ".dmg" {
 /** The checksum manifest file expected for each platform. */
 export function manifestFileName(platform: UpdatePlatform): "latest.yml" | "latest-mac.yml" {
   return platform === "win32" ? "latest.yml" : "latest-mac.yml";
+}
+
+/**
+ * Review fix (PR #63 finding 1): the installer name arrives from the release
+ * JSON and is later joined under the temp dir — a hostile mirror could send
+ * "../../Something" and escape the temp directory before the sha512 check
+ * (the manifest comes through the same channel, so it provides no defense).
+ * Returns the basename ONLY when it survives unmodified and carries the
+ * platform installer extension; null means "treat the result as failed" so
+ * the caller falls back to the release page in the browser.
+ */
+export function resolveInstallerFileName(installerName: string, platform: UpdatePlatform): string | null {
+  if (typeof installerName !== "string" || installerName === "") return null;
+  // Reject ANY path separator (both flavors: the file is joined on the local
+  // OS, so a backslash is a separator on Windows even though basename here
+  // runs with posix rules in tests).
+  if (/[/\\]/.test(installerName)) return null;
+  const fileName = path.basename(installerName);
+  if (fileName !== installerName) return null; // separators / traversal in the raw name
+  if (!fileName.toLowerCase().endsWith(installerExtension(platform))) return null;
+  return fileName;
 }
 
 export interface ReleaseAsset {
@@ -198,6 +246,13 @@ export interface UpdaterAvailable {
   installerUrl: string;
   installerName: string;
   effectiveChannel: Channel;
+  /**
+   * URL prefix of the channel that actually served this result (review fix
+   * PR #63 finding 6): the download must reuse the SAME channel prefix, not
+   * re-read the (user-editable) settings value, which may have changed
+   * between the check and the download click.
+   */
+  resolvedPrefix: string;
   /** sha512 from the manifest, null when the manifest was missing. */
   manifestSha512: string | null;
   /** Set when the checksum manifest was absent (warning, not failure). */
@@ -241,6 +296,13 @@ type ProbeOutcome =
   | { ok: false; reason: UnavailableReason };
 
 async function probeChannel(fetch: FetchLike, entry: ChannelEntry, timeoutMs: number): Promise<ProbeOutcome> {
+  // Mirror channel note (review fix PR #63 finding 5, verified empirically
+  // 2026): gh-proxy-class services DO proxy `https://api.github.com/...` REST
+  // traffic (gh-proxy.com returns real release JSON, HTTP 200), while they do
+  // NOT proxy `github.com/<repo>/releases.atom` (404). So splicing the mirror
+  // prefix in front of the REST API URL is correct here, and no alternate
+  // metadata parser (atom / HTML scraping) is needed. Asset downloads splice
+  // the same prefix, which is the traffic gh-proxy is designed for.
   const url = `${entry.urlPrefix}${LATEST_RELEASE_API_URL}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -334,6 +396,7 @@ export async function checkForUpdate(input: CheckForUpdateInput): Promise<Update
       installerUrl: matched.installer.browser_download_url,
       installerName: matched.installer.name,
       effectiveChannel: entry.channel,
+      resolvedPrefix: entry.urlPrefix,
       manifestSha512,
       warning,
     };

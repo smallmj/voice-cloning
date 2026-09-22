@@ -35,6 +35,12 @@ electron-builder 已在 `app/electron-builder.json5` 配置（`productName: "Voi
 
 当前仓库尚无任何 Release 时，`/releases/latest` 返回 404，更新器走"检测不可用 → 静默跳过"路径（无报错、无弹窗），属预期行为，不是故障。首次发版后该路径自动消失。
 
+## 镜像渠道与 REST API（PR #63 复核结论）
+
+镜像前缀（默认 `https://gh-proxy.com/`）会同时拼接在 GitHub REST API（`https://api.github.com/...`）与资产下载 URL 之前。经实测（2026）：gh-proxy 类服务**可以**代理 REST API（`/releases/latest` 经 gh-proxy.com 返回真实 JSON，HTTP 200），但**不**代理 `github.com/<repo>/releases.atom`（404）——因此更新器元数据直接走「前缀 + REST API」，无需另行解析 atom 或 HTML 页面。
+
+安全说明：镜像前缀由用户在设置中自行填写（仅接受 `https://` + 域名，主进程与 sidecar 双重校验）。用户选择的 https 镜像**视为受信任源**——镜像返回的内容（含清单与安装包）由该镜像负责，属于用户自主承担的风险。
+
 ## 发版清单（checklist）
 
 1. **同步版本号**：按既有 version-sync 约定，`app/package.json` 的 `version` 与 `sidecar/voiceclone_sidecar/_version.py` 保持一致，一并更新。

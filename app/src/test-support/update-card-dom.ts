@@ -36,6 +36,9 @@ export interface CardHarness {
   skippedTags: string[];
   downloadsStarted: number;
   downloadsCancelled: number;
+  /** PR #63 review fix: listener bookkeeping for the unsubscribe test. */
+  subscriptionsAdded: number;
+  subscriptionsRemoved: number;
   unmount: () => Promise<void>;
 }
 
@@ -46,6 +49,10 @@ export async function renderCard(overrides: CardMockOverrides = {}): Promise<Car
   let downloadsCancelled = 0;
   let eventCb: ((e: UpdateEvent) => void) | null = null;
   let newVersionCb: ((r: NewVersionInfo) => void) | null = null;
+  // PR #63 review fix: subscription bookkeeping so tests can assert that
+  // unmount actually removes the listeners (no stacking on remount).
+  let subscriptionsAdded = 0;
+  let subscriptionsRemoved = 0;
 
   const bridge = {
     getUpdateStatus: async () => overrides.status ?? null,
@@ -70,9 +77,20 @@ export async function renderCard(overrides: CardMockOverrides = {}): Promise<Car
     },
     onUpdateEvent: (cb: (e: UpdateEvent) => void) => {
       eventCb = cb;
+      subscriptionsAdded += 1;
+      // Real unsubscribe (review fix PR #63 finding 3), mirroring preload.
+      return () => {
+        if (eventCb === cb) eventCb = null;
+        subscriptionsRemoved += 1;
+      };
     },
     onNewVersionAvailable: (cb: (r: NewVersionInfo) => void) => {
       newVersionCb = cb;
+      subscriptionsAdded += 1;
+      return () => {
+        if (newVersionCb === cb) newVersionCb = null;
+        subscriptionsRemoved += 1;
+      };
     },
   };
   (window as unknown as { voiceclone: unknown }).voiceclone = bridge;
@@ -135,6 +153,12 @@ export async function renderCard(overrides: CardMockOverrides = {}): Promise<Car
     },
     get downloadsCancelled() {
       return downloadsCancelled;
+    },
+    get subscriptionsAdded() {
+      return subscriptionsAdded;
+    },
+    get subscriptionsRemoved() {
+      return subscriptionsRemoved;
     },
     unmount: async () => {
       await act(async () => {

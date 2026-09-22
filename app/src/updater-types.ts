@@ -48,8 +48,10 @@ export interface UpdateBridge {
   /** Start the in-app download; resolves immediately, progress via event. */
   startUpdateDownload(): Promise<void>;
   cancelUpdateDownload(): Promise<void>;
-  onUpdateEvent(cb: (event: UpdateEvent) => void): void;
-  onNewVersionAvailable(cb: (result: Extract<UpdaterResult, { status: "available" }>) => void): void;
+  /** Register a download-event listener; the return value unsubscribes it. */
+  onUpdateEvent(cb: (event: UpdateEvent) => void): () => void;
+  /** Register a startup-push listener; the return value unsubscribes it. */
+  onNewVersionAvailable(cb: (result: Extract<UpdaterResult, { status: "available" }>) => void): () => void;
 }
 
 declare global {

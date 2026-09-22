@@ -17,7 +17,9 @@ import {
   checkForUpdate,
   DEFAULT_MIRROR_PREFIX,
   GITHUB_REPO,
-  verifySha512,
+  resolveInstallerFileName,
+  sanitizeMirrorPrefix,
+  verifySha512Hex,
   type UpdatePlatform,
   type UpdaterResult,
 } from "./updater";
@@ -306,7 +308,11 @@ function sanitizeUpdateSettings(raw: Record<string, unknown>): UpdateSettings {
   const tag = raw["updater_skipped_tag"];
   return {
     channelMode: mode === "official" || mode === "mirror" ? mode : "auto",
-    mirrorPrefix: typeof prefix === "string" ? prefix : DEFAULT_MIRROR_PREFIX,
+    // Review fix (PR #63 finding 2): the prefix is spliced in front of GitHub
+    // URLs, so persistence-time sanitization rejects anything that is not
+    // https://host[/path] (file://, http://, whitespace, …) and falls back to
+    // the default. The sidecar validates the same rule at PUT time.
+    mirrorPrefix: sanitizeMirrorPrefix(prefix),
     skippedTag: typeof tag === "string" && tag !== "" ? tag : null,
   };
 }
@@ -366,7 +372,10 @@ async function runUpdateCheck(manual: boolean): Promise<UpdaterResult> {
   lastUpdateCheck = result;
   // Only a genuinely-available result opens the dialog state; a skipped
   // update resolves as status "skipped" and stays silent (spec story 8).
-  if (result.status === "available") {
+  // Startup checks only: a manual 检查更新 reports its result in the card and
+  // must NOT trigger the startup 弹窗 (spec stories 7/8/10, review fix #63
+  // finding 4).
+  if (!manual && result.status === "available") {
     notifyRenderer(UPDATER_NEW_VERSION_CHANNEL, result);
   }
   return result;
@@ -374,11 +383,6 @@ async function runUpdateCheck(manual: boolean): Promise<UpdaterResult> {
 
 function updateEvent(event: UpdateEvent): void {
   notifyRenderer(UPDATER_EVENT_CHANNEL, event);
-}
-
-/** URL prefix of the channel that served the current check result. */
-function channelUrlPrefix(result: Extract<UpdaterResult, { status: "available" }>): string {
-  return result.effectiveChannel === "mirror" ? updateSettings.mirrorPrefix : "";
 }
 
 async function runInstaller(filePath: string): Promise<void> {
@@ -405,50 +409,82 @@ async function runInstaller(filePath: string): Promise<void> {
   });
 }
 
+// Review fix (PR #63 finding 10): a generous overall installer-download
+// timeout — a stalled mirror connection must end in failure (browser
+// fallback + failed event) instead of hanging forever.
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
 async function startUpdateDownload(): Promise<void> {
   if (activeDownload) return; // one download at a time; the UI serializes this
+  const controller = new AbortController();
+  // Occupy the download slot BEFORE the pre-download recheck (review fix PR
+  // #63 finding 9): a 取消下载 clicked while the recheck runs must abort here
+  // instead of being a no-op that lets the transfer start anyway.
+  activeDownload = { controller };
+  let filePath: string | null = null;
   try {
     let available = lastUpdateCheck?.status === "available" ? lastUpdateCheck : null;
     if (!available) {
       const result = await runUpdateCheck(true);
       if (result.status === "available") available = result;
     }
+    if (controller.signal.aborted) return; // cancel arrived during the recheck
     if (!available) {
       updateEvent({ type: "failed", message: "当前没有可下载的更新" });
       return;
     }
-    const controller = new AbortController();
-    activeDownload = { controller };
-    const filePath = path.join(app.getPath("temp"), available.installerName);
+    // Review fix (PR #63 finding 1): the installer name comes from the
+    // release JSON and is joined under temp/ — basename-validate it and
+    // require the platform installer extension before it can reach spawn;
+    // anything else is treated as a failed download (browser fallback).
+    const platform = updatePlatform();
+    const fileName = platform ? resolveInstallerFileName(available.installerName, platform) : null;
+    if (!fileName) throw new Error("安装包文件名非法，已拒绝下载");
     // The installer downloads through the channel that served the check
-    // (mirror requests go through the editable 镜像前缀).
-    const res = await fetch(`${channelUrlPrefix(available)}${available.installerUrl}`, {
-      signal: controller.signal,
-    });
-    if (!res.ok || !res.body) throw new Error(`下载失败（HTTP ${res.status}）`);
-    const total = Number(res.headers.get("content-length") ?? 0);
-    const out = fs.createWriteStream(filePath);
-    let received = 0;
-    let lastPercent = -1;
+    // (review fix PR #63 finding 6: reuse the prefix captured with the check
+    // result, not the possibly-changed current settings value).
+    const url = `${available.resolvedPrefix}${available.installerUrl}`;
+    filePath = path.join(app.getPath("temp"), fileName);
+    // Overall stall timeout (review fix PR #63 finding 10).
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+    let digest: string;
     try {
-      for await (const chunk of res.body as unknown as NodeWebReadableStream<Uint8Array>) {
-        received += chunk.byteLength;
-        out.write(chunk);
-        const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0;
-        if (percent !== lastPercent) {
-          lastPercent = percent;
-          updateEvent({ type: "progress", percent, received, total });
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok || !res.body) throw new Error(`下载失败（HTTP ${res.status}）`);
+      const total = Number(res.headers.get("content-length") ?? 0);
+      const out = fs.createWriteStream(filePath);
+      const hash = crypto.createHash("sha512"); // incremental (review fix finding 8)
+      let received = 0;
+      let lastPercent = -1;
+      try {
+        for await (const chunk of res.body as unknown as NodeWebReadableStream<Uint8Array>) {
+          received += chunk.byteLength;
+          hash.update(chunk);
+          // Honor write backpressure (review fix PR #63 finding 7).
+          if (!out.write(chunk)) {
+            await new Promise<void>((resolve, reject) => {
+              out.once("drain", resolve);
+              out.once("error", reject);
+            });
+          }
+          const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0;
+          if (percent !== lastPercent) {
+            lastPercent = percent;
+            updateEvent({ type: "progress", percent, received, total });
+          }
         }
+        await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+      } finally {
+        out.close();
       }
-      await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+      digest = hash.digest("hex");
     } finally {
-      out.close();
+      clearTimeout(timer);
     }
     // sha512 verification against the manifest value captured at check time.
-    // verifySha512 also tells us when the manifest was missing entirely —
-    // that is a warning, not a failure (spec: 无清单则警告但允许继续), so the
-    // installer still runs but the renderer sees the warning flag.
-    const verdict = verifySha512(new Uint8Array(fs.readFileSync(filePath)), available.manifestSha512);
+    // A missing manifest is a warning, not a failure (spec: 无清单则警告但
+    // 允许继续), so the installer still runs but the renderer sees the flag.
+    const verdict = verifySha512Hex(digest, available.manifestSha512);
     if (!verdict.ok && !verdict.warning) {
       throw new Error("文件校验失败（sha512 不匹配），安装包可能被截断或篡改");
     }
@@ -456,6 +492,16 @@ async function startUpdateDownload(): Promise<void> {
     updateEvent({ type: "done", ...(verdict.warning ? { warning: verdict.warning } : {}) });
   } catch (err) {
     const aborted = err instanceof Error && err.name === "AbortError";
+    // Review fix (PR #63 finding 7): never leave a partial installer behind
+    // on failure or cancel (on success the file is the installer we just
+    // launched / mounted, so it is kept).
+    if (filePath) {
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
     if (!aborted) {
       // Fallback: let the user grab the installer from the release page.
       try {

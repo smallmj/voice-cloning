@@ -14,10 +14,20 @@ const updaterBridge: UpdateBridge = {
   startUpdateDownload: () => ipcRenderer.invoke("updater:download"),
   cancelUpdateDownload: () => ipcRenderer.invoke("updater:cancel-download"),
   onUpdateEvent: (cb: (event: UpdateEvent) => void) => {
-    ipcRenderer.on("updater:event", (_event: IpcRendererEvent, payload: UpdateEvent) => cb(payload));
+    const handler = (_event: IpcRendererEvent, payload: UpdateEvent) => cb(payload);
+    ipcRenderer.on("updater:event", handler);
+    // Review fix (PR #63 finding 3): expose removal so renderer components
+    // can unsubscribe on unmount (listener stacking on remount otherwise).
+    return () => {
+      ipcRenderer.removeListener("updater:event", handler);
+    };
   },
   onNewVersionAvailable: (cb: (result: Extract<UpdaterResult, { status: "available" }>) => void) => {
-    ipcRenderer.on("updater:new-version", (_event: IpcRendererEvent, payload) => cb(payload));
+    const handler = (_event: IpcRendererEvent, payload: Extract<UpdaterResult, { status: "available" }>) => cb(payload);
+    ipcRenderer.on("updater:new-version", handler);
+    return () => {
+      ipcRenderer.removeListener("updater:new-version", handler);
+    };
   },
 };
 

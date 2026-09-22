@@ -5,7 +5,6 @@
 // `vite dev` (no preload bridge yet) and in unit tests the UI must render
 // gracefully instead of crashing.
 
-export const DEFAULT_MIRROR_PREFIX = "https://gh-proxy.com/";
 export const RELEASES_PAGE_URL = "https://github.com/smallmj/voice-cloning/releases/latest";
 
 // Merger note (PR #63): types now come from ./updater-types — the single
@@ -19,6 +18,14 @@ import type {
   UpdateStatus,
   UpdaterResult,
 } from "./updater-types";
+// Review fix (PR #63 finding 2): mirror-prefix normalization has one source
+// of truth — the pure validator in electron/updater.ts (no Electron imports,
+// safe for the renderer and tests).
+import { DEFAULT_MIRROR_PREFIX as CORE_DEFAULT_MIRROR_PREFIX, sanitizeMirrorPrefix } from "../electron/updater";
+
+// Keep the renderer-facing constant defined here (tests import it from this
+// module); the core module owns the authoritative value.
+export const DEFAULT_MIRROR_PREFIX = CORE_DEFAULT_MIRROR_PREFIX;
 
 export type { UpdateEvent, UpdateSettings, UpdateStatus, UpdaterResult };
 export type UpdateChannelMode = UpdateSettings["channelMode"];
@@ -70,20 +77,21 @@ export async function cancelUpdateDownload(): Promise<void> {
   await fn();
 }
 
-/** Subscribe to download events. Returns an unsubscribe no-op when the
- * preload bridge is absent (dev / tests). */
+/** Subscribe to download events. Returns a real unsubscribe when the preload
+ * bridge is present (review fix PR #63 finding 3: components must remove
+ * their listener on unmount), a no-op only when the bridge is absent
+ * (dev / tests). */
 export function onUpdateEvent(cb: (e: UpdateEvent) => void): () => void {
   const fn = updaterApi()?.onUpdateEvent;
   if (typeof fn !== "function") return () => {};
-  fn(cb);
-  return () => {};
+  return fn(cb);
 }
 
+/** Same contract as onUpdateEvent for the startup push stream. */
 export function onNewVersionAvailable(cb: (r: NewVersionInfo) => void): () => void {
   const fn = updaterApi()?.onNewVersionAvailable;
   if (typeof fn !== "function") return () => {};
-  fn(cb);
-  return () => {};
+  return fn(cb);
 }
 
 // --- labels + pure helpers (unit-testable, no DOM) ---------------------
@@ -123,16 +131,17 @@ export function settingsForChannelChange(
 }
 
 /** Pure settings derivation for a mirror-prefix edit (persisted on blur).
- * An emptied prefix falls back to the default, matching the spec's "镜像不
- * 可编辑为空" rule. */
+ * The value goes through the same validator the main process and sidecar use
+ * (review fix PR #63 finding 2): non-https / malformed prefixes and an
+ * emptied field fall back to the default, matching the spec's 「镜像不可
+ * 编辑为空」 rule. */
 export function settingsForMirrorChange(
   prev: UpdateSettings,
   mirrorPrefix: string,
 ): UpdateSettings {
-  const trimmed = mirrorPrefix.trim();
   return {
     ...prev,
-    mirrorPrefix: trimmed.length > 0 ? trimmed : DEFAULT_MIRROR_PREFIX,
+    mirrorPrefix: sanitizeMirrorPrefix(mirrorPrefix),
   };
 }
 

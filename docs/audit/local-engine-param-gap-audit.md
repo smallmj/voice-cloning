@@ -70,6 +70,7 @@
 | denoise_output | (c) | wrong-mode（denoise 只作用于参考音频） |
 | LoRA 权重 | (c) | 超出复刻产品范围 |
 | language | (c) | 上游无语言参数（30 语种跟随文本） |
+| **control_instruction（控制指令，issue #56 已落地）** | 已声明 exposed | 引擎层 textarea（多行）、默认空、空值不下发；官方语法 `(指令)正文`，在归一化之后于引擎适配层（`prepare_synthesis`）拼接进正文开头，永不经归一化层（含数字的英文指令原样到达引擎，拼接时序由测试锁定）。发音标注同步扩展英文 CMUDict 离线路由（`world|W ER1 L D` → `{W ER1 L D}`，坏标注降级原文） |
 
 ### 2.4 dots-tts-cuda（现 4 exposed + 3 防伪 no-op + server-injected；四引擎中最完备，无缺口）
 

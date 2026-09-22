@@ -308,3 +308,63 @@ def test_prepare_synthesis_forwards_seed_for_worker_side_handling(engine):
     _text, wire = voxcpm2_base.prepare_synthesis("你好", {"seed": 7}, lambda m: None)
     assert wire["seed"] == 7  # consumed by the worker via torch.manual_seed
     assert "denoise" not in wire  # stays a declared no-op, never forwarded
+
+
+# --- issue #56: control_instruction 参数 + 归一化后拼接时序 -------------------
+
+
+def test_control_instruction_param_declaration(engine):
+    """引擎层参数：string 多行（textarea）、默认空、默认折叠在引擎层；
+    help 含工单要求的文案。"""
+    spec = next(s for s in engine.param_specs() if s.name == "control_instruction")
+    assert spec.exposed is True
+    assert spec.kind == "textarea"
+    assert spec.default in ("", None)
+    assert spec.layer == "engine"
+    assert spec.applies_to is not None
+    for token in ("建议英文描述", "warm female voice", "音色设计", "克隆风格控制"):
+        assert token in spec.help, token
+
+
+def test_control_instruction_is_appended_after_normalization(engine):
+    """拼接时序锁定（spec #54 / ADR-0008）：正文先归一化、后拼控制指令。
+    prepare_synthesis 收到的就是归一化后的正文；含数字的英文指令必须原样
+    到达引擎（永不经归一化层），且格式为官方语法 `(指令)正文`。"""
+    normalized_body = "今天是二零二四年三月五日"  # pipeline 归一化产物
+    text, _wire = voxcpm2_base.prepare_synthesis(
+        normalized_body,
+        {"control_instruction": "a 30-year-old warm voice"},
+        lambda m: None,
+    )
+    assert text == "(a 30-year-old warm voice)今天是二零二四年三月五日"
+
+
+def test_control_instruction_empty_is_never_sent(engine):
+    """空值不下发：既无括号前缀，也不出现在 wire 参数里。"""
+    for params in ({}, {"control_instruction": ""}, {"control_instruction": "   "}):
+        text, wire = voxcpm2_base.prepare_synthesis("你好", params, lambda m: None)
+        assert text == "你好"
+        assert "control_instruction" not in wire
+
+
+def test_control_instruction_concatenates_with_pronunciation_rewrite(engine):
+    """与发音标注改写同时序：指令在最前，标注改写作用在正文。"""
+    text, _wire = voxcpm2_base.prepare_synthesis(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+        lambda m: None,
+    )
+    assert text == "(warm female voice){ni3}好世界"
+
+
+def test_voxcpm2_capabilities_declare_official_30_languages(engine):
+    """语种声明扩为官方 30 语种清单（HF 模型卡 language 字段口径，声明性
+    支持——真机抽查随验证工单，不加语言选择 UI）。"""
+    official = {
+        "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el", "he",
+        "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no", "pl", "pt",
+        "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
+    }
+    caps = engine.capabilities()
+    assert len(caps.languages) == 30
+    assert set(caps.languages) == official

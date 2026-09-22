@@ -325,7 +325,10 @@ class VoxCPM2EngineBase(InstallableEngine):
                 "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
             ),
             voice_cloning=True,
-            voice_design=False,
+            # Native Voice Design (issue #57): description + preview text,
+            # NO reference audio — official `(description)text` syntax.
+            # Declared here so both platform variants share it.
+            voice_design=True,
             pronunciation_control=True,  # {ni3} phoneme syntax (verified)
             emotion=False,
             commercial_license=True,  # Apache-2.0 code + weights
@@ -487,3 +490,58 @@ class VoxCPM2EngineBase(InstallableEngine):
             model_version=f"{REPO} (voxcpm {VOXCPM_VERSION})",
             cost=0.0,
         )
+
+    # -- voice design (issue #57; ADR-0010) ---------------------------------
+
+    def design_voice(self, description: str, preview_text: str, log) -> dict:
+        """Native Voice Design: create a voice from a text description.
+
+        Official syntax reuses the control-instruction prefix — the design
+        description rides as an English-parenthesis prefix before the
+        preview text, exactly the shape ``prepare_synthesis`` builds from
+        ``control_instruction``. Unlike normal synthesis the design call
+        NEVER goes through the pipeline: no normalization, no pronunciation
+        rewriting — the description reaches the engine verbatim (spec #54
+        user story 10 / CONTEXT.md「控制指令」).
+
+        The generated preview sample becomes the designed voice's reference
+        (ADR-0010「预览样本即参考音频」): the router feeds it through the
+        existing ``attach_reference`` and every later synthesis of that
+        voice runs the normal reference-cloning path above — the pipeline
+        stays untouched. Returns ``{"voice_id", "sample_audio_path",
+        "transcript"}`` with a locally minted voice id.
+        """
+        if not self.is_installed():
+            raise RuntimeError(
+                f"engine is not installed yet — call POST /engines/{self.engine_id}/install first"
+            )
+        description = (description or "").strip()
+        preview_text = (preview_text or "").strip()
+        if not description:
+            raise RuntimeError("声音描述不能为空")
+        if not preview_text:
+            raise RuntimeError("试听文本不能为空")
+        out_dir = (self.output_dir or Path.cwd() / "data" / "audio").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = (out_dir / f"design-{uuid.uuid4().hex}.wav").resolve()
+        payload: dict = {
+            "action": "synthesize",
+            # The ONLY no-reference entry: ``design`` routes the worker to
+            # the reference-less generate() call; plain synthesize never
+            # sets it and keeps enforcing ref_audio.
+            "design": True,
+            "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
+            "text": f"({description}){preview_text}",
+            "output": str(out_path),
+        }
+        log("voxcpm2: 音色设计 = 无参考生成（控制指令前缀 + 试听文本）")
+        supervisor = self._get_supervisor()
+        try:
+            result = supervisor.request(payload, on_log=log)
+        except WorkerDegradedError as exc:
+            raise RuntimeError(f"{self.gate_label} gate refused to start the engine: {exc}") from exc
+        return {
+            "voice_id": f"voxcpm2-design-{uuid.uuid4().hex[:12]}",
+            "sample_audio_path": result["audio_path"],
+            "transcript": preview_text,
+        }

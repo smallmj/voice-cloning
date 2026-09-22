@@ -357,17 +357,51 @@ def test_control_instruction_concatenates_with_pronunciation_rewrite(engine):
     assert text == "(warm female voice){ni3}好世界"
 
 
+def test_control_instruction_help_is_user_facing(engine):
+    """Review 修复：help 是用户可见文案——不带 spec/ADR/issue 等内部引用，
+    也没有重复句（同一短句只出现一次）。"""
+    spec = next(s for s in engine.param_specs() if s.name == "control_instruction")
+    for token in ("spec #", "ADR-", "issue #"):
+        assert token not in spec.help, token
+    assert spec.help.count("用于音色设计与克隆风格控制") == 1
+
+
+def test_full_synthesis_text_returns_the_complete_text_for_preview(engine):
+    """US19（issue #54 review 修复）：预览钩子返回将要合成的完整文本——
+    与 prepare_synthesis 走同一个 adapt_synthesis_text，归一化后的正文 +
+    发音标注改写 + 控制指令前缀，预览与真实合成不可能漂移。"""
+    full = engine.full_synthesis_text(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+    )
+    assert full == "(warm female voice){ni3}好世界"
+    # 与 prepare_synthesis 的文本路径逐字节一致（同一函数的同一实现）。
+    adapted, _wire = voxcpm2_base.prepare_synthesis(
+        "你好世界",
+        {"control_instruction": "warm female voice", "pronunciation": "你=ni3"},
+        lambda m: None,
+    )
+    assert full == adapted
+
+
+def test_full_synthesis_text_without_instruction_is_identity(engine):
+    """无控制指令（或缺省参数）时预览文本不变——默认引擎上下文不撒谎。"""
+    for params in (None, {}, {"control_instruction": "  "}):
+        assert engine.full_synthesis_text("你好", params) == "你好"
+
+
 def test_voxcpm2_capabilities_declare_official_30_languages(engine):
     """语种声明扩为官方 30 语种清单（HF 模型卡 language 字段口径，声明性
-    支持——真机抽查随验证工单，不加语言选择 UI）。"""
-    official = {
-        "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el", "he",
-        "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no", "pl", "pt",
-        "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
-    }
+    支持——真机抽查随验证工单，不加语言选择 UI）。清单在生产侧只定义一份
+    （voxcpm2_base.VOXCPM2_LANGUAGES）；capabilities 与测试都从它派生，
+    互锁的是「capabilities 忠实于唯一常量」这一层。"""
+    official = voxcpm2_base.VOXCPM2_LANGUAGES
+    assert len(official) == 30
+    assert len(set(official)) == 30  # the single source carries no duplicates
     caps = engine.capabilities()
     assert len(caps.languages) == 30
-    assert set(caps.languages) == official
+    assert set(caps.languages) == set(official)
+    assert caps.languages == official  # order also pinned to the one source
 
 
 # --- issue #57: 原生 Voice Design（无参考生成） ------------------------------

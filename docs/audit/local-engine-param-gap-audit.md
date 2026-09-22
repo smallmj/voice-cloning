@@ -70,8 +70,8 @@
 | normalize | (c) | breaks-pipeline（wetext；{ni3} 音素语法要求 False） |
 | denoise_output | (c) | wrong-mode（denoise 只作用于参考音频） |
 | ref_audio / ref_text | (c) | server-injected |
-| **control_instruction（控制指令，issue #56 已落地）** | 已声明 exposed | 引擎层 textarea（多行）、默认空、空值不下发；官方语法 `(指令)正文`，在归一化之后于引擎适配层（`prepare_synthesis`）拼接进正文开头，永不经归一化层（含数字的英文指令原样到达引擎，拼接时序由测试锁定） |
-| **pronunciation（英文发音标注，issue #56 扩展）** | 已声明 exposed | canonical 参数入口走英文 CMUDict 离线路由（`world=W ER1 L D` → `{W ER1 L D}`，坏标注降级原文）；标注由适配层在归一化之后改写正文——#59 反例实测：把 `{W ER1 L D}` 直接写进正文会被中心归一化层破坏（`ER1`→`ER一升`），证明必须走 canonical 入口 |
+| **control_instruction（控制指令，issue #56 已落地）** | 已声明 exposed | 引擎层 textarea（多行）、默认空、空值不下发；官方语法 `(指令)正文`，在归一化之后于引擎适配层（`control_prefix`，`prepare_synthesis` 与 voice design 共用）拼接进正文开头，永不经归一化层（含数字的英文指令原样到达引擎，拼接时序由测试锁定）；归一化预览经 `full_synthesis_text` 钩子如实展示拼接后的完整待合成文本（US19，#54 review 修复） |
+| **pronunciation（英文发音标注，issue #56 扩展）** | 已声明 exposed | canonical 参数入口走英文 CMUDict 离线路由（`world=W ER1 L D` → `{W ER1 L D}`，坏标注降级原文）；标注由适配层在归一化之后改写正文——#59 反例实测：把 `{W ER1 L D}` 直接写进正文会被中心归一化层破坏（`ER1`→`ER一升`），证明必须走 canonical 入口。**数据披露（「不支持是数据」）**：内置词典为 CMUdict 0.7b 的精简子集（离线随仓库分发，运行期不下载），未收录词降级原文并记录日志；英文 key 匹配为大小写不敏感的整词替换（正文 `World`/`WORLD` 与标注 key `world` 同样命中，`worldwide` 不受影响，测试锁定） |
 | language | (c) | 上游无语言参数：30 语种跟随文本（官方清单口径，声明性支持）；中/英/粤语/四川话已双平台真机抽查（生成成功，口音听感待人工复核，#59），其余 26 语种未逐语种验证 |
 | **design_voice（Voice Design，issue #57 已落地）** | 引擎能力 | `voice_design` capability + `POST /voices/design`：无参考音频从文本描述设计音色 → `origin=designed` 入档（预览样本、`design.voice_prompt`）→ 绑定复用合成；MPS sidecar 全链路 + CUDA worker 等价路径真机验证（#59 V5） |
 

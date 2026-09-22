@@ -22,11 +22,35 @@ def build_router(ctx: AppContext) -> APIRouter:
 
     @router.post("/normalize", dependencies=[Depends(ctx.require_auth)])
     async def normalize(body: dict) -> dict:
-        """Normalization preview: same layer every generation path uses."""
+        """Normalization preview: same layer every generation path uses.
+
+        US19 (issue #54): when the UI also supplies ``engine_id`` + the same
+        ``params`` the generation would send, the preview additionally runs
+        the engine's ``full_synthesis_text`` hook — an engine whose adapter
+        reshapes the text (e.g. VoxCPM2's control-instruction prefix) shows
+        the COMPLETE text the engine will hear, never a silently different
+        one. ``engine_adapter_applied`` discloses when the engine adapter
+        changed the normalized text on top of it (e.g. a control-instruction
+        prefix)."""
         text = body.get("text")
         if not isinstance(text, str):
             raise HTTPException(status_code=422, detail="text must be a string")
-        return normalize_with_flag(text)
+        result = normalize_with_flag(text)
+        engine_id = body.get("engine_id")
+        params = body.get("params")
+        engine = (
+            ctx.registry.get(engine_id)
+            if isinstance(engine_id, str) and engine_id and isinstance(params, dict)
+            else None
+        )
+        if engine is not None:
+            adapted = engine.full_synthesis_text(result["normalized"], params)
+            return {
+                "normalized": adapted,
+                "changed": adapted != text,
+                "engine_adapter_applied": adapted != result["normalized"],
+            }
+        return result
 
     @router.post("/uploads/audio", dependencies=[Depends(ctx.require_auth)])
     async def upload_audio(file: UploadFile | None = None) -> dict:

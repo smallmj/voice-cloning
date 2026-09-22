@@ -26,11 +26,8 @@ _PINYIN_RE = re.compile(r"^[a-zü]+[1-5]?$")
 # Line separator is ``=`` / ``:`` (canonical) or ``|`` (issue #56 English
 # form ``词|ARPAbet``). The key is a single CJK character or an English word.
 _ANN_LINE_RE = re.compile(r"^\s*(\S+)\s*([=:|])\s*(.+?)\s*$")
-_ENGLISH_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z'-]*$")
-# The closed ARPAbet phone inventory (CMUdict symbols; stress digits 0/1/2
-# are carried by the token suffix). Validating against the SET — not just
-# the shape — is what makes "NOT A PHONEME" a bad annotation instead of
-# three fake phones.
+# English word shape (key AND dictionary-lookup value): letters, apostrophes,
+# hyphens. One name, two honest uses — it is the same judgement in both.
 _ENGLISH_WORD_RE = re.compile(r"^[A-Za-z][A-Za-z'-]*$")
 
 _ARPABET_PHONES = frozenset(
@@ -44,6 +41,24 @@ def _is_arpabet_tokens(tokens: list[str]) -> bool:
         and (t == base or t[len(base):] in ("0", "1", "2"))
         for t in tokens
     )
+
+
+# The closed ARPAbet phone inventory (CMUdict symbols; stress digits 0/1/2
+# are carried by the token suffix). Validating against the SET — not just
+# the shape — is what makes "NOT A PHONEME" a bad annotation instead of
+# three fake phones.
+
+
+def _english_phones(value: str) -> list[str] | None:
+    """THE single English-annotation judgement (issue #56): split the
+    ``word|phones`` form, tokenize, and validate against the closed ARPAbet
+    inventory. Returns the uppercased phones, or None when the value is not
+    explicit ARPAbet (callers then fall back to their own next step — the
+    entry parser to the plain-word shape, the VoxCPM adapter to the CMUDict
+    lookup — or degrade to the original text)."""
+    phones = value.split("|", 1)[1] if "|" in value else value
+    tokens = [t.upper() for t in phones.split()]
+    return tokens if _is_arpabet_tokens(tokens) else None
 
 
 # Bundled slim CMUDict (CMUdict 0.7b subset, offline — see
@@ -124,11 +139,9 @@ def _is_pinyin_entry(key: str, value: str) -> bool:
 
 
 def _is_english_entry(key: str, value: str) -> bool:
-    if not _ENGLISH_KEY_RE.match(key):
+    if not _ENGLISH_WORD_RE.match(key):
         return False
-    phones = value.split("|", 1)[1] if "|" in value else value
-    tokens = [t.upper() for t in phones.split()]
-    if _is_arpabet_tokens(tokens):
+    if _english_phones(value) is not None:
         return True  # explicit ARPAbet (``world|W ER1 L D`` or bare tokens)
     return bool(_ENGLISH_WORD_RE.match(value))  # dictionary-lookup word
 
@@ -208,9 +221,8 @@ def _voxcpm_phoneme_tag(key: str, value: str, log) -> str | None:
     """
     if len(key) == 1 and not key.isascii():
         return f"{{{value}}}"  # parse_annotations already validated the pinyin
-    phones = value.split("|", 1)[1] if "|" in value else value
-    tokens = [t.upper() for t in phones.split()]
-    if _is_arpabet_tokens(tokens):
+    tokens = _english_phones(value)
+    if tokens is not None:
         return "{" + " ".join(tokens) + "}"
     hit = cmudict_lookup(value)
     if hit:

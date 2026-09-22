@@ -236,12 +236,13 @@ def test_matrix_voxcpm2_generation_params_claim_is_real_machine_backed():
 def test_matrix_voxcpm2_languages_claim_is_declarative_official_list():
     """Issue #56: the 30-language claim is the OFFICIAL list, marked
     declarative (官方口径) — real-machine spot checks live in the
-    verification ticket, per the honest-marking rule."""
-    official = {
-        "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el", "he",
-        "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no", "pl", "pt",
-        "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
-    }
+    verification ticket, per the honest-marking rule. The list itself is
+    defined ONCE in production (voxcpm2_base.VOXCPM2_LANGUAGES); this lock
+    derives from that constant instead of repeating a literal copy."""
+    from voiceclone_sidecar.engines.voxcpm2_base import VOXCPM2_LANGUAGES
+
+    official = set(VOXCPM2_LANGUAGES)
+    assert len(VOXCPM2_LANGUAGES) == 30
     for engine_id in ("voxcpm2-mps", "voxcpm2-cuda"):
         engine = (VoxCPM2MpsEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
                   if engine_id == "voxcpm2-mps" else None)

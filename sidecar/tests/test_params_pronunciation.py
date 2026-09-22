@@ -289,3 +289,12 @@ def test_english_annotation_replaces_whole_words_only():
 def test_english_annotations_only_apply_to_voxcpm_grammar():
     """CMUDict 路由是 voxcpm 专属扩展；其他语法保持既有行为（pinyin 值）。"""
     assert rewrite("银行", "行=xing2", "indextts") == "银<行|XING2>"
+
+
+def test_english_annotation_matches_case_insensitively_whole_words():
+    """Review 锁定（issue #54 review 修复 8）：英文标注的整词替换是大小写
+    不敏感的——正文 World / WORLD 与标注 key world 同样命中（语义披露在
+    docs/audit/local-engine-param-gap-audit.md §2.3），词边界语义不变：
+    worldwide 不受影响。"""
+    out = rewrite("World worldwide WORLD", "world|W ER1 L D", "voxcpm")
+    assert out == "{W ER1 L D} worldwide {W ER1 L D}"

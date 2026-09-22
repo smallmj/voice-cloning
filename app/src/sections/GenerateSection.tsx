@@ -267,7 +267,11 @@ export function GenerateSection({
 
       {normalized && normalized.changed && (
         <div className="normalize-preview">
-          <div className="normalize-title">归一化预览（生成前引擎将收到以下文本）</div>
+          <div className="normalize-title">
+            {normalized.engine_adapter_applied
+              ? "归一化预览（已拼接控制指令前缀；生成前引擎将收到以下完整文本）"
+              : "归一化预览（生成前引擎将收到以下文本）"}
+          </div>
           <div className="normalize-text">{normalized.normalized}</div>
         </div>
       )}

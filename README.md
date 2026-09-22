@@ -24,7 +24,7 @@
 | macOS（Apple Silicon） | `VoiceClone-<版本>-arm64.dmg` 或 `.zip` |
 | Windows（x64） | `VoiceClone Setup <版本>.exe` |
 
-安装包内嵌钉版 [uv](https://docs.astral.sh/uv/)；首次启动时由 uv 在用户数据目录自动创建 Python 运行时（无需预装 Python）。
+安装包内嵌钉版 [uv](https://docs.astral.sh/uv/)；首次启动时由 uv 在用户数据目录自动创建 Python 运行时（无需预装 Python）。发版资产与命名约定见 [docs/release/update-publishing.md](docs/release/update-publishing.md)。
 
 ### macOS：应用未签名，无法打开？
 

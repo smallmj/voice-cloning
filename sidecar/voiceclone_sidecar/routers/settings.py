@@ -12,6 +12,8 @@ makes the change take effect without restarting the sidecar.
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import engine_config, sources
@@ -34,6 +36,29 @@ FONT_SIZE_MAX = 24
 LOG_BUFFER_MIN = 100
 LOG_BUFFER_MAX = 5000
 LOG_BUFFER_DEFAULT = 500
+
+# Issue #65 (spec #62 / ADR-0020): 更新渠道 (Update Channel) modes, validated
+# against the same set the Electron updater module uses.
+ALLOWED_UPDATE_CHANNEL_MODES = ("auto", "official", "mirror")
+DEFAULT_UPDATE_MIRROR_PREFIX = "https://gh-proxy.com/"
+
+# PR #63 review fix: the 镜像前缀 is spliced in front of GitHub API/asset URLs
+# by the Electron updater, so it must stay `https://` + host (+ optional
+# path). file://, http://, scheme-relative or whitespace values are rejected
+# (PUT → 422); corrupt stored values degrade to the default on read. The
+# same regex lives in app/electron/updater.ts (sanitizeMirrorPrefix).
+MIRROR_PREFIX_PATTERN = r"https://[^/\s#?]+(/[^\s#?]*)?"
+
+
+def _sanitize_mirror_prefix(value) -> str:
+    """Validate + normalize a mirror prefix; falls back to the default for
+    anything that is not a valid https://host[/path] string."""
+    if not isinstance(value, str):
+        return DEFAULT_UPDATE_MIRROR_PREFIX
+    trimmed = value.strip()
+    if not re.fullmatch(MIRROR_PREFIX_PATTERN, trimmed):
+        return DEFAULT_UPDATE_MIRROR_PREFIX
+    return trimmed.rstrip("/") + "/"
 
 
 def _is_number(value) -> bool:
@@ -67,6 +92,22 @@ def _sanitize(raw: dict) -> dict:
         "font_size": _clamp_int_or_none(raw.get("font_size"), FONT_SIZE_MIN, FONT_SIZE_MAX),
         "log_buffer": int(
             _clamp(raw.get("log_buffer"), LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
+        ),
+        # Issue #65 (spec #62 / ADR-0020): updater preferences ride the SAME
+        # settings store as every other software-level preference, so the
+        # main process and the renderer read one source of truth. Validation
+        # mirrors electron/updater.ts: corrupt values degrade to defaults.
+        "updater_channel_mode": (
+            raw.get("updater_channel_mode")
+            if raw.get("updater_channel_mode") in ALLOWED_UPDATE_CHANNEL_MODES
+            else "auto"
+        ),
+        "updater_mirror_prefix": _sanitize_mirror_prefix(raw.get("updater_mirror_prefix")),
+        # 跳过此版本: a stored tag is kept only when a non-empty string.
+        "updater_skipped_tag": (
+            raw.get("updater_skipped_tag")
+            if isinstance(raw.get("updater_skipped_tag"), str) and raw.get("updater_skipped_tag")
+            else None
         ),
     }
 
@@ -161,8 +202,50 @@ def build_router(ctx: AppContext) -> APIRouter:
             update["log_buffer"] = int(
                 _clamp(buf, LOG_BUFFER_MIN, LOG_BUFFER_MAX, LOG_BUFFER_DEFAULT)
             )
+        # Issue #65: updater preferences. channel_mode is one of the three
+        # 更新渠道 modes; mirror_prefix is the editable 镜像前缀 (must be a
+        # string — empty is allowed and degrades to the auto chain);
+        # skipped_tag persists 跳过此版本 (string or null).
+        if "updater_channel_mode" in body:
+            mode = body["updater_channel_mode"]
+            if mode not in ALLOWED_UPDATE_CHANNEL_MODES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"updater_channel_mode 必须是 {'/'.join(ALLOWED_UPDATE_CHANNEL_MODES)} 之一",
+                )
+            update["updater_channel_mode"] = mode
+        if "updater_mirror_prefix" in body:
+            prefix = body["updater_mirror_prefix"]
+            # PR #63 review fix: must be https://host[/path] — the updater
+            # splices this value in front of GitHub URLs, so anything else
+            # (file://, http://, whitespace, scheme-relative) is refused and
+            # never persisted. An emptied field stores the default (the
+            # renderer's 「镜像不可编辑为空」 rule); a valid value is
+            # normalized to a single trailing slash.
+            if not isinstance(prefix, str):
+                raise HTTPException(status_code=422, detail="updater_mirror_prefix 必须是字符串")
+            trimmed = prefix.strip()
+            if trimmed == "":
+                update["updater_mirror_prefix"] = DEFAULT_UPDATE_MIRROR_PREFIX
+            elif re.fullmatch(MIRROR_PREFIX_PATTERN, trimmed) is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="updater_mirror_prefix 必须是 https:// 开头的镜像地址（如 https://gh-proxy.com/）",
+                )
+            else:
+                update["updater_mirror_prefix"] = trimmed.rstrip("/") + "/"
+        if "updater_skipped_tag" in body:
+            tag = body["updater_skipped_tag"]
+            if tag is not None and (not isinstance(tag, str) or not tag):
+                raise HTTPException(
+                    status_code=422, detail="updater_skipped_tag 必须为非空字符串或 null"
+                )
+            update["updater_skipped_tag"] = tag
         if not update:
-            raise HTTPException(status_code=422, detail="至少提供 theme、engine_id、engine_params、sidebar_open、sidebar_width、ui_scale、font_size 或 log_buffer 之一")
+            raise HTTPException(
+                status_code=422,
+                detail="至少提供 theme、engine_id、engine_params、sidebar_open、sidebar_width、ui_scale、font_size、log_buffer 或 updater_* 之一",
+            )
         ctx.write_ui_prefs(update)
         return _sanitize(ctx.read_ui_prefs())
 

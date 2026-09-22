@@ -23,7 +23,35 @@ def test_ui_prefs_default(client: httpx.Client):
         "ui_scale": 1.0,
         "font_size": None,
         "log_buffer": 500,
+        # Issue #65: updater preferences live in the same settings store.
+        "updater_channel_mode": "auto",
+        "updater_mirror_prefix": "https://gh-proxy.com/",
+        "updater_skipped_tag": None,
     }
+
+
+def test_ui_prefs_updater_round_trip(client: httpx.Client):
+    # Issue #65: 更新渠道 / 镜像前缀 / 跳过此版本 persist with the library.
+    r = client.put(
+        "/settings/ui",
+        json={
+            "updater_channel_mode": "mirror",
+            "updater_mirror_prefix": "https://my-proxy.example/",
+            "updater_skipped_tag": "v0.2.0",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["updater_channel_mode"] == "mirror"
+    assert r.json()["updater_mirror_prefix"] == "https://my-proxy.example/"
+    assert r.json()["updater_skipped_tag"] == "v0.2.0"
+
+    # Corrupt/invalid values are rejected or degrade, never stored raw.
+    r = client.put("/settings/ui", json={"updater_channel_mode": "nightly"})
+    assert r.status_code == 422
+    r = client.put("/settings/ui", json={"updater_mirror_prefix": 42})
+    assert r.status_code == 422
+    r = client.put("/settings/ui", json={"updater_skipped_tag": ""})
+    assert r.status_code == 422
 
 
 def test_ui_prefs_scale_font_log_round_trip(client: httpx.Client):
@@ -129,3 +157,23 @@ def test_engine_params_round_trip(client: httpx.Client):
     # Values are normalized to strings; non-dict payloads are rejected.
     r = client.put("/settings/ui", json={"engine_params": []})
     assert r.status_code == 422
+
+
+def test_ui_prefs_updater_mirror_prefix_validation(client: httpx.Client):
+    """PR #63 review fix: the 镜像前缀 is spliced in front of GitHub URLs, so
+    only https://host[/path] values persist; anything else is refused (422)
+    or degrades to the default on read."""
+    # Valid values normalize to a single trailing slash.
+    r = client.put("/settings/ui", json={"updater_mirror_prefix": " https://my.example/prefix// "})
+    assert r.status_code == 200
+    assert r.json()["updater_mirror_prefix"] == "https://my.example/prefix/"
+
+    # An emptied field stores the default (镜像不可编辑为空).
+    r = client.put("/settings/ui", json={"updater_mirror_prefix": "   "})
+    assert r.status_code == 200
+    assert r.json()["updater_mirror_prefix"] == "https://gh-proxy.com/"
+
+    # Non-https schemes, scheme-relative values and garbage never persist.
+    for bad in ("file:///etc/passwd", "http://insecure.example/", "//evil.example/", "javascript:alert(1)", "https://"):
+        r = client.put("/settings/ui", json={"updater_mirror_prefix": bad})
+        assert r.status_code == 422, bad

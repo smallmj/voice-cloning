@@ -3,14 +3,10 @@ export interface SidecarInfo {
   token: string;
 }
 
-declare global {
-  interface Window {
-    voiceclone: {
-      getSidecarInfo: () => Promise<SidecarInfo | null>;
-      onSidecarError: (cb: (message: string) => void) => void;
-    };
-  }
-}
+// Issue #65: the `window.voiceclone` global declaration (sidecar members +
+// update-bridge members) moved to ./updater-types.ts so both renderer code and
+// the Electron preload share one declaration; keeping a second copy here would
+// be a conflicting interface merge.
 
 export interface Capabilities {
   languages: string[];

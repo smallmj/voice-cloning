@@ -9,6 +9,7 @@ import type {
 } from "./api";
 import { HistorySection } from "./components/HistorySection";
 import { SidePanel } from "./components/SidePanel";
+import { UpdateAvailableDialog } from "./components/UpdateAvailableDialog";
 import { EnginesSection } from "./sections/EnginesSection";
 import { GenerateSection } from "./sections/GenerateSection";
 import { SettingsSection } from "./sections/SettingsSection";
@@ -51,6 +52,10 @@ export default function App() {
   const activeJobs = useActiveJobCount(baseUrl, token);
 
   const navigate = useCallback((section: SectionId) => setActive(section), []);
+
+  // Startup 更新弹窗 (spec #62 stories 7/8/10): 「去更新」 jumps to the 设置
+  // section where the 关于 / 更新 card handles the actual download.
+  const goToUpdate = useCallback(() => setActive("settings"), []);
 
   // --- theme application (ADR-0014) -----------------------------------------
   const systemDark = useSystemPrefersDark();
@@ -465,6 +470,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Startup update dialog (spec stories 7/8/10) — pushed by the main
+      process; renders nothing until a not-yet-dismissed version arrives. */}
+      <UpdateAvailableDialog onGoToUpdate={goToUpdate} />
       {consent && !consent.acknowledged && (
         <div className="consent-overlay" role="dialog" aria-modal="true" aria-label="声音授权确认">
           <div className="consent-modal">

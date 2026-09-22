@@ -368,3 +368,142 @@ def test_voxcpm2_capabilities_declare_official_30_languages(engine):
     caps = engine.capabilities()
     assert len(caps.languages) == 30
     assert set(caps.languages) == official
+
+
+# --- issue #57: 原生 Voice Design（无参考生成） ------------------------------
+
+
+class _RecordingSupervisor:
+    """Fake worker seam: records payloads, writes a real playable WAV."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+        self.payloads: list[dict] = []
+
+    def request(self, payload: dict, on_log=None, timeout_s=None) -> dict:
+        self.payloads.append(payload)
+        out = self.tmp_path / "audio" / Path(payload["output"]).name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        from voiceclone_sidecar.engines.fake import write_tone_wav
+
+        write_tone_wav(out, 0.6)
+        return {"audio_path": str(out), "sample_rate": 48000}
+
+
+def _design_engine(tmp_path: Path) -> tuple[VoxCPM2MpsEngine, _RecordingSupervisor]:
+    eng = VoxCPM2MpsEngine(output_dir=tmp_path / "audio", root=tmp_path / "runtime", env={})
+    sup = _RecordingSupervisor(tmp_path)
+    eng.is_installed = lambda: True
+    eng._get_supervisor = lambda: sup
+    return eng, sup
+
+
+def test_capabilities_declare_voice_design(engine):
+    """能力位：基类声明（MPS/CUDA 共享），/engines、/voices/design 门禁据此放行。"""
+    assert engine.capabilities().voice_design is True
+
+
+def test_design_voice_sends_parenthesized_prefix_without_reference(tmp_path):
+    """design_voice = 控制指令括号前缀 + 试听文本，无参考音频；描述与试听
+    文本不经归一化（design 调用不走管线，逐字到达引擎）。"""
+    eng, sup = _design_engine(tmp_path)
+    result = eng.design_voice(
+        "Warm female voice with 2.5Hz pacing, 数字 123 保持原样",
+        "晚上好，欢迎收听。",
+        lambda m: None,
+    )
+    payload = sup.payloads[0]
+    assert payload["design"] is True
+    assert "ref_audio" not in payload
+    assert "prompt_text" not in payload
+    # 描述（含数字与英文）+ 试听文本原样拼接，永不经归一化层。
+    assert payload["text"] == "(Warm female voice with 2.5Hz pacing, 数字 123 保持原样)晚上好，欢迎收听。"
+    # 返回契约：本地生成 voice_id + 预览样本路径 + transcript=试听文本。
+    assert result["voice_id"].startswith("voxcpm2-design-")
+    assert Path(result["sample_audio_path"]).name.startswith("design-")
+    assert result["transcript"] == "晚上好，欢迎收听。"
+
+
+def test_design_voice_rejects_empty_description_or_preview(tmp_path):
+    eng, sup = _design_engine(tmp_path)
+    with pytest.raises(RuntimeError, match="声音描述"):
+        eng.design_voice("  ", "晚上好", lambda m: None)
+    with pytest.raises(RuntimeError, match="试听文本"):
+        eng.design_voice("低沉男声", "  ", lambda m: None)
+    assert sup.payloads == []  # nothing reached the worker
+
+
+def test_design_voice_requires_installed_engine(tmp_path):
+    eng = VoxCPM2MpsEngine(output_dir=tmp_path / "audio", root=tmp_path / "runtime", env={})
+    with pytest.raises(RuntimeError, match="not installed"):
+        eng.design_voice("低沉男声", "晚上好", lambda m: None)
+
+
+def test_synthesize_payload_never_sets_design_flag(tmp_path):
+    """普通合成的强制 ref_audio 不变，且永不携带 design 标记——design 是
+    design_voice 的专用入口。"""
+    eng, sup = _design_engine(tmp_path)
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g57", text="你好", params={"ref_audio": "/tmp/ref.wav"}
+        ),
+        lambda m: None,
+    )
+    payload = sup.payloads[0]
+    assert "design" not in payload
+    assert payload["ref_audio"] == str(Path("/tmp/ref.wav").resolve())
+
+
+def test_worker_design_path_generates_without_reference(monkeypatch):
+    """worker 无参考生成路径：design=True 时 generate() 不带 reference_wav_path。"""
+    import types
+
+    from voiceclone_sidecar.engines import voxcpm2_worker as worker
+
+    sf_stub = types.SimpleNamespace(
+        write=lambda path, wav, sr, subtype=None: None
+    )
+    monkeypatch.setitem(sys.modules, "soundfile", sf_stub)
+    monkeypatch.setattr(
+        worker.common, "verify_wav_output", lambda out, log, label: {"ok": True}
+    )
+    calls: list[dict] = []
+
+    class FakeModel:
+        tts_model = types.SimpleNamespace(sample_rate=48000)
+
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return [0.0] * 480
+
+    result = worker._synthesis(
+        {
+            "output": "/tmp/out.wav",
+            "design": True,  # no ref_audio — the design entry
+            "model_dir": "/tmp/weights",
+            "text": "(warm female voice)晚上好。",
+        },
+        lambda model_dir: FakeModel(),
+        lambda: {},
+        lambda msg: None,
+    )
+    assert result["audio_path"] == "/tmp/out.wav"
+    assert calls[0]["text"] == "(warm female voice)晚上好。"
+    assert "reference_wav_path" not in calls[0]
+
+
+def test_worker_without_design_still_requires_reference(monkeypatch):
+    """非 design 场景的强制 ref_audio 不变（无 ref_audio 且无 design → 报错）。"""
+    import types
+
+    from voiceclone_sidecar.engines import voxcpm2_worker as worker
+
+    monkeypatch.setitem(sys.modules, "soundfile", types.SimpleNamespace(write=lambda *a, **k: None))
+
+    with pytest.raises(RuntimeError, match="参考音频"):
+        worker._synthesis(
+            {"output": "/tmp/out.wav", "model_dir": "/tmp/weights", "text": "你好"},
+            lambda model_dir: None,
+            lambda: {},
+            lambda msg: None,
+        )

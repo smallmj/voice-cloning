@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { GenerationRecord, LogEvent } from "./api";
 import {
   appendLog,
+  designOnlyEngine,
   engineDetailParagraphs,
+  generationEngines,
   voiceDesignEngines,
   buildRerunState,
   GENERATE_TAB_IDS,
@@ -431,15 +433,82 @@ describe("engine card detail paragraphs (issue #40)", () => {
   });
 });
 
-// --- issue #57: non-verbal tag quick-insert ------------------------------------
+// --- issue #57/#68: non-verbal tag quick-insert --------------------------------
 
-import { insertAtCursor, NONVERBAL_TAGS } from "./ui";
+import {
+  commonNonverbalTags,
+  filterTagGroups,
+  groupTags,
+  insertAtCursor,
+  quickTags,
+} from "./ui";
+import type { NonverbalTagInfo } from "./api";
 
-describe("non-verbal tag quick-insert (issue #57)", () => {
-  it("exposes the cookbook-canonical tags, brackets verbatim", () => {
-    expect(NONVERBAL_TAGS).toEqual(["[laughing]", "[sigh]", "[Uhm]", "[Shh]", "[breath]"]);
+const VOX_TAGS: NonverbalTagInfo[] = [
+  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured", common: true },
+  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured", common: true },
+  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor", common: true },
+  { text: "[Uhm]", category: "呼吸停顿", label: "迟疑嗯", verification: "vendor" },
+  { text: "[Question-ah]", category: "疑问确认", label: "疑问「啊」", verification: "vendor" },
+];
+// Mirrors the engine's declared data: the first three verbal sounds are the
+// MiniMax quick-insert favorites (ADR-0018).
+const MINIMAX_TAGS: NonverbalTagInfo[] = [
+  { text: "(laughs)", category: "笑叹", label: "笑声", verification: "vendor", common: true },
+  { text: "(chuckle)", category: "笑叹", label: "轻笑", verification: "vendor", common: true },
+  { text: "(sighs)", category: "笑叹", label: "叹气", verification: "vendor", common: true },
+  { text: "(breath)", category: "呼吸", label: "正常换气", verification: "vendor" },
+  { text: "(emm)", category: "生理", label: "嗯", verification: "vendor" },
+];
+
+describe("non-verbal tag data helpers (issue #68)", () => {
+  it("quickTags uses the engine-declared common tags, else the first 3 (ADR-0018)", () => {
+    expect(quickTags(VOX_TAGS).map((t) => t.text)).toEqual(["[laughing]", "[sigh]", "[breath]"]);
+    expect(quickTags(MINIMAX_TAGS).map((t) => t.text)).toEqual(["(laughs)", "(chuckle)", "(sighs)"]);
+    expect(quickTags(undefined)).toEqual([]);
+    // No common declaration -> first-3 fallback, never a UI-side hardcode.
+    expect(
+      quickTags([
+        { text: "x", category: "c", label: "l", verification: "vendor" },
+        { text: "y", category: "c", label: "l", verification: "vendor" },
+      ]),
+    ).toEqual([
+      { text: "x", category: "c", label: "l", verification: "vendor" },
+      { text: "y", category: "c", label: "l", verification: "vendor" },
+    ]);
   });
 
+  it("groupTags keeps first-appearance category order", () => {
+    expect(groupTags(VOX_TAGS).map((g) => [g.category, g.tags.length])).toEqual([
+      ["笑叹", 2],
+      ["呼吸停顿", 2],
+      ["疑问确认", 1],
+    ]);
+    expect(groupTags(null)).toEqual([]);
+  });
+
+  it("filterTagGroups searches text/label/category, case-insensitively", () => {
+    expect(filterTagGroups(groupTags(VOX_TAGS), "笑").map((g) => g.category)).toEqual(["笑叹"]);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "BREATH").map((g) => g.category)).toEqual([
+      "呼吸停顿",
+    ]);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "")).toHaveLength(3);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "不存在")).toEqual([]);
+  });
+
+  it("commonNonverbalTags intersects by marker text across picked engines", () => {
+    const both = [
+      { capabilities: { nonverbal_tags: VOX_TAGS } },
+      { capabilities: { nonverbal_tags: [...MINIMAX_TAGS, { text: "[breath]", category: "呼吸", label: "换气", verification: "vendor" }] } },
+    ];
+    expect(commonNonverbalTags(both).map((t) => t.text)).toEqual(["[breath]"]);
+    // Any picked engine without tags ⇒ empty (control must hide).
+    expect(commonNonverbalTags([{ capabilities: { nonverbal_tags: VOX_TAGS } }, {}])).toEqual([]);
+    expect(commonNonverbalTags([])).toEqual([]);
+  });
+});
+
+describe("non-verbal tag quick-insert (issue #57)", () => {
   it("inserts at the caret and leaves the caret after the tag", () => {
     expect(insertAtCursor("你好世界", "[sigh]", 2, 2)).toEqual({
       text: "你好[sigh]世界",
@@ -463,5 +532,52 @@ describe("non-verbal tag quick-insert (issue #57)", () => {
   it("clamps out-of-range caret positions instead of throwing", () => {
     expect(insertAtCursor("ab", "[sigh]", 99, 99)).toEqual({ text: "ab[sigh]", cursor: 8 });
     expect(insertAtCursor("ab", "[sigh]", -5, -1).text).toBe("[sigh]ab");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #68: design-only engines are excluded from the generation selector.
+// ---------------------------------------------------------------------------
+
+describe("generationEngines / designOnlyEngine (issue #68)", () => {
+  function genEngine(id: string, voiceDesign: boolean, voiceCloning: boolean) {
+    return {
+      id,
+      display_name: id,
+      capabilities: {
+        languages: ["zh"],
+        voice_cloning: voiceCloning,
+        voice_design: voiceDesign,
+        pronunciation_control: false,
+        emotion: false,
+        commercial_license: false,
+        cross_device_use: false,
+        upload_used_for_training: false,
+        api_closed_loop: true,
+      },
+    };
+  }
+
+  it("excludes engines that declare voice_design without voice_cloning", () => {
+    // qwen3-tts-vd-cloud is the real-world case: design-only, never generating.
+    const engines = [
+      genEngine("vc", true, true),
+      genEngine("vd", true, false),
+      genEngine("plain", false, true),
+    ];
+    expect(generationEngines(engines).map((e) => e.id)).toEqual(["vc", "plain"]);
+    expect(designOnlyEngine(engines[1])).toBe(true);
+    expect(designOnlyEngine(engines[0])).toBe(false);
+    expect(designOnlyEngine(engines[2])).toBe(false);
+  });
+
+  it("keeps the 音色设计 dropdown unaffected (voiceDesignEngines still lists the design-only engine)", () => {
+    const engines = [genEngine("vc", true, true), genEngine("vd", true, false)];
+    expect(voiceDesignEngines(engines).map((e) => e.id)).toEqual(["vc", "vd"]);
+  });
+
+  it("returns every engine when none is design-only", () => {
+    const engines = [genEngine("a", false, true), genEngine("b", true, true)];
+    expect(generationEngines(engines)).toEqual(engines);
   });
 });

@@ -18,6 +18,7 @@ EXPECTED_CAPABILITY_KEYS = {
     "cross_device_use",
     "upload_used_for_training",
     "api_closed_loop",
+    "nonverbal_tags",
 }
 
 

@@ -13,12 +13,22 @@ import uuid
 import wave
 from pathlib import Path
 
-from ..capabilities import Capabilities
+from ..capabilities import Capabilities, NonverbalTag
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .qwen_tts_cloud import billed_chars
 
 SAMPLE_RATE = 22050
 BASE_FREQ = 220.0
+
+# Spec #68: the fake engine declares a NON-EMPTY tag set so the offline
+# contract suite can assert the full "engine with tags returns them" path;
+# every other fake/local engine leaves the default empty tuple, covering the
+# "engine without tags returns none and the UI hides the control" path.
+FAKE_NONVERBAL_TAGS = (
+    NonverbalTag("[laughing]", category="笑叹", label="笑", verification="vendor", common=True),
+    NonverbalTag("[sigh]", category="笑叹", label="叹气", verification="vendor"),
+    NonverbalTag("[breath]", category="呼吸停顿", label="呼吸", verification="vendor"),
+)
 
 
 def write_tone_wav(path: Path, duration: float, amplitude: float = 0.35) -> None:
@@ -61,6 +71,7 @@ class FakeEngine(Engine):
             # Small on purpose: the contract tests exercise multi-segment
             # long-text jobs without generating huge strings (issue #13).
             max_chars_per_request=100,
+            nonverbal_tags=FAKE_NONVERBAL_TAGS,
         )
 
     def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
@@ -121,8 +132,11 @@ class FakeRefTextEngine(FakeEngine):
     display_name = "Fake Engine (requires ref text)"
 
     def capabilities(self) -> Capabilities:
-        caps = super().capabilities()
-        return Capabilities(**{**caps.to_dict(), "requires_reference_text": True})
+        from dataclasses import replace
+
+        # dataclasses.replace keeps every field as its real type (the former
+        # to_dict round-trip would degrade nonverbal_tags to plain dicts).
+        return replace(super().capabilities(), requires_reference_text=True)
 
 
 class FakeInstructEngine(FakeEngine):
@@ -157,8 +171,9 @@ class FakeKeyEngine(FakeEngine):
     data_usage_note = "fake：上传内容不会用于训练（测试声明）"
 
     def capabilities(self) -> Capabilities:
-        caps = super().capabilities()
-        return Capabilities(**{**caps.to_dict(), "requires_reference_text": False})
+        from dataclasses import replace
+
+        return replace(super().capabilities(), requires_reference_text=False)
 
     def param_specs(self):
         from ..capabilities import AppliesTo, ParamSpec

@@ -93,6 +93,13 @@ class Qwen3TtsMlxEngine(InstallableEngine):
     # make_logits_processors, audit §2.1, issue #48). Defaults are the
     # official weight generation_config.json values — always sent, see
     # param_specs. Engine-specific folded area.
+    # Issue #68 correction: an earlier note claimed mlx-audio hardcoded
+    # silent defaults of 0.6/0.8/-1/1.3 — that was read from the WRONG
+    # module (VyvoTTS qwen3/qwen3.py). The installed mlx-audio 0.5.4
+    # qwen3_tts.generate defaults are 0.9/1.0/50/1.05, identical to the
+    # official generation_config. The ALWAYS-SEND convention stays: it pins
+    # "what the user sees = what the engine receives" against upstream
+    # default drift, and it was the #48 verified contract.
     SAMPLING_SPECS = (
         ("temperature", "Temperature", 0.9, 0.0, 2.0, 0.05, False,
          "采样温度（官方 generation_config 默认 0.9）。"),
@@ -105,24 +112,29 @@ class Qwen3TtsMlxEngine(InstallableEngine):
     )
 
     def param_specs(self) -> list[ParamSpec]:
-        # Issue #47: the wire bug is fixed (`language=` was silently dropped
-        # into **kwargs; the correct upstream key is `lang_code`, lowercase to
-        # match the weight codec_language_id keys). BUT V3 real-machine
-        # verification (2026-09-22, Mac MLX, evidence in capability_matrix)
-        # proved mlx-audio's qwen3 Model.generate never CONSUMES lang_code:
-        # Chinese text + lang_code="japanese" still produced Chinese, and
-        # upstream source (0.5.4 AND latest main) never reads it. The model
-        # follows the TEXT language automatically — all 10 languages verified
-        # working that way. Per audit decision 3 ("验证未通过转 not_exposed")
-        # and the speed precedent, the selector stays honest DATA, not a
-        # lying dropdown. The to_wire mapping is kept so a future upstream
-        # that consumes lang_code flips this back with one line.
+        # Issue #47 wire fix + issue #68 re-verification: the wire key is
+        # `lang_code` (lowercase, matching the weight codec_language_id
+        # keys; "Auto" = key absent = upstream auto). V4 real-machine
+        # re-verification (2026-09-23, Mac MLX, evidence in
+        # capability_matrix + debug/qwen3-verify-issue68/) PROVED the
+        # installed mlx-audio 0.5.4 CONSUMES lang_code:
+        # mlx_audio/tts/models/qwen3_tts/qwen3_tts.py L1297 passes
+        # language=lang_code into _prepare_generation_inputs, which maps
+        # it through config.codec_language_id into the codec prefill
+        # language token (L393-406 / L739-741). Same-text synthesis
+        # auto/chinese/english produced 4.9s / 5.7s / 20.1s audio with
+        # whisper-small ASR confirming English forcing suppresses the
+        # Chinese sentence. The earlier "no-op" verdict came from reading
+        # the WRONG module (VyvoTTS qwen3/qwen3.py) — revoked, selector
+        # exposed again. Caveat recorded in the matrix/help: forcing a
+        # language on mixed-language text can suppress other-language
+        # content; Auto is the safe default.
         specs = [
             params_mod.canonical_language(
                 self.engine_id, REPO, self.LANGUAGE_CHOICES,
                 wire_name="lang_code", default="Auto",
                 wire_transform=lambda v: None if v == "Auto" else v.lower(),
-                exposed=False, not_exposed_reason="no-op",
+                help_text="发音语言（Auto=自动）。实测强制语种会抑制其他语种内容：混语种文本建议保持 Auto。",
             ),
         ]
         # ADR-0018 decision 3 — "不支持是数据": mlx-audio ACCEPTS a speed
@@ -145,13 +157,49 @@ class Qwen3TtsMlxEngine(InstallableEngine):
                 help="mlx-audio 接受 speed 参数但从不使用（实测证实）；暴露即撒谎，故不暴露。",
             )
         )
+        # Issue #68: engine-layer segmentation / length controls, both real
+        # upstream generate() form parameters on the installed mlx-audio
+        # 0.5.4 (qwen3_tts.py generate signature: split_pattern: str = "\n",
+        # max_tokens: int = 4096). Declared defaults equal the upstream
+        # defaults, so #38 口径 (default not sent) applies: an absent key
+        # means the upstream default, which is exactly what the UI shows.
+        specs.append(
+            ParamSpec(
+                name="max_tokens",
+                label="单段最大 token 数",
+                kind="number",
+                default=4096,
+                min=256,
+                max=8192,
+                step=256,
+                integer=True,
+                layer="engine",
+                help="每个分段最多生成的语音 token 数（上游默认 4096）。长句被静默截断可调大，上限 8192。",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+                to_wire=lambda v: None if v in (None, "") else int(float(v)),
+            )
+        )
+        specs.append(
+            ParamSpec(
+                name="split_pattern",
+                label="分段分隔符",
+                kind="text",
+                default="\n",
+                max_length=16,
+                layer="engine",
+                help="显式控制长文本分段：文本中出现的该分隔符会把合成切成多段逐段拼接（上游默认换行符 \\n）。留空用默认换行。",
+                applies_to=AppliesTo(engine=self.engine_id, model=REPO, mode="cloning"),
+                to_wire=lambda v: str(v) if v not in (None, "") else None,
+            )
+        )
         # Issue #48: engine-specific sampling parameters in the folded area.
-        # The four values are ALWAYS sent: the official generation_config
-        # (0.9/1.0/50/1.05) is what the UI shows, but mlx-audio's generate()
-        # hardcodes DIFFERENT silent defaults (0.6/0.8/-1/1.3), so the
-        # issue-38 "default not sent" convention would make the engine do
-        # something else than what the user sees. Sending the declared
-        # defaults restores "what the user sees = what the engine receives".
+        # The four values are ALWAYS sent. Issue #68 comment correction: an
+        # earlier note claimed mlx-audio's silent defaults were 0.6/0.8/-1/1.3
+        # (read from the WRONG module, VyvoTTS qwen3/qwen3.py) — the installed
+        # mlx-audio 0.5.4 defaults are 0.9/1.0/50/1.05, identical to the
+        # official generation_config. ALWAYS-SEND stays as the #48 verified
+        # contract: it keeps "what the user sees = what the engine receives"
+        # true even if upstream defaults drift.
         for name, label, default, lo, hi, step, integer, help_text in self.SAMPLING_SPECS:
             specs.append(
                 ParamSpec(
@@ -243,14 +291,16 @@ class Qwen3TtsMlxEngine(InstallableEngine):
 
     def build_worker_payload(self, request: GenerationRequest,
                              weights_dir: str, out_path: Path) -> dict:
-        """Map the user-facing request onto the worker JSON (issues #47/#48).
+        """Map the user-facing request onto the worker JSON (issues #47/#48/#68).
 
         The wire payload is built from the param specs' ``to_wire`` adapters —
         the user-facing value and the engine value may differ. The four
-        sampling parameters are ALWAYS sent (mlx-audio's silent defaults
-        differ from the official generation_config; see param_specs), and
-        "Auto" language means the lang_code key is absent (upstream auto
-        behavior), never an empty string.
+        sampling parameters are ALWAYS sent (the #48 verified contract keeps
+        "what the user sees = what the engine receives" against upstream
+        default drift; see param_specs). ``lang_code`` rides only when a
+        language is chosen ("Auto" = key absent, upstream auto behavior);
+        ``max_tokens``/``split_pattern`` ride only when the user set them —
+        their declared defaults equal the upstream defaults (#38 口径).
         """
         spec_by_name = {s.name: s for s in self.param_specs()}
         params = request.params or {}
@@ -265,6 +315,12 @@ class Qwen3TtsMlxEngine(InstallableEngine):
         for name, _label, _default, _lo, _hi, _step, _int, _help in self.SAMPLING_SPECS:
             value = spec_by_name[name].to_wire(params.get(name))
             payload[name] = value  # always sent — see param_specs
+        # Issue #68: defaults equal the upstream defaults → #38 口径, send
+        # only what the user actually set.
+        for name in ("max_tokens", "split_pattern"):
+            value = spec_by_name[name].to_wire(params.get(name))
+            if value not in (None, ""):
+                payload[name] = value
         if params.get("ref_audio"):
             payload["ref_audio"] = params["ref_audio"]
             payload["ref_text"] = params.get("ref_text")

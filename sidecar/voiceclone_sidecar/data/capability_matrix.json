@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-22",
+  "updated_at": "2026-09-23",
   "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
   "engines": [
     {
@@ -54,27 +54,35 @@
         },
         {
           "field": "语种参数（lang_code）",
-          "value": "上游 mlx-audio qwen3 Model.generate 不消费语言参数：worker 曾传 language=（落 **kwargs 静默丢弃，audit §1.1），改传正确键 lang_code（小写匹配权重 codec_language_id）后真机验证仍为 no-op——中文文本 + lang_code=japanese 输出仍为中文；模型自动跟随文本语言，10 语种逐一合成均正确（zh/en/de/it/ja/ko/pt/ru/es 经本机 whisper-small ASR 复核，法语转写存疑系 ASR 弱项）。源码核对：0.5.4 与上游 main 的 Model.generate 均未读取 lang_code。",
+          "value": "已重新暴露（issue #68，no-op 结论撤销）。勘误链：此前 no-op 结论系读错模块（VyvoTTS qwen3/qwen3.py）；实读已装 mlx-audio 0.5.4 的 mlx_audio/tts/models/qwen3_tts/qwen3_tts.py，确认 lang_code 真实消费——generate L1297 把 language=lang_code 传入 _prepare_generation_inputs，经 config.codec_language_id 映射为 codec 前缀 language token（L393-406 / L739-741），权重 config 声明 {chinese:2055, english:2050, …} 10 语种键。MPS 真机复验（2026-09-23，同文本 auto/chinese/english 三次合成）：音频时长 4.88s / 5.68s / 20.08s，波形 maxabs 差异 14550–19532；whisper-small ASR 显示 auto 与 chinese 读完双语句子、强制 english 只读出英文句（中文句被抑制）——language token 确实改变生成。已知边界：混语种文本强制单一语种会抑制其他语种内容，UI 默认 Auto。wire 保持 lang_code 小写 + Auto=不发送（issue #47 修复不变）。",
           "verification": "measured",
-          "source": "docs/audit/local-engine-param-gap-audit.md §1.1；debug/qwen3-verify/（results.json + asr.json + 13 个 wav）；mlx-audio 0.5.4 及 main 源码（mlx_audio/tts/models/qwen3/qwen3.py）",
-          "date": "2026-09-22",
-          "note": "issue #47：wire 修复落地（lang_code + 小写 + 10 语种 choices + auto=不传），但按 audit 决策 3『验证未通过转 not_exposed』，language 以 exposed=False / no-op 固化；to_wire 映射保留，上游一旦消费 lang_code 即可一行翻回"
+          "source": "mlx-audio 0.5.4 qwen3_tts.py L393-406/739-741/1297（engine venv 实读）；debug/qwen3_langcode_reverify.py + debug/qwen3-verify-issue68/（results.json + asr.json + 3 个 wav）",
+          "date": "2026-09-23",
+          "note": "issue #68：canonical language 重新 exposed（沿用 #47 语种枚举与 to_wire 适配）；tests/test_qwen3_params.py 断言已更新"
         },
         {
           "field": "采样参数（temperature/top_p/top_k/repetition_penalty）",
-          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送——mlx-audio 硬编码的静默默认（0.6/0.8/-1/1.3）与官方 config 不一致，『默认不发送』会让引擎行为偏离 UI 展示；源码核实四参数确实被 make_sampler/make_logits_processors 消费",
+          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送；源码核实四参数确实被 make_sampler/make_logits_processors 消费。勘误（issue #68）：此前\"mlx-audio 硬编码静默默认 0.6/0.8/-1/1.3 与官方 config 不一致\"系读错模块（VyvoTTS qwen3/qwen3.py）——已装 mlx-audio 0.5.4 的 generate 默认即 0.9/1.0/50/1.05，与官方 config 一致；恒发送做法保留（#48 已验证契约，防上游默认漂移）。",
           "verification": "verified",
           "source": "voiceclone_sidecar/engines/qwen3_tts.py SAMPLING_SPECS；weights/generation_config.json；mlx-audio 0.5.4 qwen3.py L318-322",
-          "date": "2026-09-22",
+          "date": "2026-09-23",
           "note": "issue #48；tests/test_qwen3_params.py 锁定传参与默认恒发送口径"
         },
         {
-          "field": "max_tokens（上游默认 1200/段）",
-          "value": "不暴露、不声明 spec 行：产品管线 500 字/请求上限下该内部安全帽不构成用户参数。V4 真机实测 780 字（测试文本实际长度，文件名 v4-long-500 指其覆盖 500 字上限场景）长文本单段合成：前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化",
-          "verification": "measured",
-          "source": "debug/qwen3-verify/v4-long-500.wav（780 字实测样本，文件名沿用 500 字上限场景命名）+ asr 转写；results.json v4 条目",
-          "date": "2026-09-22",
-          "note": "issue #48 V4 验收：结论为『披露』——按 fireredtts3 切句参数先例不加 not_exposed 行，以本条证据披露；500 字/请求上限（max_chars_per_request=500）即现有护栏"
+          "field": "max_tokens",
+          "value": "上游 generate() 形参 max_tokens: int = 4096（mlx-audio 0.5.4 qwen3_tts.py 签名实读——此前记录的\"上游默认 1200/段\"亦源自错误模块勘误，随 #68 一并更正）。已暴露为引擎层 spec：int，默认 4096，min 256 / max 8192，step 256；#38 口径（默认不发送，缺省=上游默认 4096=UI 展示值）。V4 真机长文本证据保留：780 字单段合成前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化，500 字/请求上限（max_chars_per_request=500）仍是主要护栏。",
+          "verification": "verified",
+          "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs；debug/qwen3-verify/v4-long-500.wav（长文本退化实测，2026-09-22）",
+          "date": "2026-09-23",
+          "note": "issue #68：新增 spec 行；tests/test_qwen3_params.py + test_local_param_surface.py 锁定"
+        },
+        {
+          "field": "split_pattern（分段分隔符）",
+          "value": "上游 generate() 形参 split_pattern: str = \"\\n\"（mlx-audio 0.5.4 签名实读）：文本中出现的分隔符把待合成文本切成多段、逐段生成拼接。已暴露为引擎层 spec（text，默认 \"\\n\"，显式控制分段）；#38 口径（默认不发送，缺省=上游默认换行分段）。",
+          "verification": "verified",
+          "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs",
+          "date": "2026-09-23",
+          "note": "issue #68：新增 spec 行"
         }
       ],
       "performance": [
@@ -205,9 +213,9 @@
       "evidence": [
         {
           "field": "参数缺口核对（issue #38）",
-          "value": "合成请求仅 text/voice/language_type 三个旋钮：language 已暴露（11 取值=10 语种+Auto，与厂商枚举一致）；情感为文本内嵌标签而非 API 参数，已数据化披露（exposed=False, no-op）。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
-          "verification": "verified",
-          "source": "Qwen-TTS API 请求 schema（docs/research/cloud-api/2026-09-16_中国大陆云端API.md）；engines/qwen_tts_cloud.py param_specs",
+          "value": "合成请求仅 text/voice/language_type 三个旋钮：language 已暴露（11 取值=10 语种+Auto，与厂商枚举一致）。勘误（spec #68）：本引擎并无「情感为文本内嵌标签」能力——那是 qwen-audio-3.0-tts 系的文本标签机制，原条目张冠李戴；Qwen3-TTS 系的情感控制走 instruct 指令口径（自然语言指令，qwen3-tts-instruct-flash），本复刻引擎不提供情感参数。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+          "verification": "vendor",
+          "source": "Qwen-TTS API 请求 schema（docs/research/cloud-api/2026-09-16_中国大陆云端API.md）；阿里云 qwen3-tts-instruct 指南；engines/qwen_tts_cloud.py param_specs",
           "date": "2026-09-21"
         },
         {
@@ -311,6 +319,60 @@
         }
       ],
       "notes": "设计引擎也跑回归集（用设计出的 preview 音色），验证文字描述音色对难例的读法。"
+    },
+    {
+      "engine_id": "qwen3-tts-instruct-cloud",
+      "display_name": "Qwen3-TTS 指令控制（阿里百炼 · 云端）",
+      "kind": "cloud",
+      "role": "BYOK 云端指令控制档（issue #68）：自然语言 instructions 控制语气/语速/方言，不做音色复刻。",
+      "evidence": [
+        {
+          "field": "instructions 参数",
+          "value": "自然语言合成指令（语气/语速/方言，如「用兴奋的语气、稍快的语速说」）经 input.instructions 直出；留空不发送。厂商口径：Instruct 模型经自然语言处理合成效果，当前支持 25 个音色的中英文 Instruct 调节",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型文档（help.aliyun.com/zh/model-studio/qwen3-tts-instruct-flash）+ DashScope 非实时语音合成文档",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "语种参数",
+          "value": "language_type 沿用 Qwen-TTS 家族 10 值枚举；auto=不发送，暴露为 canonical language",
+          "verification": "vendor",
+          "source": "阿里云 Qwen-TTS 非实时语音合成 API 文档；engines/qwen_tts_instruct_cloud.py param_specs",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "音色",
+          "value": "voice 由云端绑定 server-injected（不作为用户参数暴露，ADR-0018 decision 4）；厂商公开口径为 25 个系统音色支持 Instruct 调节，克隆音色对 instruct 模型的可用性未经真机验证",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型文档；ADR-0018",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "计费",
+          "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型价格页",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "非语言标记",
+          "value": "无正文标记；情感/语气表达全部走 instructions 参数（issue #68 术语口径：instruct 走指令，不走情感枚举参数）",
+          "verification": "vendor",
+          "source": "issue #68 调研定稿；阿里云 instruct 模型文档",
+          "date": "2026-09-23"
+        }
+      ],
+      "performance": [
+        {
+          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "云端引擎不适用本地显存口径",
+          "date": "2026-09-23"
+        }
+      ],
+      "notes": "合成走与 VC 引擎相同的 multimodal-generation 端点与音频下载路径（ADR-0015 云基座复用）；instruct 模型的 instructions 真机实测未完成，条目均为厂商口径（vendor）。"
     },
     {
       "engine_id": "indextts-25-mps",
@@ -515,10 +577,11 @@
         },
         {
           "field": "语种与方言",
-          "value": "本机实测仅中文（17 项回归集全为中文）；上游宣传英文与 21 种中文方言——本仓库未验证",
+          "value": "官方支持列表（已核实）：24 种多语种语言（Arabic, Cantonese, Chinese, Czech, Dutch, English, Finnish, French, German, Greek, Hindi, Indonesian, Italian, Japanese, Korean, Polish, Portuguese, Romanian, Russian, Spanish, Thai, Turkish, Ukrainian, Vietnamese）+ 21 种中文方言标签（ZH_*，未暴露——另一轴，本仓库零验证）。验证分级：Chinese = measured（PoC 17 项中文回归集真机实测）；其余 23 语种 = vendor（官方 README 口径，本仓库未逐一实测）。issue #68：worker 硬编码 language=\"Chinese\" 已改为 canonical select 驱动（枚举=上述官方列表逐字 wire tag，默认 Chinese，Auto=不发送=上游 fasttext 自动检测）；TN 边界已在 spec help 披露（wetext 归一化仅覆盖中/英，其他语种数字日期读法可能不完整）。",
           "verification": "unverified",
-          "source": "上游 README（vendor 口径）；本仓库 PoC 仅覆盖 zh",
-          "date": "2026-09-20"
+          "source": "上游 README「Supported languages and dialects」（本机 patched checkout 实读，install-time source of truth）；上游 core.py _WETEXT_LANGS/L165 language=None 自动检测路径",
+          "date": "2026-09-23",
+          "note": "issue #68：language canonical select；tests/test_local_param_surface.py 锁定官方列表与 Auto 映射"
         },
         {
           "field": "发音控制",
@@ -606,10 +669,10 @@
         },
         {
           "field": "语种与方言",
-          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
+          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证。无语种参数：模型跟随文本自动识别语种，无 language 形参（vendor 口径）；方言走文本改写（方言词汇书写）或控制指令（如 Cantonese），填了指令自动切 reference-only 模式（见「控制指令 × 复刻模式互斥」条目）",
           "verification": "vendor",
           "source": "上游 README；官方 usage guide；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 真机抽查）",
-          "date": "2026-09-22"
+          "date": "2026-09-23"
         },
         {
           "field": "文本归一化",
@@ -658,11 +721,26 @@
           "note": "非语言声音是否可闻（听感）待人工复核"
         },
         {
+          "field": "非语言标签全集（spec #68）",
+          "value": "官方 cookbook 全部 10 个正文标签：[laughing] [sigh] [breath] [Uhm] [Shh] [Question-ah] [Question-ei] [Question-en] [Question-oh] [Confirmation-en]，按 笑叹/呼吸停顿/疑问确认 分类，随引擎 capabilities.nonverbal_tags 声明（前端按数据渲染或隐藏）。等级逐标签标注：[laughing]/[sigh] 为真机实测（measured，见上条透传证据），其余 8 个为厂商口径（vendor，未逐标签真机复验）",
+          "verification": "vendor",
+          "source": "VoxCPM2 官方 cookbook；voiceclone_sidecar/engines/voxcpm2_base.py VOXCPM2_NONVERBAL_TAGS",
+          "date": "2026-09-22",
+          "note": "spec #68：标签集为引擎声明数据，measured/vendor 等级不混标"
+        },
+        {
           "field": "voice_design（原生音色设计）",
           "value": "issue #57 原生 Voice Design 端到端真机验证（MPS sidecar 全链路，2026-09-22）：POST /voices/design 无参考生成（`(描述)试听文本`）→ 返回 origin=designed 音色（预览样本即参考，sha256 da87f625…）→ 绑定 voxcpm2-mps → 用设计音色再合成成功；CUDA worker 等价路径（无参考 generate）同日跑通",
           "verification": "measured",
           "source": "engines/voxcpm2_base.py design_voice；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V5）",
           "date": "2026-09-22"
+        },
+        {
+          "field": "控制指令 × 复刻模式互斥（wrong-mode 降级）",
+          "value": "控制指令（`(指令)正文` 前缀）不支持与 Hi-Fi prompt 配对（prompt_wav+prompt_text）同时使用：上游 CLI 明确禁止 --control 与 --prompt-text 组合（vendor/源码口径）；真机实测（2026-09-23，MPS sidecar 全链路 + ASR 核验）该组合下指令被完整念出（12.2s vs 基线 4.2s，ASR 泄漏全部指令词），reference-only（仅 reference_wav）模式下指令正确生效。适配层降级策略：用户填写 control_instruction 且音色有转写时，合成自动降级为 reference-only 模式（跳过 prompt pair），被跳过的转写在生成日志中注明（issue #68）",
+          "verification": "measured",
+          "source": "上游 CLI --control/--prompt-text 互斥校验（github.com/OpenBMB/VoxCPM，tag 2.0.3）；debug/voxcpm2-control 真机实测（12.2s/4.2s + ASR 泄漏）；voxcpm2_base.synthesize 降级实现",
+          "date": "2026-09-23"
         }
       ],
       "performance": [
@@ -724,6 +802,13 @@
           "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2 CUDA）",
           "date": "2026-09-22",
           "note": "指令符合度（听感）待人工复核；CMUDict/非语言标签/voice_design 在 3090 上同日跑通（V3/V4/V5），逐格证据同 MPS 对应条目"
+        },
+        {
+          "field": "控制指令 × 复刻模式互斥（wrong-mode 降级）",
+          "value": "控制指令（`(指令)正文` 前缀）不支持与 Hi-Fi prompt 配对（prompt_wav+prompt_text）同时使用：上游 CLI 明确禁止 --control 与 --prompt-text 组合（vendor/源码口径）；真机实测（2026-09-23，MPS sidecar 全链路 + ASR 核验）该组合下指令被完整念出（12.2s vs 基线 4.2s，ASR 泄漏全部指令词），reference-only（仅 reference_wav）模式下指令正确生效。适配层降级策略：用户填写 control_instruction 且音色有转写时，合成自动降级为 reference-only 模式（跳过 prompt pair），被跳过的转写在生成日志中注明（issue #68）",
+          "verification": "measured",
+          "source": "上游 CLI --control/--prompt-text 互斥校验（github.com/OpenBMB/VoxCPM，tag 2.0.3）；debug/voxcpm2-control 真机实测（12.2s/4.2s + ASR 泄漏）；voxcpm2_base.synthesize 降级实现",
+          "date": "2026-09-23"
         }
       ],
       "performance": [

@@ -193,6 +193,34 @@ class ParamSpec:
 
 
 @dataclass(frozen=True)
+class NonverbalTag:
+    """One native in-text non-verbal marker an engine understands (spec #68).
+
+    ``text`` is inserted verbatim into the body text (each engine speaks its
+    OWN syntax — no unified semantic layer); ``category`` groups the dropdown;
+    ``label`` is the user-facing name; ``verification`` uses the capability-
+    matrix vocabulary (measured/verified/vendor/unverified). ``common``
+    marks the engine's own quick-insert favorites (ADR-0018: declared by the
+    engine as data, never hardcoded in the UI).
+    """
+
+    text: str
+    category: str
+    label: str
+    verification: str = "vendor"
+    common: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "category": self.category,
+            "label": self.label,
+            "verification": self.verification,
+            "common": self.common,
+        }
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """What an engine supports. Every field defaults to "not supported"."""
 
@@ -212,6 +240,9 @@ class Capabilities:
     # Over-length text is auto-segmented at this many characters per request
     # (issue #13). None means the engine declares no limit and long text is
     # sent as one request — segmentation never silently rewrites behavior.
+    # Native in-text non-verbal markers (spec #68). Empty tuple = the engine
+    # has NO body-tag support and the UI hides the whole control.
+    nonverbal_tags: tuple[NonverbalTag, ...] = ()
     max_chars_per_request: int | None = None
 
     def to_dict(self) -> dict:
@@ -226,5 +257,6 @@ class Capabilities:
             "upload_used_for_training": self.upload_used_for_training,
             "api_closed_loop": self.api_closed_loop,
             "requires_reference_text": self.requires_reference_text,
+            "nonverbal_tags": [t.to_dict() for t in self.nonverbal_tags],
             "max_chars_per_request": self.max_chars_per_request,
         }

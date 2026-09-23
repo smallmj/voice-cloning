@@ -36,6 +36,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from .. import params as params_mod
 from .. import sources
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
@@ -105,6 +106,40 @@ UNEXPOSED_REF_TEXT = ParamSpec(
     help="复刻必需；由参考音频转写自动填充（requires_reference_text），不作为用户参数。",
 )
 
+# Issue #68: language is canonical-select driven, no longer hardcoded.
+# The enum is the official supported-language list, verified against the
+# upstream README in the patched checkout (install-time source of truth):
+# 24 multilingual languages (+ 21 ZH_ dialect tags, deliberately NOT
+# exposed — a different axis, none verified in this repo). Verification
+# levels live in the capability matrix: Chinese = measured (PoC 17-item
+# regression); every other language = vendor (official README claim,
+# unverified on this machine). "Auto" = key absent → upstream fasttext-based
+# auto detection (language=None). The values are the verbatim upstream
+# language tags — they ride the wire unchanged.
+LANGUAGES = (
+    "Chinese", "English", "Cantonese",
+    "Arabic", "Czech", "Dutch", "Finnish", "French", "German", "Greek",
+    "Hindi", "Indonesian", "Italian", "Japanese", "Korean", "Polish",
+    "Portuguese", "Romanian", "Russian", "Spanish", "Thai", "Turkish",
+    "Ukrainian", "Vietnamese", "Auto",
+)
+# Capabilities codes mirror of LANGUAGES (README order, Cantonese=yue).
+LANGUAGE_CODES = (
+    "zh", "yue", "en", "ar", "cs", "nl", "fi", "fr", "de", "el", "hi",
+    "id", "it", "ja", "ko", "pl", "pt", "ro", "ru", "es", "th", "tr",
+    "uk", "vi",
+)
+# Issue #68 TN caveat from upstream core.py (_WETEXT_LANGS = {"Chinese",
+# "English"}): wetext normalization only covers Chinese/English (+Cantonese
+# and ZH_* via lang_tag_to_locale); numbers/dates in other languages only
+# get basic cleaning (use_llm_tn needs API creds — out of scope). Disclosed
+# on the spec help so the dropdown does not over-promise.
+LANGUAGE_HELP = (
+    "合成语种（默认中文；Auto=由引擎自动检测）。官方支持列表见能力矩阵："
+    "中文已真机实测，其余语种为官方口径、本仓库未逐一实测；"
+    "注意 wetext 归一化仅覆盖中/英，其他语种的数字日期读法可能不完整。"
+)
+
 
 class FireRedTts3MpsEngine(InstallableEngine):
     """FireRedTTS3-Base, macOS MPS only (ADR-0019)."""
@@ -128,10 +163,11 @@ class FireRedTts3MpsEngine(InstallableEngine):
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
-            # Verified on this machine: Chinese only (the PoC's 17-item set
-            # is Chinese). Upstream advertises English + 21 Chinese
-            # dialects — UNVERIFIED here, recorded in the capability matrix.
-            languages=("zh",),
+            # Issue #68: the official 24-language list (upstream README in
+            # the patched checkout — verified source); matrix records the
+            # per-language verification level (zh measured, rest vendor).
+            # The PoC only MEASURED Chinese; the matrix is the honest ledger.
+            languages=LANGUAGE_CODES,
             voice_cloning=True,
             voice_design=False,  # Instruct mode out of scope (PoC decision)
             pronunciation_control=False,  # no pinyin/phoneme entry point verified
@@ -149,6 +185,15 @@ class FireRedTts3MpsEngine(InstallableEngine):
 
     def param_specs(self) -> list[ParamSpec]:
         return [
+            # Issue #68: canonical language select — the enum is DATA from
+            # the official supported list, default Chinese (the measured
+            # language). "Auto" maps to key-absent (upstream auto detection).
+            params_mod.canonical_language(
+                self.engine_id, REPO, LANGUAGES,
+                wire_name="language", default="Chinese",
+                wire_transform=lambda v: None if v == "Auto" else v,
+                help_text=LANGUAGE_HELP,
+            ),
             ParamSpec(
                 name="seed",
                 label="随机种子",
@@ -413,6 +458,11 @@ class FireRedTts3MpsEngine(InstallableEngine):
             idle_timeout_s=300.0,
             max_requests=20,
         )
+        spec_by_name = {s.name: s for s in self.param_specs()}
+        # Issue #68: language is canonical-select driven (was hardcoded
+        # "Chinese"). "Auto" / no choice → key absent → upstream auto
+        # detection (language=None); a known choice rides the wire verbatim.
+        language = spec_by_name["language"].to_wire(params.get("language"))
         payload = {
             "action": "synthesize",
             "model_dir": str(paths.engine_weights_dir(self.root, self.engine_id)),
@@ -420,9 +470,10 @@ class FireRedTts3MpsEngine(InstallableEngine):
             "text": request.text,
             "ref_audio": str(Path(params["ref_audio"]).resolve()),
             "ref_text": params.get("ref_text"),
-            "language": "Chinese",  # verified language; matrix records the rest as unverified
             "output": str(out_path),
         }
+        if language:
+            payload["language"] = language
         if params.get("seed") not in (None, ""):
             payload["seed"] = params["seed"]
         # issue #51: quality params — #38 口径（默认值不发送），上游 generate()

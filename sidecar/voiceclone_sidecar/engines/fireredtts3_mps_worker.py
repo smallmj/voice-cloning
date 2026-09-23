@@ -122,7 +122,9 @@ def _synthesis(request: dict, load, memory_report, log, engine_label="") -> dict
     if request.get("cross_fade_ms") not in (None, ""):
         quality["cross_fade_ms"] = float(request["cross_fade_ms"])
     gen, sr = tts.generate(
-        language=request.get("language", "Chinese"),
+        # Issue #68: language comes from the canonical select — absent key
+        # (Auto / no choice) means None = upstream auto detection.
+        language=request.get("language"),
         prompt_text=ref_text,
         prompt_audio=prompt_audio,
         prompt_audio_sr=prompt_sr,

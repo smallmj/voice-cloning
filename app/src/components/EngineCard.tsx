@@ -12,6 +12,7 @@ export function EngineCard({
   installStatus,
   installing,
   matrixEntry,
+  designOnly = false,
   onInstall,
   onSelect,
 }: {
@@ -21,6 +22,8 @@ export function EngineCard({
   installing: boolean;
   /** Curated capability-matrix entry powering the 「详情」 copy (issue #40). */
   matrixEntry: MatrixEngine | null;
+  /** Issue #68: design-only engines are not selectable for generation. */
+  designOnly?: boolean;
   onInstall: () => void;
   onSelect: () => void;
 }) {
@@ -28,23 +31,29 @@ export function EngineCard({
   const installed = installStatus ? installStatus.installed : (engine.installed ?? true);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailParagraphs = detailsOpen ? engineDetailParagraphs(engine, matrixEntry) : [];
+  // Issue #68: a design-only engine cannot be selected for generation —
+  // clicks land on the card body but selection never fires.
+  const handleSelect = () => {
+    if (!designOnly) onSelect();
+  };
   return (
     <div
       className={`engine-card ${selected ? "selected" : ""}`}
-      onClick={onSelect}
-      role="button"
-      aria-pressed={selected}
+      onClick={handleSelect}
+      role={designOnly ? undefined : "button"}
+      aria-pressed={designOnly ? undefined : selected}
       tabIndex={0}
       onKeyDown={(ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
           // Don't hijack keys meant for the card's inner controls.
           if ((ev.target as HTMLElement).closest("button, input, select, textarea")) return;
           ev.preventDefault();
-          onSelect();
+          handleSelect();
         }
       }}
     >
       <strong>{engine.display_name}</strong>{" "}
+      {designOnly && <span className="badge badge-on">音色设计专用</span>}
       {engine.requires_key && (
         <span className={`badge ${engine.key_configured ? "badge-on" : "badge-off"}`}>
           {engine.key_configured ? "API Key 已配置" : "未配置 API Key"}

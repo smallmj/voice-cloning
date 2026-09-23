@@ -1,39 +1,61 @@
-// Issue #57: non-verbal tag quick-insert — component-level checks. JSX lives
-// in a .tsx test file because esbuild only enables the JSX transform there;
-// the pure insertion logic is covered in ui.test.ts.
+// Issue #68: engine-declared non-verbal tag picker — component-level checks.
+// JSX lives in a .tsx test file because esbuild only enables the JSX
+// transform there; the pure grouping/filtering/insertion logic is covered in
+// ui.test.ts.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { NonverbalTagButtons } from "./components/bits";
-import { insertAtCursor, NONVERBAL_TAGS } from "./ui";
+import { NonverbalTagPicker } from "./components/bits";
+import { insertAtCursor } from "./ui";
+import type { NonverbalTagInfo } from "./api";
 
-describe("NonverbalTagButtons (issue #57)", () => {
-  it("renders one button per tag, tag text verbatim", () => {
-    const html = renderToStaticMarkup(<NonverbalTagButtons onInsert={() => {}} />);
-    for (const tag of NONVERBAL_TAGS) {
-      expect(html).toContain(`>${tag}</button>`);
-    }
+const VOX_TAGS: NonverbalTagInfo[] = [
+  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured", common: true },
+  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured", common: true },
+  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor", common: true },
+  { text: "[Uhm]", category: "呼吸停顿", label: "迟疑嗯", verification: "vendor" },
+];
+const MINIMAX_TAGS: NonverbalTagInfo[] = [
+  { text: "(laughs)", category: "笑叹", label: "笑声", verification: "vendor" },
+  { text: "<#1#>", category: "停顿", label: "停顿 1 秒", verification: "vendor" },
+];
+
+describe("NonverbalTagPicker (issue #68)", () => {
+  it("renders NOTHING for engines that declare no tags (or absent data)", () => {
+    expect(renderToStaticMarkup(<NonverbalTagPicker tags={[]} onInsert={() => {}} />)).toBe("");
+    expect(renderToStaticMarkup(<NonverbalTagPicker tags={undefined} onInsert={() => {}} />)).toBe(
+      "",
+    );
   });
 
-  it("is a labelled group of compact tag buttons", () => {
-    const html = renderToStaticMarkup(<NonverbalTagButtons onInsert={() => {}} />);
-    expect(html).toContain('role="group"');
-    expect(html).toContain("nv-tags");
-    expect(html).toContain("nv-tag");
+  it("renders quick buttons + searchable category dropdown when tags exist", () => {
+    const html = renderToStaticMarkup(<NonverbalTagPicker tags={VOX_TAGS} onInsert={() => {}} />);
+    // Quick row: the common tags verbatim.
+    expect(html).toContain(">[laughing]</button>");
+    expect(html).toContain(">[sigh]</button>");
+    expect(html).toContain(">[breath]</button>");
+    // Dropdown shell with search input and the declared count.
+    expect(html).toContain("nv-tag-picker");
+    expect(html).toContain('type="search"');
+    expect(html).toContain("全部标签（4）");
+    // The full categorized set lives inside the collapsed dropdown markup.
+    expect(html).toContain('title="迟疑嗯（vendor）"');
+    expect(html).toContain("呼吸停顿");
   });
 
-  // (The former third case here was dead code: renderToStaticMarkup drops
-  // onClick, so it could only re-assert what cases 1/2 + the pure
-  // insertAtCursor checks below already cover. The real handler is the
-  // one-liner `onClick={() => onInsert(tag)}`, type-checked by tsc — a real
-  // click assertion would need a DOM environment (jsdom) this suite does
-  // not ship; deleted in the issue-#54 review pass rather than kept
-  // pretending to test wiring.)
+  it("renders per-engine syntax verbatim (VoxCPM2 brackets vs MiniMax pause)", () => {
+    const vox = renderToStaticMarkup(<NonverbalTagPicker tags={VOX_TAGS} onInsert={() => {}} />);
+    const mm = renderToStaticMarkup(<NonverbalTagPicker tags={MINIMAX_TAGS} onInsert={() => {}} />);
+    expect(vox).not.toContain("(laughs)");
+    expect(mm).toContain(">(laughs)</button>");
+    expect(mm).toContain("&lt;#1#&gt;");
+    expect(mm).toContain("停顿");
+  });
 
-  it("every tag inserts correctly at the cursor (click-equivalent flow)", () => {
-    for (const tag of NONVERBAL_TAGS) {
-      const { text, cursor } = insertAtCursor("前文后文", tag, 2, 2);
-      expect(text).toBe(`前文${tag}后文`);
-      expect(cursor).toBe(2 + tag.length);
+  it("every declared tag inserts correctly at the cursor (click-equivalent flow)", () => {
+    for (const tag of [...VOX_TAGS, ...MINIMAX_TAGS]) {
+      const { text, cursor } = insertAtCursor("前文后文", tag.text, 2, 2);
+      expect(text).toBe(`前文${tag.text}后文`);
+      expect(cursor).toBe(2 + tag.text.length);
     }
   });
 });

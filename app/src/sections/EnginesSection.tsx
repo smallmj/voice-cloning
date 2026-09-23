@@ -10,6 +10,7 @@ import { EngineCard } from "../components/EngineCard";
 import { TranscribeToolCard } from "../components/TranscribeToolCard";
 import { VendorKeysSection } from "../components/VendorKeysSection";
 import type { SectionId } from "../ui";
+import { designOnlyEngine } from "../ui";
 
 export function EnginesSection({
   baseUrl,
@@ -82,6 +83,10 @@ export function EnginesSection({
       <h2>引擎</h2>
       <div className="hint">
         点击卡片选择用于生成的引擎；在上方「厂商 API Key」区填写云端密钥、安装本地引擎、查看能力矩阵。
+        {/* Issue #68: design-only engines keep their card (still installable
+            and inspectable) but cannot be SELECTED for generation — the card
+            carries a「音色设计专用」badge instead of being selectable. */}
+        带有「音色设计专用」徽标的引擎只能设计音色，不参与生成。
       </div>
       <VendorKeysSection
         engines={engines}
@@ -99,6 +104,7 @@ export function EnginesSection({
             installStatus={installStatus[e.id] ?? null}
             installing={!!installing[e.id]}
             matrixEntry={matrixEntryFor(matrix, e.id)}
+            designOnly={designOnlyEngine(e)}
             onInstall={() => onInstall(e.id)}
             onSelect={() => onSelect(e.id)}
           />

@@ -541,3 +541,84 @@ def test_worker_without_design_still_requires_reference(monkeypatch):
             lambda: {},
             lambda msg: None,
         )
+
+
+# --- issue #68: control_instruction 强制 reference-only 降级 ------------------
+
+
+def test_control_instruction_with_ref_text_skips_prompt_pair(tmp_path):
+    """有控制指令 + 有参考转写 → 不传 prompt pair（reference-only），指令前缀
+    照拼在文本里；降级原因在日志中披露（issue #68 wrong-mode 降级）。"""
+    eng, sup = _design_engine(tmp_path)
+    logs: list[str] = []
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g68",
+            text="你好，世界。",
+            params={
+                "ref_audio": "/tmp/ref.wav",
+                "ref_text": "你好，我是参考转写。",
+                "control_instruction": "warm female voice",
+            },
+        ),
+        logs.append,
+    )
+    payload = sup.payloads[0]
+    assert "prompt_text" not in payload
+    # 指令前缀照拼（reference-only 模式实测生效）。
+    assert payload["text"] == "(warm female voice)你好，世界。"
+    assert any("Hi-Fi prompt pairing disabled" in m for m in logs)
+    assert any("reference-only" in m for m in logs)
+
+
+def test_no_control_instruction_keeps_hifi_prompt_pair(tmp_path):
+    """无控制指令 → Hi-Fi prompt pair 照旧（行为回归锁定）。"""
+    eng, sup = _design_engine(tmp_path)
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g68b",
+            text="你好，世界。",
+            params={"ref_audio": "/tmp/ref.wav", "ref_text": "你好，我是参考转写。"},
+        ),
+        lambda m: None,
+    )
+    payload = sup.payloads[0]
+    assert payload["prompt_text"] == "你好，我是参考转写。"
+
+
+def test_blank_control_instruction_counts_as_absent(tmp_path):
+    """空白指令与空值同义（与 control_prefix 的规则一致）：不降级。"""
+    eng, sup = _design_engine(tmp_path)
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g68c",
+            text="你好",
+            params={"ref_audio": "/tmp/ref.wav", "ref_text": "转写", "control_instruction": "  "},
+        ),
+        lambda m: None,
+    )
+    assert sup.payloads[0]["prompt_text"] == "转写"
+
+
+def test_control_instruction_without_ref_text_is_unchanged(tmp_path):
+    """本来就没有转写的纯音色模式不受影响（也不报降级日志）。"""
+    eng, sup = _design_engine(tmp_path)
+    logs: list[str] = []
+    eng.synthesize(
+        GenerationRequest(
+            generation_id="g68d",
+            text="你好",
+            params={"ref_audio": "/tmp/ref.wav", "control_instruction": "calm voice"},
+        ),
+        logs.append,
+    )
+    assert "prompt_text" not in sup.payloads[0]
+    assert sup.payloads[0]["text"] == "(calm voice)你好"
+    assert not any("Hi-Fi prompt pairing disabled" in m for m in logs)
+
+
+def test_control_instruction_help_discloses_reference_only_demotion(engine):
+    """参数 help 披露方言用法与降级行为（issue #68 文案）。"""
+    spec = next(p for p in engine.param_specs() if p.name == "control_instruction")
+    assert "方言" in spec.help
+    assert "reference-only" in spec.help or "参考音频-only" in spec.help

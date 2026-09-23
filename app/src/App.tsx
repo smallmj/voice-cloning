@@ -14,6 +14,7 @@ import { EnginesSection } from "./sections/EnginesSection";
 import { GenerateSection } from "./sections/GenerateSection";
 import { SettingsSection } from "./sections/SettingsSection";
 import { VoicesSection } from "./sections/VoicesSection";
+import { Topbar } from "./components/Topbar";
 import { apiJson, authHeaders, errorDetail } from "./client";
 import {
   buildRerunState,
@@ -502,6 +503,17 @@ export default function App() {
         </div>
       )}
 
+      {/* ADR-0013 §2: the top bar carries global state. The shared right
+      sidebar's toggle sits at the top bar's RIGHT edge (spec #68 story 19:
+      the control lives on the same side as the panel it opens). */}
+      <Topbar
+        statusText={connectionError ?? (info ? "sidecar 已连接" : "sidecar 连接中…")}
+        connected={Boolean(info)}
+        currentEngine={selectedEngineInfo?.display_name ?? null}
+        sidebarOpen={prefs.sidebar_open}
+        onToggleSidebar={() => updatePrefs({ sidebar_open: !prefs.sidebar_open })}
+      />
+
       <div className="shell">
         <nav className="side-nav" aria-label="主导航">
           <div className="side-nav-title">声音复刻工作台</div>
@@ -534,25 +546,6 @@ export default function App() {
               </li>
             ))}
           </ul>
-          <div className="side-nav-footer">
-            {/* Issue #36: explicit show/hide for the shared right sidebar. */}
-            <button
-              className={`sidebar-toggle ${prefs.sidebar_open ? "active" : ""}`}
-              aria-pressed={prefs.sidebar_open}
-              title="显示/隐藏侧边栏（实时日志与任务队列）"
-              onClick={() => updatePrefs({ sidebar_open: !prefs.sidebar_open })}
-            >
-              <span aria-hidden="true">◧</span> 侧边栏
-            </button>
-            <span className={`status ${info ? "ok" : "down"}`}>
-              {connectionError ?? (info ? "sidecar 已连接" : "sidecar 连接中…")}
-            </span>
-            {selectedEngineInfo && (
-              <span className="current-engine" title="当前引擎">
-                {selectedEngineInfo.display_name}
-              </span>
-            )}
-          </div>
         </nav>
 
         <main className="content">

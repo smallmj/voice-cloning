@@ -229,6 +229,15 @@ def default_registry(output_dir=None, key_store=None, env=None, settings=None) -
 
     registry.register(Qwen3TtsVdCloudEngine(key_store=key_store, config=config_for(Qwen3TtsVdCloudEngine)))
 
+    # Issue #68: the instruction-control cloud engine — natural-language
+    # `instructions` (语气/语速/方言) on the same DashScope base. Always
+    # registered like every BYOK cloud engine.
+    from .engines.qwen_tts_instruct_cloud import Qwen3TtsInstructCloudEngine
+
+    registry.register(
+        Qwen3TtsInstructCloudEngine(key_store=key_store, config=config_for(Qwen3TtsInstructCloudEngine))
+    )
+
     # Issue #27: the MiniMax cloud engine — cloning + sync/async synthesis
     # + system voices + voice design in ONE adapter (its designed and
     # cloned voices are synthesized by the same speech-2.8 model). Always

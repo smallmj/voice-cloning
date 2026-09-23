@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-22",
+  "updated_at": "2026-09-23",
   "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
   "engines": [
     {
@@ -311,6 +311,60 @@
         }
       ],
       "notes": "设计引擎也跑回归集（用设计出的 preview 音色），验证文字描述音色对难例的读法。"
+    },
+    {
+      "engine_id": "qwen3-tts-instruct-cloud",
+      "display_name": "Qwen3-TTS 指令控制（阿里百炼 · 云端）",
+      "kind": "cloud",
+      "role": "BYOK 云端指令控制档（issue #68）：自然语言 instructions 控制语气/语速/方言，不做音色复刻。",
+      "evidence": [
+        {
+          "field": "instructions 参数",
+          "value": "自然语言合成指令（语气/语速/方言，如「用兴奋的语气、稍快的语速说」）经 input.instructions 直出；留空不发送。厂商口径：Instruct 模型经自然语言处理合成效果，当前支持 25 个音色的中英文 Instruct 调节",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型文档（help.aliyun.com/zh/model-studio/qwen3-tts-instruct-flash）+ DashScope 非实时语音合成文档",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "语种参数",
+          "value": "language_type 沿用 Qwen-TTS 家族 10 值枚举；auto=不发送，暴露为 canonical language",
+          "verification": "vendor",
+          "source": "阿里云 Qwen-TTS 非实时语音合成 API 文档；engines/qwen_tts_instruct_cloud.py param_specs",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "音色",
+          "value": "voice 由云端绑定 server-injected（不作为用户参数暴露，ADR-0018 decision 4）；厂商公开口径为 25 个系统音色支持 Instruct 调节，克隆音色对 instruct 模型的可用性未经真机验证",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型文档；ADR-0018",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "计费",
+          "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费",
+          "verification": "vendor",
+          "source": "阿里云 qwen3-tts-instruct-flash 模型价格页",
+          "date": "2026-09-23"
+        },
+        {
+          "field": "非语言标记",
+          "value": "无正文标记；情感/语气表达全部走 instructions 参数（issue #68 术语口径：instruct 走指令，不走情感枚举参数）",
+          "verification": "vendor",
+          "source": "issue #68 调研定稿；阿里云 instruct 模型文档",
+          "date": "2026-09-23"
+        }
+      ],
+      "performance": [
+        {
+          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+          "rtf": null,
+          "peak_vram_bytes": null,
+          "verification": "unknown",
+          "source": "云端引擎不适用本地显存口径",
+          "date": "2026-09-23"
+        }
+      ],
+      "notes": "合成走与 VC 引擎相同的 multimodal-generation 端点与音频下载路径（ADR-0015 云基座复用）；instruct 模型的 instructions 真机实测未完成，条目均为厂商口径（vendor）。"
     },
     {
       "engine_id": "indextts-25-mps",

@@ -207,6 +207,8 @@ def test_matrix_data_lists_all_shipped_engines():
     assert ids == {
         "qwen3-tts-vc-cloud",
         "qwen3-tts-vd-cloud",
+        # issue #68: instruction-control cloud engine
+        "qwen3-tts-instruct-cloud",
         "minimax-speech-cloud",
         "qwen3-tts-mlx",
         "indextts-25-cuda",

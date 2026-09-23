@@ -18,7 +18,7 @@ import {
   type SectionId,
 } from "../ui";
 import { Waveform } from "../components/Waveform";
-import { JumpLink, NonverbalTagButtons } from "../components/bits";
+import { JumpLink, NonverbalTagPicker } from "../components/bits";
 import { insertAtCursor } from "../ui";
 
 export function GenerateSection({
@@ -252,10 +252,15 @@ export function GenerateSection({
         );
       })()}
 
-      {/* Issue #57: quick-insert buttons for common non-verbal tags
-          (engine-agnostic text-editing aid, see CONTEXT.md 术语). */}
+      {/* Issue #68: engine-declared non-verbal tag control — hidden entirely
+          for engines whose capabilities declare no tags. The same textarea
+          feeds single generations AND long-text jobs (App routes overlong
+          text to /generations/jobs), so the control serves both (US5). */}
       <div className="generate-text-row">
-        <NonverbalTagButtons onInsert={insertTag} />
+        <NonverbalTagPicker
+          tags={selectedEngineInfo?.capabilities.nonverbal_tags}
+          onInsert={insertTag}
+        />
       </div>
       <textarea
         ref={textRef}

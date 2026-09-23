@@ -831,3 +831,44 @@ details.matrix-group > summary:hover strong { opacity: 0.85; }
   padding: 1px var(--sp-2);
   background: none;
 }
+
+/* Issue #68: searchable category dropdown for the engine-declared tag set. */
+.nv-tag-picker {
+  position: relative;
+}
+.nv-tag-picker > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: 1px var(--sp-2);
+  list-style: revert;
+}
+.nv-tag-menu {
+  position: absolute;
+  z-index: 20;
+  margin-top: var(--sp-1);
+  padding: var(--sp-2);
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-elevated, var(--bg, inherit));
+  border: 1px solid var(--border, currentColor);
+  border-radius: var(--radius, 6px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.nv-tag-search {
+  width: 100%;
+}
+.nv-tag-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1);
+}
+.nv-tag-category {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  opacity: 0.75;
+  min-width: 4.5em;
+}

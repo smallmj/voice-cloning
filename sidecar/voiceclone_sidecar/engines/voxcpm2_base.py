@@ -36,7 +36,7 @@ import uuid
 from pathlib import Path
 
 from .. import pronunciation, sources
-from ..capabilities import AppliesTo, Capabilities, ParamSpec
+from ..capabilities import AppliesTo, Capabilities, NonverbalTag, ParamSpec
 from ..engine_config import EngineConfig, resolve_seam
 from ..registry import GenerationRequest, GenerationResult, InstallableEngine
 from ..runtime import installer, paths, uvman
@@ -77,6 +77,23 @@ VOXCPM2_LANGUAGES: tuple[str, ...] = (
     "zh", "en", "ar", "my", "da", "nl", "fi", "fr", "de", "el",
     "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no",
     "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi",
+)
+
+# Official cookbook non-verbal tag set (spec #68): 厂商口径全集；[laughing]
+# 与 [sigh] 两个标签 2026-09-22 真机实测（MPS+CUDA，能力矩阵有证据记录），
+# 保持 measured，其余为 vendor。MPS 与 CUDA 两个变体共用：capabilities()
+# 与测试都从这一元组派生，声明与证据不会漂移。
+VOXCPM2_NONVERBAL_TAGS = (
+    NonverbalTag("[laughing]", "笑叹", "笑（实测）", "measured"),
+    NonverbalTag("[sigh]", "笑叹", "叹气（实测）", "measured"),
+    NonverbalTag("[breath]", "呼吸停顿", "呼吸", "vendor"),
+    NonverbalTag("[Uhm]", "呼吸停顿", "迟疑嗯", "vendor"),
+    NonverbalTag("[Shh]", "呼吸停顿", "嘘声", "vendor"),
+    NonverbalTag("[Question-ah]", "疑问确认", "疑问「啊」", "vendor"),
+    NonverbalTag("[Question-ei]", "疑问确认", "疑问「诶」", "vendor"),
+    NonverbalTag("[Question-en]", "疑问确认", "疑问「嗯？」", "vendor"),
+    NonverbalTag("[Question-oh]", "疑问确认", "疑问「哦？」", "vendor"),
+    NonverbalTag("[Confirmation-en]", "疑问确认", "应答「嗯」", "vendor"),
 )
 
 
@@ -361,6 +378,7 @@ class VoxCPM2EngineBase(InstallableEngine):
             cross_device_use=False,
             upload_used_for_training=False,
             api_closed_loop=False,
+            nonverbal_tags=VOXCPM2_NONVERBAL_TAGS,
             # Reference transcript is OPTIONAL: mode ① (reference-only,
             # timbre) needs none; modes ②③ use it when available.
             requires_reference_text=False,

@@ -431,15 +431,69 @@ describe("engine card detail paragraphs (issue #40)", () => {
   });
 });
 
-// --- issue #57: non-verbal tag quick-insert ------------------------------------
+// --- issue #57/#68: non-verbal tag quick-insert --------------------------------
 
-import { insertAtCursor, NONVERBAL_TAGS } from "./ui";
+import {
+  commonNonverbalTags,
+  filterTagGroups,
+  groupTags,
+  insertAtCursor,
+  quickTags,
+} from "./ui";
+import type { NonverbalTagInfo } from "./api";
 
-describe("non-verbal tag quick-insert (issue #57)", () => {
-  it("exposes the cookbook-canonical tags, brackets verbatim", () => {
-    expect(NONVERBAL_TAGS).toEqual(["[laughing]", "[sigh]", "[Uhm]", "[Shh]", "[breath]"]);
+const VOX_TAGS: NonverbalTagInfo[] = [
+  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured" },
+  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured" },
+  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor" },
+  { text: "[Uhm]", category: "呼吸停顿", label: "迟疑嗯", verification: "vendor" },
+  { text: "[Question-ah]", category: "疑问确认", label: "疑问「啊」", verification: "vendor" },
+];
+const MINIMAX_TAGS: NonverbalTagInfo[] = [
+  { text: "(laughs)", category: "笑叹", label: "笑声", verification: "vendor" },
+  { text: "(breath)", category: "呼吸", label: "正常换气", verification: "vendor" },
+  { text: "(emm)", category: "生理", label: "嗯", verification: "vendor" },
+];
+
+describe("non-verbal tag data helpers (issue #68)", () => {
+  it("quickTags prefers the common English trio when declared, else first 3", () => {
+    expect(quickTags(VOX_TAGS).map((t) => t.text)).toEqual(["[laughing]", "[sigh]", "[breath]"]);
+    expect(quickTags(MINIMAX_TAGS).map((t) => t.text)).toEqual(["(laughs)", "(breath)", "(emm)"]);
+    expect(quickTags(undefined)).toEqual([]);
+    expect(quickTags([{ text: "x", category: "c", label: "l", verification: "vendor" }])).toHaveLength(1);
   });
 
+  it("groupTags keeps first-appearance category order", () => {
+    expect(groupTags(VOX_TAGS).map((g) => [g.category, g.tags.length])).toEqual([
+      ["笑叹", 2],
+      ["呼吸停顿", 2],
+      ["疑问确认", 1],
+    ]);
+    expect(groupTags(null)).toEqual([]);
+  });
+
+  it("filterTagGroups searches text/label/category, case-insensitively", () => {
+    expect(filterTagGroups(groupTags(VOX_TAGS), "笑").map((g) => g.category)).toEqual(["笑叹"]);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "BREATH").map((g) => g.category)).toEqual([
+      "呼吸停顿",
+    ]);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "")).toHaveLength(3);
+    expect(filterTagGroups(groupTags(VOX_TAGS), "不存在")).toEqual([]);
+  });
+
+  it("commonNonverbalTags intersects by marker text across picked engines", () => {
+    const both = [
+      { capabilities: { nonverbal_tags: VOX_TAGS } },
+      { capabilities: { nonverbal_tags: [...MINIMAX_TAGS, { text: "[breath]", category: "呼吸", label: "换气", verification: "vendor" }] } },
+    ];
+    expect(commonNonverbalTags(both).map((t) => t.text)).toEqual(["[breath]"]);
+    // Any picked engine without tags ⇒ empty (control must hide).
+    expect(commonNonverbalTags([{ capabilities: { nonverbal_tags: VOX_TAGS } }, {}])).toEqual([]);
+    expect(commonNonverbalTags([])).toEqual([]);
+  });
+});
+
+describe("non-verbal tag quick-insert (issue #57)", () => {
   it("inserts at the caret and leaves the caret after the tag", () => {
     expect(insertAtCursor("你好世界", "[sigh]", 2, 2)).toEqual({
       text: "你好[sigh]世界",

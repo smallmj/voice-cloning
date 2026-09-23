@@ -65,7 +65,7 @@ from pathlib import Path
 
 import httpx
 
-from ..capabilities import AppliesTo, Capabilities, ParamSpec
+from ..capabilities import AppliesTo, Capabilities, NonverbalTag, ParamSpec
 from ..registry import Engine, GenerationRequest, GenerationResult
 from .cloud_base import CloudEngineBase, CloudEngineError, voice_missing_blob
 
@@ -74,6 +74,35 @@ BASE_URL_ENV = "VOICECLONE_MINIMAX_BASE_URL"
 
 TARGET_MODEL = "speech-2.8-hd"
 MODEL_CHOICES = ("speech-2.8-hd", "speech-2.8-turbo")
+
+# Native non-verbal markers (spec #68): the 19 verbal-sound tags of the
+# official T2A text syntax (vendor口径, effective on the speech-2.8 models —
+# the engine's TARGET_MODEL/MODEL_CHOICES are all 2.8) plus the `<#x#>` pause
+# inserter (x = 0.01–99.99 s, at most two decimals). Emotion is NOT here:
+# MiniMax 情绪走既有 emotion API 参数，两套机制不打架。English parenthesized
+# tokens are inserted verbatim — no unified semantic layer.
+MINIMAX_NONVERBAL_TAGS = (
+    NonverbalTag("(laughs)", "笑叹", "笑声", "vendor"),
+    NonverbalTag("(chuckle)", "笑叹", "轻笑", "vendor"),
+    NonverbalTag("(sighs)", "笑叹", "叹气", "vendor"),
+    NonverbalTag("(groans)", "笑叹", "呻吟", "vendor"),
+    NonverbalTag("(humming)", "笑叹", "哼唱", "vendor"),
+    NonverbalTag("(breath)", "呼吸", "正常换气", "vendor"),
+    NonverbalTag("(pant)", "呼吸", "喘气", "vendor"),
+    NonverbalTag("(inhale)", "呼吸", "吸气", "vendor"),
+    NonverbalTag("(exhale)", "呼吸", "呼气", "vendor"),
+    NonverbalTag("(gasps)", "呼吸", "倒吸气", "vendor"),
+    NonverbalTag("(sniffs)", "呼吸", "吸鼻子", "vendor"),
+    NonverbalTag("(snorts)", "呼吸", "喷鼻息", "vendor"),
+    NonverbalTag("(coughs)", "生理", "咳嗽", "vendor"),
+    NonverbalTag("(clear-throat)", "生理", "清嗓子", "vendor"),
+    NonverbalTag("(burps)", "生理", "打嗝", "vendor"),
+    NonverbalTag("(lip-smacking)", "生理", "咂嘴", "vendor"),
+    NonverbalTag("(hissing)", "生理", "嘶嘶声", "vendor"),
+    NonverbalTag("(emm)", "生理", "嗯", "vendor"),
+    NonverbalTag("(sneezes)", "生理", "喷嚏", "vendor"),
+    NonverbalTag("<#1#>", "停顿", "停顿 1 秒（数字=秒，0.01–99.99）", "vendor"),
+)
 
 # USD per 1M characters, pay-as-you-go (pricing-paygo, 2026-09-18).
 PRICES_PER_M_CHARS = {"speech-2.8-hd": 100.0, "speech-2.8-turbo": 60.0}
@@ -183,6 +212,7 @@ class MiniMaxCloudEngine(CloudEngineBase, Engine):
             # data_usage_note (issue #21 makes this disclosure visible).
             upload_used_for_training=True,
             api_closed_loop=True,
+            nonverbal_tags=MINIMAX_NONVERBAL_TAGS,
             # Long text is NOT segmented: the async endpoint takes up to 1M
             # chars per request and bypasses the mainland 20 RPM limit that
             # per-request segmentation would run into (issue #27).

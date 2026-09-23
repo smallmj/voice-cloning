@@ -8,6 +8,13 @@ export interface SidecarInfo {
 // the Electron preload share one declaration; keeping a second copy here would
 // be a conflicting interface merge.
 
+export interface NonverbalTagInfo {
+  text: string;
+  category: string;
+  label: string;
+  verification: string;
+}
+
 export interface Capabilities {
   languages: string[];
   voice_cloning: boolean;
@@ -19,6 +26,10 @@ export interface Capabilities {
   upload_used_for_training: boolean;
   api_closed_loop: boolean;
   requires_reference_text?: boolean;
+  // Spec #68: native in-text non-verbal markers declared by the engine.
+  // Empty/absent = the engine has NO body-tag support — the UI hides the
+  // whole control instead of showing tags the engine would misread.
+  nonverbal_tags?: NonverbalTagInfo[];
   // Issue #13: over-length text is auto-segmented at this many characters
   // per request; null/absent means the engine declares no limit.
   max_chars_per_request?: number | null;

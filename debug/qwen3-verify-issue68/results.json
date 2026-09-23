@@ -1,0 +1,49 @@
+{
+  "text": "Hello world, this is a language test. 今天天气真好，我们出去散步吧。",
+  "results": [
+    {
+      "case": "auto",
+      "lang_code": null,
+      "audio_s": 4.88,
+      "synth_s": 2.13,
+      "peak": 0.3648,
+      "path": "/Users/smallmj/My Projects/vcs-wt-t2/debug/qwen3-verify-issue68/auto.wav"
+    },
+    {
+      "case": "chinese",
+      "lang_code": "chinese",
+      "audio_s": 5.68,
+      "synth_s": 2.02,
+      "peak": 0.2704,
+      "path": "/Users/smallmj/My Projects/vcs-wt-t2/debug/qwen3-verify-issue68/chinese.wav"
+    },
+    {
+      "case": "english",
+      "lang_code": "english",
+      "audio_s": 20.08,
+      "synth_s": 8.12,
+      "peak": 0.5033,
+      "path": "/Users/smallmj/My Projects/vcs-wt-t2/debug/qwen3-verify-issue68/english.wav"
+    }
+  ],
+  "waveform_diffs": {
+    "auto_vs_chinese": {
+      "maxabs": 14550.0,
+      "len_a": 117120,
+      "len_b": 136320
+    },
+    "auto_vs_english": {
+      "maxabs": 19532.0,
+      "len_a": 117120,
+      "len_b": 481920
+    },
+    "chinese_vs_english": {
+      "maxabs": 18978.0,
+      "len_a": 136320,
+      "len_b": 481920
+    }
+  },
+  "asr": {
+    "error": "No module named 'mlx_whisper'"
+  }
+}

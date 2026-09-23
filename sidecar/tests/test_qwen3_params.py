@@ -1,4 +1,4 @@
-"""Qwen3-TTS-MLX local parameter panel (issues #47 / #48).
+"""Qwen3-TTS-MLX local parameter panel (issues #47 / #48 / #68).
 
 #47: the canonical language slot used to be a silent no-op — the worker sent
 `language=` while upstream only knows `lang_code`, and the capitalized value
@@ -6,11 +6,18 @@ never matched the weight codec_language_id keys. These tests lock the fix:
 lowercase 10-language wire mapping, auto = key absent.
 
 #48: four engine-layer sampling parameters (temperature/top_p/top_k/
-repetition_penalty). They are ALWAYS sent, including the declared defaults:
-mlx-audio's hardcoded silent defaults (0.6/0.8/-1/1.3) differ from the
-official generation_config.json (0.9/1.0/50/1.05) the UI shows, so
-"not sending the default" would make the engine do something else than
-what the user sees.
+repetition_penalty). They are ALWAYS sent, including the declared defaults,
+as the verified "what the user sees = what the engine receives" contract.
+#68 comment correction: the earlier claim that mlx-audio hardcoded silent
+defaults of 0.6/0.8/-1/1.3 came from the WRONG module (VyvoTTS qwen3/
+qwen3.py) — the installed 0.5.4 defaults are 0.9/1.0/50/1.05, identical to
+the official generation_config; ALWAYS-SEND stays as drift protection.
+
+#68: lang_code re-verification proved the installed mlx-audio 0.5.4
+CONSUMES lang_code (codec prefill language token) → the selector is
+exposed again (no-op verdict revoked). New engine parameters max_tokens
+(int, default 4096 = upstream default) and split_pattern (default "\\n")
+follow #38 口径: absent key = upstream default = what the UI shows.
 """
 
 from __future__ import annotations
@@ -43,12 +50,14 @@ def language_spec():
 
 
 def test_language_choices_are_the_ten_upstream_languages_plus_auto():
-    # Issue #47: the wire mapping is correct (lang_code, lowercase), but V3
-    # real-machine verification proved mlx-audio never consumes lang_code —
-    # so the selector stays honest no-op DATA (audit decision 3, ADR-0018).
+    # Issue #47 wire fix + issue #68 re-verification: the installed
+    # mlx-audio 0.5.4 CONSUMES lang_code (codec prefill language token,
+    # qwen3_tts.py L393-406/L1297) — the earlier no-op verdict came from
+    # the wrong module and is revoked; the selector is exposed again.
     spec = language_spec()
-    assert spec.exposed is False
-    assert spec.not_exposed_reason == "no-op"
+    assert spec.exposed is True
+    assert spec.not_exposed_reason is None
+    assert spec.layer == "canonical"
     assert spec.choices == (
         "Auto", "Chinese", "English", "French", "German", "Italian",
         "Japanese", "Korean", "Portuguese", "Russian", "Spanish",
@@ -115,10 +124,10 @@ def test_sampling_specs_declared_with_construction_time_contract():
 
 def test_sampling_defaults_match_official_generation_config(tmp_path):
     # Issue #48: the declared defaults are the official weight
-    # generation_config.json values. They are ALWAYS sent (see below),
-    # because mlx-audio's hardcoded silent defaults (0.6/0.8/-1/1.3)
-    # differ from the official config — "not sending" would silently mean
-    # something else than what the UI shows.
+    # generation_config.json values. They are ALWAYS sent (see below) as
+    # the verified contract — issue #68 corrected the stale rationale
+    # (the 0.6/0.8/-1/1.3 claim came from the wrong upstream module; the
+    # installed 0.5.4 defaults actually match the official config).
     payload = ENGINE.build_worker_payload(
         GenerationRequest(generation_id="g1", text="hi", params={}),
         tmp_path, tmp_path / "o.wav",
@@ -147,6 +156,50 @@ def test_speed_stays_noop_data():
     spec = next(s for s in ENGINE.param_specs() if s.name == "speed")
     assert spec.exposed is False
     assert spec.not_exposed_reason == "no-op"
+
+
+# --- issue #68: max_tokens / split_pattern -----------------------------------
+
+
+def test_max_tokens_spec_is_engine_layer_int():
+    spec = next(s for s in ENGINE.param_specs() if s.name == "max_tokens")
+    assert spec.exposed is True
+    assert spec.layer == "engine"
+    assert spec.kind == "number"
+    assert spec.integer is True
+    assert spec.default == 4096
+    assert spec.min == 256 and spec.max == 8192
+    assert spec.applies_to is not None
+
+
+def test_split_pattern_spec_is_engine_layer_text():
+    spec = next(s for s in ENGINE.param_specs() if s.name == "split_pattern")
+    assert spec.exposed is True
+    assert spec.layer == "engine"
+    assert spec.kind == "text"
+    assert spec.default == "\n"
+    assert spec.applies_to is not None
+
+
+def test_max_tokens_and_split_pattern_absent_when_default(tmp_path):
+    # #38 口径: declared defaults equal the upstream defaults → absent key.
+    payload = ENGINE.build_worker_payload(
+        GenerationRequest(generation_id="g1", text="hi", params={}),
+        tmp_path, tmp_path / "o.wav",
+    )
+    assert "max_tokens" not in payload
+    assert "split_pattern" not in payload
+
+
+def test_max_tokens_and_split_pattern_forwarded_when_set(tmp_path):
+    payload = ENGINE.build_worker_payload(
+        GenerationRequest(generation_id="g1", text="hi",
+                          params={"max_tokens": 8192, "split_pattern": "||"}),
+        tmp_path, tmp_path / "o.wav",
+    )
+    assert payload["max_tokens"] == 8192
+    assert isinstance(payload["max_tokens"], int)
+    assert payload["split_pattern"] == "||"
 
 
 # --- worker regression: mock the upstream generate ----------------------------
@@ -264,6 +317,23 @@ def test_worker_forwards_lowercase_lang_code(fake_mlx, monkeypatch, tmp_path):
 def test_worker_omits_lang_code_for_auto(fake_mlx, monkeypatch, tmp_path):
     _run_worker({"weights_dir": "/w", "text": "你好"}, fake_mlx, monkeypatch, tmp_path)
     assert "lang_code" not in fake_mlx[0]
+
+
+def test_worker_forwards_max_tokens_and_split_pattern(fake_mlx, monkeypatch, tmp_path):
+    _run_worker({"weights_dir": "/w", "text": "hi", "max_tokens": 2048,
+                 "split_pattern": "||"},
+                fake_mlx, monkeypatch, tmp_path)
+    kwargs = fake_mlx[0]
+    assert kwargs["max_tokens"] == 2048
+    assert isinstance(kwargs["max_tokens"], int)
+    assert kwargs["split_pattern"] == "||"
+
+
+def test_worker_omits_max_tokens_and_split_pattern_when_absent(fake_mlx, monkeypatch, tmp_path):
+    _run_worker({"weights_dir": "/w", "text": "hi"}, fake_mlx, monkeypatch, tmp_path)
+    kwargs = fake_mlx[0]
+    assert "max_tokens" not in kwargs
+    assert "split_pattern" not in kwargs
 
 
 def test_worker_forwards_changed_sampling_params(fake_mlx, monkeypatch, tmp_path):

@@ -65,17 +65,18 @@ def _lock_surface(engine, expected_exposed: tuple, expected_hidden: dict):
 
 def test_qwen3_request_surface_matches_audit():
     engine = Qwen3TtsMlxEngine(root=Path("/tmp/ascii-root"))
-    # language stays DECLARED but exposed=False/no-op: V3 real-machine proof
-    # that mlx-audio never consumes lang_code (issue #47 final state). The
-    # four sampling params are exposed in the engine folded area (issue #48,
-    # always sent — mlx-audio's silent defaults differ from the official
-    # generation_config). speed stays no-op data. max_tokens/instruct/voice/
-    # seed/streaming_* are NOT declared rows: their disposition is recorded
-    # as capability-matrix evidence entries, which the matrix test below locks.
+    # Issue #68 update: the lang_code no-op verdict is REVOKED — source read
+    # + real-machine re-verification proved the installed mlx-audio 0.5.4
+    # consumes lang_code (codec prefill language token), so language is
+    # exposed canonical data again. The four sampling params stay exposed in
+    # the engine folded area (issue #48, always sent). speed stays no-op
+    # data. max_tokens/split_pattern are now exposed engine rows (issue #68);
+    # instruct/voice/seed/streaming_* remain undeclared rows.
     _lock_surface(
         engine,
-        ("temperature", "top_p", "top_k", "repetition_penalty"),
-        {"language": "no-op", "speed": "no-op"},
+        ("language", "temperature", "top_p", "top_k", "repetition_penalty",
+         "max_tokens", "split_pattern"),
+        {"speed": "no-op"},
     )
 
 
@@ -151,16 +152,40 @@ def test_voxcpm2_silent_failure_seed_regression():
 
 def test_fireredtts3_request_surface_matches_audit():
     engine = FireRedTts3MpsEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
-    # §2.2 end state: the three quality params exposed (issue #51, V5/V6);
-    # stop_threshold measured as byte-identical across levels → not a user
-    # param and (per the #51 decision) not even a declared row; instruct is
-    # wrong-mode (Base weights only); ref_audio/ref_text server-injected.
+    # §2.2 end state + issue #68: canonical language select exposed (official
+    # 24-language list, default Chinese — the measured language); the three
+    # quality params exposed (issue #51, V5/V6); stop_threshold measured as
+    # byte-identical across levels → not a user param and (per the #51
+    # decision) not even a declared row; instruct is wrong-mode (Base weights
+    # only); ref_audio/ref_text server-injected.
     _lock_surface(
         engine,
-        ("seed", "inference_cfg", "n_timesteps", "cross_fade_ms"),
+        ("language", "seed", "inference_cfg", "n_timesteps", "cross_fade_ms"),
         {"instruct_mode": "wrong-mode", "ref_audio": "server-injected",
          "ref_text": "server-injected"},
     )
+
+
+def test_fireredtts3_language_select_is_the_official_list():
+    """Issue #68: the language dropdown is DATA from the official supported
+    list (upstream README in the patched checkout), verbatim tags, default
+    Chinese; Auto = key absent = upstream auto detection."""
+    engine = FireRedTts3MpsEngine(output_dir=Path("/tmp/a"), root=Path("/tmp/a"), env={})
+    spec = next(s for s in engine.param_specs() if s.name == "language")
+    assert spec.exposed is True
+    assert spec.layer == "canonical"
+    assert spec.default == "Chinese"
+    assert spec.choices[0] == "Chinese" and "Auto" in spec.choices
+    assert spec.to_wire("Chinese") == "Chinese"
+    assert spec.to_wire("Auto") is None
+    assert spec.to_wire("Klingon") is None  # unknown never guesses
+    # The official 24 multilingual languages are all in the enum.
+    official = {"Chinese", "English", "Cantonese", "Arabic", "Czech", "Dutch",
+                "Finnish", "French", "German", "Greek", "Hindi", "Indonesian",
+                "Italian", "Japanese", "Korean", "Polish", "Portuguese",
+                "Romanian", "Russian", "Spanish", "Thai", "Turkish",
+                "Ukrainian", "Vietnamese"}
+    assert official <= set(spec.choices)
 
 
 # --- dots-tts-cuda (audit §2.4) ------------------------------------------------
@@ -190,12 +215,14 @@ def _evidence_entry(engine_id: str, field: str):
 
 
 def test_matrix_qwen3_lang_code_claim_is_real_machine_backed():
-    """V3: lang_code no-op finding — measured, 2026-09-22, and it must state
-    the honest end state (correct key, still no effect)."""
+    """Issue #68 end state: the no-op verdict is revoked — the matrix entry
+    records the re-verification (measured, 2026-09-23): source consumption
+    + real-machine evidence, selector re-exposed."""
     ev = _evidence_entry("qwen3-tts-mlx", "语种参数（lang_code）")
     assert ev["verification"] == "measured"
-    assert ev["date"] == "2026-09-22"
-    assert "lang_code" in ev["value"] and "no-op" in ev["value"]
+    assert ev["date"] == "2026-09-23"
+    for token in ("lang_code", "no-op 结论撤销", "已重新暴露"):
+        assert token in ev["value"], token
 
 
 def test_matrix_qwen3_sampling_claim_matches_spec_defaults():
@@ -213,13 +240,17 @@ def test_matrix_qwen3_sampling_claim_matches_spec_defaults():
     }
 
 
-def test_matrix_qwen3_max_tokens_is_disclosed_not_declared():
-    """V4 end state: max_tokens is disclosed as matrix evidence (long-text
-    degradation finding) but deliberately has NO spec row — locked in
-    test_qwen3_request_surface_matches_audit; here we lock the matrix side."""
-    ev = _evidence_entry("qwen3-tts-mlx", "max_tokens（上游默认 1200/段）")
-    assert ev["verification"] == "measured"
-    assert ev["date"] == "2026-09-22"
+def test_matrix_qwen3_max_tokens_matches_exposed_spec():
+    """Issue #68 end state: max_tokens is now an EXPOSED engine spec
+    (default 4096 = upstream default); the matrix entry carries the
+    upstream-default correction and the V4 long-text degradation evidence."""
+    ev = _evidence_entry("qwen3-tts-mlx", "max_tokens")
+    assert ev["verification"] == "verified"
+    assert ev["date"] == "2026-09-23"
+    engine = Qwen3TtsMlxEngine(root=Path("/tmp/ascii-root"))
+    spec = next(s for s in engine.param_specs() if s.name == "max_tokens")
+    assert spec.exposed and spec.default == 4096
+    assert (spec.min, spec.max) == (256, 8192)
 
 
 def test_matrix_voxcpm2_generation_params_claim_is_real_machine_backed():

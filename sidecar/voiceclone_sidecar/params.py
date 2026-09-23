@@ -62,7 +62,8 @@ def canonical_speed(engine_id: str, model: str, help: str = "") -> ParamSpec:
 def canonical_language(engine_id: str, model: str, choices, wire_name: str,
                        default=None, mode: str = "cloning",
                        wire_transform=None, exposed: bool = True,
-                       not_exposed_reason: str | None = None) -> ParamSpec:
+                       not_exposed_reason: str | None = None,
+                       help_text: str | None = None) -> ParamSpec:
     """Canonical language control mapped onto the engine's own wire key.
 
     Six engines use six different language schemes and one has no parameter
@@ -89,7 +90,7 @@ def canonical_language(engine_id: str, model: str, choices, wire_name: str,
         choices=tuple(choices),
         layer="canonical",
         wire_path=wire_name,
-        help="发音语言。",
+        help=help_text or "发音语言。",
         exposed=exposed,
         not_exposed_reason=not_exposed_reason,
         applies_to=AppliesTo(engine=engine_id, model=model, mode=mode),

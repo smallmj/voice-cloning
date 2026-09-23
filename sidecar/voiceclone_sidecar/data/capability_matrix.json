@@ -1,823 +1,832 @@
 {
-  "version": 1,
-  "updated_at": "2026-09-22",
-  "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
-  "engines": [
+ "version": 1,
+ "updated_at": "2026-09-23",
+ "methodology": "本矩阵由 issue #16 固化：每一格都带验证等级（measured=本项目真机实测 / verified=一手来源核实 / vendor=厂商口径 / unverified=调研时未核实、结论为仍未知 / unknown=无从核实）。性能条目记录测量环境；RTX 3090 实测未完成前，IndexTTS-2.5 的性能数字一律不得标为已核实。",
+ "engines": [
+  {
+   "engine_id": "qwen3-tts-mlx",
+   "display_name": "Qwen3-TTS 0.6B Base（本地 · MLX）",
+   "kind": "local",
+   "role": "macOS (Apple Silicon) 本地复刻引擎，v1 默认本地档。",
+   "evidence": [
     {
-      "engine_id": "qwen3-tts-mlx",
-      "display_name": "Qwen3-TTS 0.6B Base（本地 · MLX）",
-      "kind": "local",
-      "role": "macOS (Apple Silicon) 本地复刻引擎，v1 默认本地档。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "Apache-2.0（代码+权重，官方明写 free for commercial use）",
-          "verification": "verified",
-          "source": "Qwen 官方仓库 LICENSE；docs/research/local-models/2026-09-16_引擎选型报告.md",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "零样本复刻",
-          "value": "支持（ref audio + ref_text）",
-          "verification": "measured",
-          "source": "docs/research/local-models/2026-09-16_AppleSilicon实测补充.md（M5 Pro 真机）",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "中文可懂度",
-          "value": "上游 zh WER 3.27（同表最低）；本机 ASR 复核 3/3 正确",
-          "verification": "measured",
-          "source": "2026-09-16_AppleSilicon实测补充.md",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过——仅有 ASR 可懂度复核",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "发音控制",
-          "value": "不支持（pronunciation_control=False）",
-          "verification": "measured",
-          "source": "voiceclone_sidecar/engines/qwen3_tts.py；mlx-audio 无发音标注入口",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "语速参数",
-          "value": "上游参数 speed 为 no-op：被接受、被打印、从不使用",
-          "verification": "measured",
-          "source": "docs/audit/2026-09-18-代码审计与优化点.md §4；mlx-audio 源码串明写 \"not directly supported yet\"",
-          "date": "2026-09-18",
-          "note": "issue #23：以 ParamSpec exposed=False / notExposedReason=no-op 固化为数据"
-        },
-        {
-          "field": "语种参数（lang_code）",
-          "value": "上游 mlx-audio qwen3 Model.generate 不消费语言参数：worker 曾传 language=（落 **kwargs 静默丢弃，audit §1.1），改传正确键 lang_code（小写匹配权重 codec_language_id）后真机验证仍为 no-op——中文文本 + lang_code=japanese 输出仍为中文；模型自动跟随文本语言，10 语种逐一合成均正确（zh/en/de/it/ja/ko/pt/ru/es 经本机 whisper-small ASR 复核，法语转写存疑系 ASR 弱项）。源码核对：0.5.4 与上游 main 的 Model.generate 均未读取 lang_code。",
-          "verification": "measured",
-          "source": "docs/audit/local-engine-param-gap-audit.md §1.1；debug/qwen3-verify/（results.json + asr.json + 13 个 wav）；mlx-audio 0.5.4 及 main 源码（mlx_audio/tts/models/qwen3/qwen3.py）",
-          "date": "2026-09-22",
-          "note": "issue #47：wire 修复落地（lang_code + 小写 + 10 语种 choices + auto=不传），但按 audit 决策 3『验证未通过转 not_exposed』，language 以 exposed=False / no-op 固化；to_wire 映射保留，上游一旦消费 lang_code 即可一行翻回"
-        },
-        {
-          "field": "采样参数（temperature/top_p/top_k/repetition_penalty）",
-          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送——mlx-audio 硬编码的静默默认（0.6/0.8/-1/1.3）与官方 config 不一致，『默认不发送』会让引擎行为偏离 UI 展示；源码核实四参数确实被 make_sampler/make_logits_processors 消费",
-          "verification": "verified",
-          "source": "voiceclone_sidecar/engines/qwen3_tts.py SAMPLING_SPECS；weights/generation_config.json；mlx-audio 0.5.4 qwen3.py L318-322",
-          "date": "2026-09-22",
-          "note": "issue #48；tests/test_qwen3_params.py 锁定传参与默认恒发送口径"
-        },
-        {
-          "field": "max_tokens（上游默认 1200/段）",
-          "value": "不暴露、不声明 spec 行：产品管线 500 字/请求上限下该内部安全帽不构成用户参数。V4 真机实测 780 字（测试文本实际长度，文件名 v4-long-500 指其覆盖 500 字上限场景）长文本单段合成：前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化",
-          "verification": "measured",
-          "source": "debug/qwen3-verify/v4-long-500.wav（780 字实测样本，文件名沿用 500 字上限场景命名）+ asr 转写；results.json v4 条目",
-          "date": "2026-09-22",
-          "note": "issue #48 V4 验收：结论为『披露』——按 fireredtts3 切句参数先例不加 not_exposed 行，以本条证据披露；500 字/请求上限（max_chars_per_request=500）即现有护栏"
-        }
-      ],
-      "performance": [
-        {
-          "env": "Apple M5 Pro 24GB（热，引擎级口径）",
-          "rtf": 0.37,
-          "rtf_range": [
-            0.35,
-            0.4
-          ],
-          "peak_vram_bytes": 2362232012,
-          "peak_kind": "unified_memory",
-          "verification": "measured",
-          "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）",
-          "date": "2026-09-16"
-        },
-        {
-          "env": "Mac 开发机（端到端口径，回归会话 4a4dd3fcd385460b84fa1839b3cddff8）",
-          "rtf": 0.979,
-          "peak_vram_bytes": null,
-          "peak_kind": "unified_memory_not_sampled",
-          "verification": "measured",
-          "source": "POST /regression/run：17/17 成功，端到端墙钟含引擎加载与归一化，故高于引擎级 0.35–0.40",
-          "date": "2026-09-18"
-        }
-      ],
-      "notes": "回归集数字/日期/金额条目在本机 ASR 复核 3/3 正确（2025 年 / 100 万类难例含在 ①② 的实测里）；五类完整回归集按 issue #16 流程重跑并记录于回归索引。"
+     "field": "权重许可",
+     "value": "Apache-2.0（代码+权重，官方明写 free for commercial use）",
+     "verification": "verified",
+     "source": "Qwen 官方仓库 LICENSE；docs/research/local-models/2026-09-16_引擎选型报告.md",
+     "date": "2026-09-16"
     },
     {
-      "engine_id": "indextts-25-cuda",
-      "display_name": "IndexTTS-2.5（本地 · CUDA）",
-      "kind": "local",
-      "role": "Windows CUDA 本地复刻引擎，v1 Windows 档。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "bilibili Model Use License：MAU<1亿 且 上年营收<10亿人民币 → 可商用；另有两条附加条款",
-          "verification": "verified",
-          "source": "仓库 LICENSE + LICENSE_ZH.txt §2.2；docs/research/local-models/2026-09-16_Windows重型引擎选型.md §3.1.4",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "推理显存（厂商口径）",
-          "value": "约 6 GB（HF 模型卡原文）",
-          "verification": "vendor",
-          "source": "IndexTTS-2.5 HF 模型卡",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "常驻显存风险",
-          "value": "issue #649：常驻可达 10 GB（含情绪模型）→ 产品需提供释放显存能力",
-          "verification": "verified",
-          "source": "IndexTTS issue #649（2026-02-06）",
-          "date": "2026-02-06"
-        },
-        {
-          "field": "中文可懂度",
-          "value": "2.0（1.5B）seed-tts-eval test-zh CER 1.03 / SIM 76.5；2.5 官方称 WER/SIM 与 2 相当",
-          "verification": "verified",
-          "source": "三方模型卡交叉引用（CosyVoice3 / LongCat / VoxCPM2）",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过——仅有 ASR 可懂度复核",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "发音控制",
-          "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
-          "verification": "verified",
-          "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
-          "date": "2026-09-18",
-          "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
-        },
-        {
-          "field": "语速参数",
-          "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
-          "verification": "verified",
-          "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
-          "date": "2026-09-18",
-          "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
-        },
-        {
-          "field": "情感控制与采样参数",
-          "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500；do_sample 经真实合成验证为 no-op（上游 inference_speech 硬编码 do_sample=True）",
-          "verification": "verified",
-          "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
-          "date": "2026-09-21",
-          "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
-        }
-      ],
-      "performance": [
-        {
-          "env": "RTX 4090（官方 README Inference Speed 表，2.5 bf16, kv_cache=True）",
-          "rtf": 0.2065,
-          "peak_vram_bytes": null,
-          "verification": "verified",
-          "source": "IndexTTS-2.5 官方 README",
-          "date": "2026-09-16"
-        },
-        {
-          "env": "RTX 4080（vLLM 加速，zeeklog 搜索摘要）",
-          "rtf": 0.15,
-          "peak_vram_bytes": null,
-          "verification": "unverified",
-          "source": "zeeklog（仅搜索摘要，未核实）",
-          "date": "2026-09-16"
-        },
-        {
-          "env": "RTX 3090 24GB（本机 ALAN-PC）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unknown",
-          "source": "issue #16：待用回归集 + sample_peak_vram 实测后回填",
-          "date": "2026-09-18"
-        }
-      ],
-      "notes": "3090 实测是本工单的硬验收项：跑 POST /regression/run 后把回归会话里的 rtf / peak_vram_bytes 回填到这里并升级验证等级。"
+     "field": "零样本复刻",
+     "value": "支持（ref audio + ref_text）",
+     "verification": "measured",
+     "source": "docs/research/local-models/2026-09-16_AppleSilicon实测补充.md（M5 Pro 真机）",
+     "date": "2026-09-16"
     },
     {
-      "engine_id": "qwen3-tts-vc-cloud",
-      "display_name": "Qwen3-TTS 复刻（阿里百炼 · 云端）",
-      "kind": "cloud",
-      "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）；兼任真实云端转写提供方（issue #33，qwen3-asr-flash，同密钥）。",
-      "evidence": [
-        {
-          "field": "参数缺口核对（issue #38）",
-          "value": "合成请求仅 text/voice/language_type 三个旋钮：language 已暴露（11 取值=10 语种+Auto，与厂商枚举一致）；情感为文本内嵌标签而非 API 参数，已数据化披露（exposed=False, no-op）。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
-          "verification": "verified",
-          "source": "Qwen-TTS API 请求 schema（docs/research/cloud-api/2026-09-16_中国大陆云端API.md）；engines/qwen_tts_cloud.py param_specs",
-          "date": "2026-09-21"
-        },
-        {
-          "field": "计费",
-          "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费；1 万字符免费额度（90 天）",
-          "verification": "verified",
-          "source": "阿里百炼定价页；engines/qwen_tts_cloud.py billing_note",
-          "date": "2026-09-17"
-        },
-        {
-          "field": "数据用途",
-          "value": "输入输出不用于训练；参考音频上传留存于账号（可删除）；禁止转售",
-          "verification": "verified",
-          "source": "阿里云隐私声明 + 服务条款（BYOK 下用户为阿里云直接客户）",
-          "date": "2026-09-17"
-        },
-        {
-          "field": "中文可懂度",
-          "value": "官方中文第一梯队（国内厂商 Elo 全球第 4 的同厂模型）",
-          "verification": "vendor",
-          "source": "docs/research/cloud-api/2026-09-16_中国大陆云端API.md",
-          "date": "2026-09-16"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "语种参数",
-          "value": "language_type 10 值，auto=不发送；暴露为 canonical language",
-          "verification": "verified",
-          "source": "阿里百炼 Qwen-TTS 文档；voiceclone_sidecar/engines/qwen_tts_cloud.py",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "云端转写",
-          "value": "提供方即本引擎：DashScope Qwen-ASR qwen3-asr-flash（Data-URL 音频 ≤10MB，WAV/MP3/M4A/FLAC）。复用同一阿里百炼 BYOK 密钥，不新增供应商与第二把密钥（issue #33，plan 决策 #15）；失败一律显式报错，不回退其他提供方",
-          "verification": "verified",
-          "source": "阿里百炼 Qwen-ASR 文档（help.aliyun.com qwen-asr-api-reference）；voiceclone_sidecar/engines/qwen_tts_cloud.py transcribe()",
-          "date": "2026-09-20"
-        }
-      ],
-      "performance": [
-        {
-          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unknown",
-          "source": "云端引擎不适用本地显存口径",
-          "date": "2026-09-18"
-        }
-      ],
-      "notes": "回归集覆盖它对归一化后文本的处理；云端不做盲听 LUFS 归一化之外的本地测量。 云端转写限制：音频 ≤10MB、仅 WAV/MP3/M4A/FLAC；未配置 Key 或格式不支持时直接报错。"
+     "field": "中文可懂度",
+     "value": "上游 zh WER 3.27（同表最低）；本机 ASR 复核 3/3 正确",
+     "verification": "measured",
+     "source": "2026-09-16_AppleSilicon实测补充.md",
+     "date": "2026-09-16"
     },
     {
-      "engine_id": "qwen3-tts-vd-cloud",
-      "display_name": "Qwen3-TTS 音色设计（阿里百炼 · 云端）",
-      "kind": "cloud",
-      "role": "BYOK 云端音色设计档（文字描述造音色，无需参考音频）。",
-      "evidence": [
-        {
-          "field": "参数缺口核对（issue #38）",
-          "value": "与 vc 同构（text/voice/language_type）：language_type 未实测，按 ADR-0018 数据化（exposed=False, unverified），真实 Key 验证后翻 exposed。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
-          "verification": "verified",
-          "source": "Qwen-TTS API 请求 schema；engines/qwen_tts_vd_cloud.py param_specs",
-          "date": "2026-09-21"
-        },
-        {
-          "field": "音色设计",
-          "value": "支持（描述 → 音色，preview sample 即参考样本，ADR-0010）",
-          "verification": "verified",
-          "source": "百炼 API 文档；engines/qwen_tts_vd_cloud.py",
-          "date": "2026-09-17"
-        },
-        {
-          "field": "计费",
-          "value": "音色设计模型的按字价格未公开 → 记录 cost=null，不估算",
-          "verification": "verified",
-          "source": "engines/qwen_tts_vd_cloud.py",
-          "date": "2026-09-17"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-18"
-        }
-      ],
-      "performance": [
-        {
-          "env": "云端",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unknown",
-          "source": "云端引擎不适用本地显存口径",
-          "date": "2026-09-18"
-        }
-      ],
-      "notes": "设计引擎也跑回归集（用设计出的 preview 音色），验证文字描述音色对难例的读法。"
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过——仅有 ASR 可懂度复核",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-18"
     },
     {
-      "engine_id": "indextts-25-mps",
-      "display_name": "IndexTTS-2.5（本地 · MPS）",
-      "kind": "local",
-      "role": "Apple Silicon 本地复刻引擎，Mac 档补充（2026-09-19 新增）。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "与 CUDA 版同一权重：bilibili Model Use License（MAU<1亿 且上年营收<10亿人民币可商用）；辅助模型含 CC-BY-NC 的 MaskGCT 依赖",
-          "verification": "verified",
-          "source": "同 indextts-25-cuda 条目；NOTICE.md",
-          "date": "2026-09-19"
-        },
-        {
-          "field": "MPS 可行性（实测）",
-          "value": "torch 2.8.0 + M5 Pro 24GB 端到端真实克隆合成成功，输出峰值 0.542/0.569 无削顶无静音——推翻 plan.md 原「MPS 对 TTS 基本不可用」中涉及 IndexTTS 的结论",
-          "verification": "measured",
-          "source": "docs/installation/macos-indextts-2.5-mps.md；docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
-          "date": "2026-09-19"
-        },
-        {
-          "field": "精度路径",
-          "value": "fp32（use_bf16=False, device='mps'）——Apple Silicon 上唯一经真实生成验证的精度；bf16 autocast on MPS 未验证",
-          "verification": "measured",
-          "source": "ComfyUI T8 节点 2026-09-16 验证 + 本引擎 2026-09-19 复验",
-          "date": "2026-09-19"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-19"
-        },
-        {
-          "field": "发音控制",
-          "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
-          "verification": "verified",
-          "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
-          "date": "2026-09-18",
-          "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
-        },
-        {
-          "field": "语速参数",
-          "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
-          "verification": "verified",
-          "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
-          "date": "2026-09-18",
-          "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
-        },
-        {
-          "field": "情感控制与采样参数",
-          "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500；do_sample 经真实合成验证为 no-op（上游 inference_speech 硬编码 do_sample=True）",
-          "verification": "verified",
-          "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
-          "date": "2026-09-21",
-          "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
-        }
-      ],
-      "performance": [
-        {
-          "env": "Apple M5 Pro 24GB（本机，torch 2.8.0 MPS fp32，热）",
-          "rtf": 5.02,
-          "peak_vram_bytes": null,
-          "verification": "measured",
-          "source": "docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
-          "date": "2026-09-19"
-        },
-        {
-          "env": "Apple M5 Pro 24GB（首条，含预热）",
-          "rtf": 6.29,
-          "peak_vram_bytes": null,
-          "verification": "measured",
-          "source": "同上",
-          "date": "2026-09-19"
-        }
-      ]
+     "field": "发音控制",
+     "value": "不支持（pronunciation_control=False）",
+     "verification": "measured",
+     "source": "voiceclone_sidecar/engines/qwen3_tts.py；mlx-audio 无发音标注入口",
+     "date": "2026-09-18"
     },
     {
-      "engine_id": "minimax-speech-cloud",
-      "display_name": "MiniMax speech-2.8 复刻/设计（MiniMax · 云端）",
-      "kind": "cloud",
-      "role": "BYOK 云端复刻/设计档（ADR-0003：永远 BYOK，不内嵌平台 Key）；国际 .io 与大陆 .cn 两区两套账号额度，区域为引擎级 base URL 配置。",
-      "evidence": [
-        {
-          "field": "参数缺口核对（issue #38）",
-          "value": "t2a_v2/async 请求面全量声明：vol/pitch/latex_read 本次补齐暴露；channel（ADR-0018 决策 4）与 pronunciation_dict（wire 形态未验证）经 code review 回退为 not_exposed 数据；stream/format/bitrate=breaks-pipeline、sample_rate/output_format=server-injected、force_cbr/subtitle=no-op、timbre_weights/voice_modify/text_normalization=unverified。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
-          "verification": "verified",
-          "source": "t2a_v2 请求 schema（docs/research/2026-09-minimax-api-and-local-tts.md）；engines/minimax_cloud.py param_specs",
-          "date": "2026-09-21"
-        },
-        {
-          "field": "计费",
-          "value": "speech-2.8-hd $100/百万字符、speech-2.8-turbo $60/百万字符；复刻 $1.5/音色（首次真实合成时收取，本应用复刻后立即合成激活语，费用在创建音色时产生）；音色设计 $3/音色",
-          "verification": "verified",
-          "source": "MiniMax pricing-paygo 官方页；docs/research/2026-09-minimax-api-and-local-tts.md；engines/minimax_cloud.py billing_note",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "数据用途",
-          "value": "ToS 保留将信息用于「改进算法或增强服务」的权利且不构成违反保密义务；是否可关闭未在公开文档说明（upload_used_for_training=true + data_usage_note 披露）",
-          "verification": "verified",
-          "source": "MiniMax Terms of Service 原文（Nanonoble Pte. Ltd.）",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "7 天失效与激活陷阱",
-          "value": "克隆音色 inactive，7 天未正式调用即删；voice_clone 内预览不算激活（官方 FAQ 原文）——适配器在复刻成功后立即静默合成一句激活语并记 activated_at，激活失败绑定标 unactivated 并在生成页提示",
-          "verification": "verified",
-          "source": "voice-cloning-clone + FAQ about-apis 官方原文；engines/minimax_cloud.py bind_reference",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "健康检查",
-          "value": "get_voice 为 POST 且克隆音色仅首次成功合成后可查——check_voice 实现为探测性合成，非列表查询",
-          "verification": "verified",
-          "source": "voice-management-get 官方文档；engines/minimax_cloud.py check_voice",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "限流",
-          "value": "国际 T2A 60 RPM 单档；大陆 T2A 免费 10 / 充值 20 RPM（账号级）。长文本走异步（单请求上限 100 万字符）绕开大陆 20 RPM；错误码 1002/1039 带限流标记进入既有指数退避",
-          "verification": "verified",
-          "source": "两区 rate-limits 官方页；engines/minimax_cloud.py _error / _synthesize_async",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "异步 payload",
-          "value": "t2a_async_v2 键名与同步不同（audio_sample_rate / english_normalization；无 output_format/stream/force_cbr）——独立构造，不复用同步 builder",
-          "verification": "verified",
-          "source": "T2A Async create 官方 OpenAPI；engines/minimax_cloud.py _async_payload",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "复刻门槛",
-          "value": "需账号实名/付费档（错误码 2038）；音色设计拒绝模仿真实人物——错误码已翻译为用户可读提示",
-          "verification": "verified",
-          "source": "voice-cloning-clone 错误码表；engines/minimax_cloud.py _error",
-          "date": "2026-09-18"
-        },
-        {
-          "field": "真实账号端到端",
-          "value": "复刻 → 激活 → 合成端到端尚未用真实 Key 实测；7 天后失效识别与自动重建待实测",
-          "verification": "unverified",
-          "source": "issue #27 验收项，待人工执行（ready-for-human）",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过",
-          "verification": "unknown",
-          "source": "issue #16 现状缺口",
-          "date": "2026-09-20"
-        }
-      ],
-      "performance": [
-        {
-          "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unknown",
-          "source": "云端引擎不适用本地显存口径",
-          "date": "2026-09-20"
-        }
-      ],
-      "notes": "输出强制 WAV（默认 mp3 会破坏峰值自检）；短文本同步 t2a_v2（output_format=url），长文本异步；深度合成的公开标识义务在应用侧，已在生成记录/导出物标注（aigc_watermark 不满足该义务）。"
+     "field": "语速参数",
+     "value": "上游参数 speed 为 no-op：被接受、被打印、从不使用",
+     "verification": "measured",
+     "source": "docs/audit/2026-09-18-代码审计与优化点.md §4；mlx-audio 源码串明写 \"not directly supported yet\"",
+     "date": "2026-09-18",
+     "note": "issue #23：以 ParamSpec exposed=False / notExposedReason=no-op 固化为数据"
     },
     {
-      "engine_id": "fireredtts3-mps",
-      "display_name": "FireRedTTS3-Base（本地 · MPS · 实验性）",
-      "kind": "local",
-      "role": "Apple Silicon 本地复刻引擎（仅 Base 复刻模式）。issue #26 PoC 过闸后由 ADR-0019 采纳，issue #25 接入；bf16 路线未验证前标记实验性。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "Apache-2.0（代码 + 权重，HF 卡片标注与仓库 LICENSE 一致）；但上游 README 另有「零样本复刻仅限学术研究用途」声明（不在 LICENSE 内）——评审结论随 ADR-0019 记录：Apache-2.0 §2 权利不被 README 声明收窄，声明随接入记录为已知合规残留",
-          "verification": "verified",
-          "source": "HF 模型卡 + 上游 README；docs/adr/0019-adopt-fireredtts3-base-on-mps.md 决策 4；NOTICE.md §3",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "MPS 可行性（实测）",
-          "value": "PoC 20/20 全过（3 样音 + 17 项中文回归集），四类补丁（设备选择/SDPA/autocast 守卫/seed 守卫）后在 M5 Pro 真机完成零样本复刻",
-          "verification": "measured",
-          "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md；docs/evaluation/fireredtts3_poc/",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "精度路径",
-          "value": "fp32（autocast 由补丁在无 CUDA 时禁用）——bf16 on MPS 未实测（社区 M4 Max bf16 RTF 0.73–0.76 为外部口径）；不达标前引擎标实验性（ADR-0019 决策 1）",
-          "verification": "measured",
-          "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "参考文本要求",
-          "value": "必需：复刻路径为 prompt_audio + prompt_text 成对输入，缺转写无法复刻（requires_reference_text=True，sidecar 自动转写填充）",
-          "verification": "measured",
-          "source": "PoC run_poc.py 真实调用 + 上游 generate() 签名",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "语种与方言",
-          "value": "本机实测仅中文（17 项回归集全为中文）；上游宣传英文与 21 种中文方言——本仓库未验证",
-          "verification": "unverified",
-          "source": "上游 README（vendor 口径）；本仓库 PoC 仅覆盖 zh",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "发音控制",
-          "value": "无拼音/音素标注入口（pronunciation_control=False）",
-          "verification": "measured",
-          "source": "上游 generate() 签名与 PoC 调用面",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "生成参数",
-          "value": "inference_cfg（CFG 引导强度，默认 2.0）、n_timesteps（扩散步数，默认 10）、cross_fade_ms（句间淡入淡出，默认 50）、seed 为真实生效参数，已暴露为引擎层 ParamSpec（默认值不发送，口径同 #38；上游默认与 UI 默认一致兜底）。stop_threshold 为 early-stop 判据：真机 0.1/0.5/0.9 三档输出逐字节相同（stop score 单步跳变越过阈值，取值不敏感），结论=披露不暴露。切句四参数（token_max_n/token_min_n/merge_len/do_split）与 do_clean 明确不声明；do_tn/use_wetext 维持 breaks-pipeline 不暴露（ADR-0018 决策 4）。",
-          "verification": "measured",
-          "source": "上游 generate() 签名（本机 patched checkout core.py L238）+ 真机验证脚本 debug/fw51_verify.py / fw51_verify_r2.py（debug/fw51_out/）",
-          "date": "2026-09-22",
-          "note": "真机验证（2026-09-22，M5 Pro MPS fp32）：V5 inference_cfg=1.0/3.0 与 n_timesteps=4/16 相对基线输出波形差 maxabs 0.92–1.45（明显可听差异），长文本 ASR 显示各档发音/韵律真实不同且均可懂；cross_fade_ms 在两句拼接文本上 0/50/200 ms 输出样点数 545280/544080/540480，与上游 fade_len 公式逐样本吻合（1200/4800 @24 kHz）；V6 stop_threshold 0.1/0.5/0.9 输出逐字节相同（maxabs=0.0）。已知残留：长文本存在上游缺字问题（issue 之外的 fw1 loop 在跟进），与本轮参数无关。"
-        },
-        {
-          "field": "Instruct / 文生音色",
-          "value": "上游宣传强于 Qwen3-TTS-VD 的文生音色，但 PoC 明确只验 Base 复刻；Instruct 权重未安装、未验证，参数以 wrong-mode 声明不暴露",
-          "verification": "unverified",
-          "source": "issue #26 范围决定（docs/adr/0019 决策 4 之外）",
-          "date": "2026-09-20"
-        }
-      ],
-      "performance": [
-        {
-          "env": "Apple M5 Pro 24GB（torch 2.8.0 MPS fp32，PoC，17 项回归）",
-          "rtf": 2.22,
-          "rtf_range": null,
-          "peak_vram_bytes": 12564758272,
-          "peak_kind": "unified_memory",
-          "verification": "measured",
-          "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md（RTF 中位 2.22，MPS 峰值 11.7 GB）",
-          "date": "2026-09-20"
-        },
-        {
-          "env": "Apple M5 Pro 24GB（端到端口径，17 项回归，每请求独立 worker 含模型加载）",
-          "rtf": 0.176,
-          "rtf_range": [
-            0.111,
-            0.234
-          ],
-          "peak_vram_bytes": null,
-          "verification": "measured",
-          "source": "POST /regression/run 会话 63d3f882…：17/17 成功（RTF=音频秒/端到端墙钟，口径与引擎级 PoC 2.22 不同）",
-          "date": "2026-09-20"
-        }
-      ],
-      "notes": "补丁面（scripts/fireredtts3_poc/patch_fireredtts3.py ↔ voiceclone_sidecar/engines/fireredtts3_patch.py 同源）锚定上游原文，上游漂移即报错（ADR-0019 决策 2）；Windows CUDA 因 flash_attn 零 win_amd64 wheel 不在采纳范围（决策 3）。fasttext 不装；TN 用 wetext（pynini-free）。"
+     "field": "语种参数（lang_code）",
+     "value": "已重新暴露（issue #68，no-op 结论撤销）。勘误链：此前 no-op 结论系读错模块（VyvoTTS qwen3/qwen3.py）；实读已装 mlx-audio 0.5.4 的 mlx_audio/tts/models/qwen3_tts/qwen3_tts.py，确认 lang_code 真实消费——generate L1297 把 language=lang_code 传入 _prepare_generation_inputs，经 config.codec_language_id 映射为 codec 前缀 language token（L393-406 / L739-741），权重 config 声明 {chinese:2055, english:2050, …} 10 语种键。MPS 真机复验（2026-09-23，同文本 auto/chinese/english 三次合成）：音频时长 4.88s / 5.68s / 20.08s，波形 maxabs 差异 14550–19532；whisper-small ASR 显示 auto 与 chinese 读完双语句子、强制 english 只读出英文句（中文句被抑制）——language token 确实改变生成。已知边界：混语种文本强制单一语种会抑制其他语种内容，UI 默认 Auto。wire 保持 lang_code 小写 + Auto=不发送（issue #47 修复不变）。",
+     "verification": "measured",
+     "source": "mlx-audio 0.5.4 qwen3_tts.py L393-406/739-741/1297（engine venv 实读）；debug/qwen3_langcode_reverify.py + debug/qwen3-verify-issue68/（results.json + asr.json + 3 个 wav）",
+     "date": "2026-09-23",
+     "note": "issue #68：canonical language 重新 exposed（沿用 #47 语种枚举与 to_wire 适配）；tests/test_qwen3_params.py 断言已更新"
     },
     {
-      "engine_id": "voxcpm2-mps",
-      "display_name": "VoxCPM2（本地 · MPS）",
-      "kind": "local",
-      "role": "Apple Silicon 本地复刻引擎候选（issue #25）：2.29B，48kHz 输出，官方支持 MPS。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "Apache-2.0（代码 + 权重，pyproject 与 HF 卡片均标注 Apache-2.0）",
-          "verification": "verified",
-          "source": "github.com/OpenBMB/VoxCPM LICENSE/pyproject；huggingface.co/openbmb/VoxCPM2 模型卡",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "MPS 官方支持",
-          "value": "device 参数官方接受 auto/mps（auto 优先级 CUDA→MPS→CPU）；上游存在 MPS 已知问题：#232（输出通道>65536 报错，已关闭）与 #301（2.0.2 MPS 噪声输出，修复落点未核实）",
-          "verification": "verified",
-          "source": "src/voxcpm/core.py 文档串；github.com/OpenBMB/VoxCPM/issues/232, /issues/301",
-          "date": "2026-09-20",
-          "note": "本机 MPS 真机验证已完成：装机 + 17/17 中文回归集（2026-09-20，回归索引会话 f394f712…）"
-        },
-        {
-          "field": "复刻模式（三种）",
-          "value": "① reference_wav_path 单独（纯音色，无需转写，VoxCPM2 独有）；② prompt_wav_path + prompt_text（Hi-Fi 续写，转写必需，代码强制成对）；③ 两者同给（最高相似度）。参考文本为可选",
-          "verification": "verified",
-          "source": "src/voxcpm/core.py generate() 签名 + 官方 usage guide（voxcpm.readthedocs.io）",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "发音控制",
-          "value": "支持音素输入语法：中文 {ni3}{hao3}（拼音+声调数字）/ 英文 CMUDict {HH AH0 L OW1}，需 normalize=False",
-          "verification": "verified",
-          "source": "官方 usage guide「Regular text vs. phoneme input」",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "语种与方言",
-          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
-          "verification": "vendor",
-          "source": "上游 README；官方 usage guide；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 真机抽查）",
-          "date": "2026-09-22"
-        },
-        {
-          "field": "文本归一化",
-          "value": "依赖 wetext（pynini-free ONNX 归一器，非本仓库拒绝的 pynini 族）+ inflect；normalize 默认 False，仅 zh/en 生效",
-          "verification": "verified",
-          "source": "pyproject.toml + src/voxcpm/utils/text_normalize.py",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "生成参数",
-          "value": "cfg_value（默认 2.0）、inference_timesteps（默认 10）、min_len（默认 2）/max_len（默认 4096，token 上限）、retry_badcase/max_times/ratio_threshold（core 层生效默认 True/3/6.0，经 core 直传 model 层）均为真实生效参数；seed 不是上游 generate() 参数（2.0.3 _generate 无 seed 形参也无 **kwargs，直传 TypeError，真机复现）——可复现性由 worker 侧 torch.manual_seed 实现（issue #49 修复）；denoise 在本引擎离线安装形态（load_denoiser=False）下被静默忽略，开/关输出逐字节相同，按 no-op 数据声明（issue #50）",
-          "verification": "verified",
-          "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 真机验证脚本（issues #49/#50）",
-          "date": "2026-09-22",
-          "note": "真机验证（2026-09-22，VoxCPM 2.0.3 钉扎版本；Mac MPS + Windows RTX 3090 双机）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上模型加载后首次生成会偏离同 seed 复现，预热后含首次请求均逐字节一致；MPS 无预热亦一致）；V2 min_len/max_len/retry_badcase* 直传被接受且 core 层默认 True/3/6.0 经 core 直传生效；V7 denoise=True 与不开输出逐字节相同（denoiser 未装载，静默 no-op）。issue #59 复验（MPS sidecar 全链路）：seed=42 同参数 4 次输出 PCM 逐字节一致"
-        },
-        {
-          "field": "主观听感 (MOS)",
-          "value": "尚未做过——本机实测与听感判定随 issue #25 回归运行补齐",
-          "verification": "unknown",
-          "source": "issue #25 待办",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "控制指令（control_instruction）",
-          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；真机验证（MPS sidecar 全链路 + CUDA worker 等价路径，2026-09-22）：带指令合成成功（指令含数字 `30-year-old` 原样保留、正文日期归一化正常）、无指令基线与旧路径一致",
-          "verification": "measured",
-          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2）",
-          "date": "2026-09-22",
-          "note": "指令符合度（听感）待人工复核；产物在 /tmp/voxcpm2-verify/"
-        },
-        {
-          "field": "CMUDict/发音标注（英文）",
-          "value": "canonical 发音标注入口（world=W ER1 L D）经 pronunciation.rewrite → voxcpm 路由改写为 {W ER1 L D} 花括号音素、在归一化之后由适配层拼接（issue #56 路由）；真机验证（MPS sidecar，2026-09-22）：标注合成成功、无崩坏例。反例核实：把花括号语法直接写进正文会被中心归一化层破坏（ER1→ER一升），证明标注必须走 canonical 参数入口——与设计一致",
-          "verification": "measured",
-          "source": "voiceclone_sidecar/pronunciation.py _voxcpm_phoneme_tag；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V3 正例+反例）",
-          "date": "2026-09-22",
-          "note": "读音是否受控（听感）待人工复核"
-        },
-        {
-          "field": "非语言标签透传",
-          "value": "正文含 [laughing]、[sigh] 原样透传（中心归一化层前后不变，模型自动跟随）；真机验证（MPS+CUDA，2026-09-22）：合成成功、无崩坏例",
-          "verification": "measured",
-          "source": "docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V4）",
-          "date": "2026-09-22",
-          "note": "非语言声音是否可闻（听感）待人工复核"
-        },
-        {
-          "field": "voice_design（原生音色设计）",
-          "value": "issue #57 原生 Voice Design 端到端真机验证（MPS sidecar 全链路，2026-09-22）：POST /voices/design 无参考生成（`(描述)试听文本`）→ 返回 origin=designed 音色（预览样本即参考，sha256 da87f625…）→ 绑定 voxcpm2-mps → 用设计音色再合成成功；CUDA worker 等价路径（无参考 generate）同日跑通",
-          "verification": "measured",
-          "source": "engines/voxcpm2_base.py design_voice；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V5）",
-          "date": "2026-09-22"
-        }
-      ],
-      "performance": [
-        {
-          "env": "Apple M5 Pro 24GB（本机 MPS fp32，端到端口径，17 项回归）",
-          "rtf": 0.75,
-          "rtf_range": [
-            0.699,
-            0.758
-          ],
-          "peak_vram_bytes": null,
-          "verification": "measured",
-          "source": "POST /regression/run 会话 f394f712…：17/17 成功；docs/evaluation/2026-09-20_issue25_接入验证记录.md",
-          "date": "2026-09-20"
-        }
-      ],
-      "notes": "权重 openbmb/VoxCPM2（model.safetensors 4.27GiB + audiovae.pth 0.35GiB + tokenizer），ModelScope 镜像 OpenBMB/VoxCPM2 已核实。加载传 optimize=False（跳过 torch.compile 预热）、load_denoiser=False（不拉 ZipEnhancer）。"
+     "field": "采样参数（temperature/top_p/top_k/repetition_penalty）",
+     "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送；源码核实四参数确实被 make_sampler/make_logits_processors 消费。勘误（issue #68）：此前\"mlx-audio 硬编码静默默认 0.6/0.8/-1/1.3 与官方 config 不一致\"系读错模块（VyvoTTS qwen3/qwen3.py）——已装 mlx-audio 0.5.4 的 generate 默认即 0.9/1.0/50/1.05，与官方 config 一致；恒发送做法保留（#48 已验证契约，防上游默认漂移）。",
+     "verification": "verified",
+     "source": "voiceclone_sidecar/engines/qwen3_tts.py SAMPLING_SPECS；weights/generation_config.json；mlx-audio 0.5.4 qwen3.py L318-322",
+     "date": "2026-09-23",
+     "note": "issue #48；tests/test_qwen3_params.py 锁定传参与默认恒发送口径"
     },
     {
-      "engine_id": "voxcpm2-cuda",
-      "display_name": "VoxCPM2（本地 · CUDA）",
-      "kind": "local",
-      "role": "Windows CUDA 本地复刻引擎候选（issue #25），与 MPS 变体同一模型。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "同 voxcpm2-mps：Apache-2.0（代码 + 权重）",
-          "verification": "verified",
-          "source": "github.com/OpenBMB/VoxCPM LICENSE/pyproject",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "Windows 兼容",
-          "value": "无硬性阻碍（无 flash-attn / pynini / 编译型 wheel），但社区有分散报告：#184（Win11 多种报错）、#258（RTX 5090 不稳定）；官方 Windows 安装器仍为社区 PR #349 未合并",
-          "verification": "measured",
-          "source": "github.com/OpenBMB/VoxCPM/issues/184, /issues/258, PR #349；RTX 3090 实机首装全链路（torch 2.8.0+cu128 + voxcpm 2.0.3 + 权重）V1–V7 全部执行成功：docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md",
-          "date": "2026-09-22",
-          "note": "2026-09-22 RTX 3090 实测完成，由 verified 升级 measured：首装 + worker 等价脚本 15/15 项成功，无静音/削波"
-        },
-        {
-          "field": "能力面",
-          "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据；语种声明扩为官方 30 语种全量清单（HF 模型卡口径）——声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（RTX 3090 实机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
-          "verification": "verified",
-          "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 CUDA）",
-          "date": "2026-09-22"
-        },
-        {
-          "field": "生成参数",
-          "value": "同 voxcpm2-mps 条目（同一基类、同一 ParamSpec 面）：cfg_value/inference_timesteps/min_len/max_len/retry_badcase/max_times/ratio_threshold 均真实生效；seed 不是上游 generate() 参数——可复现性由 worker 侧 torch.manual_seed 实现（issue #49）；denoise 在离线安装形态（load_denoiser=False）下为 no-op（issue #50）",
-          "verification": "verified",
-          "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 3090 真机验证脚本（issues #49/#50）；参数面与 voxcpm2-mps 共享基类（测试 test_cuda_and_mps_share_the_base 锁定）",
-          "date": "2026-09-22",
-          "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。issue #52 证据终态核对时补齐此前缺失的本条。issue #59 复验（RTX 3090）：seed=42 同参数 3 次输出逐字节一致（含首次请求）；性能已实测见 performance 条目"
-        },
-        {
-          "field": "控制指令（control_instruction）",
-          "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；RTX 3090 实机验证（2026-09-22，worker 等价路径）：带指令（含数字 `30-year-old`）合成成功、无指令基线一致",
-          "verification": "measured",
-          "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2 CUDA）",
-          "date": "2026-09-22",
-          "note": "指令符合度（听感）待人工复核；CMUDict/非语言标签/voice_design 在 3090 上同日跑通（V3/V4/V5），逐格证据同 MPS 对应条目"
-        }
-      ],
-      "performance": [
-        {
-          "env": "RTX 3090 24GB（fp32，optimize=False，单段纯 generate 口径，timesteps=10 缺省）",
-          "rtf": 1.74,
-          "rtf_range": [
-            1.72,
-            1.76
-          ],
-          "peak_vram_bytes": 5970935808,
-          "verification": "measured",
-          "source": "issue #59 真机验证（2026-09-22，worker 等价脚本，torch 2.8.0+cu128）：14 段 RTF 1.72–1.76；timesteps=20 时 RTF 3.09–3.11；torch.cuda.max_memory_allocated 全流程峰值 5695 MiB。与 MPS 实测 0.75 口径不同（MPS 为 17 项回归端到端口径），如实记录",
-          "date": "2026-09-22"
-        }
-      ],
-      "notes": "与 MPS 变体共享引擎基类与权重下载链（torch 走 ADR-0002 CUDA wheel 精确 URL 轴）。"
+     "field": "max_tokens",
+     "value": "上游 generate() 形参 max_tokens: int = 4096（mlx-audio 0.5.4 qwen3_tts.py 签名实读——此前记录的\"上游默认 1200/段\"亦源自错误模块勘误，随 #68 一并更正）。已暴露为引擎层 spec：int，默认 4096，min 256 / max 8192，step 256；#38 口径（默认不发送，缺省=上游默认 4096=UI 展示值）。V4 真机长文本证据保留：780 字单段合成前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化，500 字/请求上限（max_chars_per_request=500）仍是主要护栏。",
+     "verification": "verified",
+     "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs；debug/qwen3-verify/v4-long-500.wav（长文本退化实测，2026-09-22）",
+     "date": "2026-09-23",
+     "note": "issue #68：新增 spec 行；tests/test_qwen3_params.py + test_local_param_surface.py 锁定"
     },
     {
-      "engine_id": "dots-tts-cuda",
-      "display_name": "dots.tts（本地 · CUDA）",
-      "kind": "local",
-      "role": "Windows 效果档候选（issue #25）：2B 全连续 AR + DiT flow-matching，48kHz，RTF 低（vendor 口径 0.20）。",
-      "evidence": [
-        {
-          "field": "权重许可",
-          "value": "Apache-2.0（代码 + 全部 7 个 checkpoint 权重）",
-          "verification": "verified",
-          "source": "github.com/studio-dots-ai/dots.tts LICENSE；HF dots-studio/dots.tts-soar 模型卡",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "文本归一化依赖（核实结论）",
-          "value": "官方依赖含硬依赖 WeTextProcessing（无版本钉扎），src/dots_tts/utils/text.py 模块顶层 import tn.*，不装则 import dots_tts 即失败——plan §5 的 pynini 疑云核实为真（一手证据）",
-          "verification": "verified",
-          "source": "pyproject.toml + utils/text.py 原文；docs/research/CORRECTIONS.md C-003",
-          "date": "2026-09-20",
-          "note": "接入对策：沿用 FireRed 补丁先例，锚点校验补丁把 tn.* 导入改惰性可选，不装 pynini；引擎内 TN 与 ADR-0008 自建归一化层职责重复，normalize_text 以 breaks-pipeline 声明不暴露"
-        },
-        {
-          "field": "Windows 可装性",
-          "value": "官方 OS 声明仅 Linux + macOS（pyproject classifiers 无 Windows）；pynini 无官方 win_amd64 wheel 是社区公认装机痛点（WeTextProcessing#287），社区走第三方 wheel（billwuhao/pynini-windows-wheels）绕行——本仓库不采用第三方 wheel，走上述补丁路径",
-          "verification": "verified",
-          "source": "pyproject classifiers；wenet-e2e/WeTextProcessing#287",
-          "date": "2026-09-20",
-          "note": "Windows 真机端到端装机验证未完成（issue #25 遗留待办）"
-        },
-        {
-          "field": "复刻模式",
-          "value": "① prompt_audio_path + prompt_text（续写复刻，转写必须与音频逐字一致，官方推荐、SIM 最佳）；② 仅 prompt_audio（CAM++ x-vector 纯音色）；③ 无 prompt 随机音色（仅微调单说话人 ckpt 有意义）",
-          "verification": "verified",
-          "source": "README + src/dots_tts/runtime.py generate() 签名",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "发音控制",
-          "value": "支持且仅支持声调符号法：把多音字替换为带调拼音（我生平不hào此道）；只认 hǎo/hào 等带符形式，不认 hao4 数字声调",
-          "verification": "verified",
-          "source": "官方 README tip + plan.md §1 参数调研",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "不存在的参数（防伪声明）",
-          "value": "temperature/top_p/top_k 不存在（全连续 latent flow-matching，无 token 采样器）；无语速参数（速率控制仅经 dots.tts.edit 模型）——不得声明为参数",
-          "verification": "verified",
-          "source": "README SGLang 节 + runtime.py generate() 签名",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "语种",
-          "value": "24 语种基准（最佳 zh/en；低资源语种 WER 高）；BPE 继承 Qwen2.5 覆盖。厂商口径，本仓库未实测",
-          "verification": "vendor",
-          "source": "README 效率/评测节（MiniMax multilingual 基准）",
-          "date": "2026-09-20"
-        },
-        {
-          "field": "macOS/MPS",
-          "value": "runtime 设备自动选择 cuda→cpu，无 MPS 路径——本引擎仅注册于 Windows",
-          "verification": "verified",
-          "source": "src/dots_tts/runtime.py _check_torch_env",
-          "date": "2026-09-20"
-        }
-      ],
-      "performance": [
-        {
-          "env": "RTX 3090（待实测，issue #25）",
-          "rtf": null,
-          "peak_vram_bytes": null,
-          "verification": "unverified",
-          "source": "H800 bf16 实测 RTF p50 0.20（复刻）/峰值 ~7.86 GB（vendor 口径）；3090 未跑不得标已核实",
-          "date": "2026-09-20"
-        }
-      ],
-      "notes": "权重 dots-studio/dots.tts-soar（model.safetensors 4.1GiB + vocoder 0.67GiB + speaker_encoder 28MiB + tokenizer/latent_stats/config，共 ~5.2GiB bf16），ModelScope 镜像 dots-studio/dots.tts-soar 已核实。max_generate_length 500 patch ≈ 单请求 80s 上限（vendor 口径）。"
+     "field": "split_pattern（分段分隔符）",
+     "value": "上游 generate() 形参 split_pattern: str = \"\\n\"（mlx-audio 0.5.4 签名实读）：文本中出现的分隔符把待合成文本切成多段、逐段生成拼接。已暴露为引擎层 spec（text，默认 \"\\n\"，显式控制分段）；#38 口径（默认不发送，缺省=上游默认换行分段）。",
+     "verification": "verified",
+     "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs",
+     "date": "2026-09-23",
+     "note": "issue #68：新增 spec 行"
     }
-  ]
+   ],
+   "performance": [
+    {
+     "env": "Apple M5 Pro 24GB（热，引擎级口径）",
+     "rtf": 0.37,
+     "rtf_range": [
+      0.35,
+      0.4
+     ],
+     "peak_vram_bytes": 2362232012,
+     "peak_kind": "unified_memory",
+     "verification": "measured",
+     "source": "2026-09-16_AppleSilicon实测补充.md；峰值内存≈2.2GB（统一内存，非显存）",
+     "date": "2026-09-16"
+    },
+    {
+     "env": "Mac 开发机（端到端口径，回归会话 4a4dd3fcd385460b84fa1839b3cddff8）",
+     "rtf": 0.979,
+     "peak_vram_bytes": null,
+     "peak_kind": "unified_memory_not_sampled",
+     "verification": "measured",
+     "source": "POST /regression/run：17/17 成功，端到端墙钟含引擎加载与归一化，故高于引擎级 0.35–0.40",
+     "date": "2026-09-18"
+    }
+   ],
+   "notes": "回归集数字/日期/金额条目在本机 ASR 复核 3/3 正确（2025 年 / 100 万类难例含在 ①② 的实测里）；五类完整回归集按 issue #16 流程重跑并记录于回归索引。"
+  },
+  {
+   "engine_id": "indextts-25-cuda",
+   "display_name": "IndexTTS-2.5（本地 · CUDA）",
+   "kind": "local",
+   "role": "Windows CUDA 本地复刻引擎，v1 Windows 档。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "bilibili Model Use License：MAU<1亿 且 上年营收<10亿人民币 → 可商用；另有两条附加条款",
+     "verification": "verified",
+     "source": "仓库 LICENSE + LICENSE_ZH.txt §2.2；docs/research/local-models/2026-09-16_Windows重型引擎选型.md §3.1.4",
+     "date": "2026-09-16"
+    },
+    {
+     "field": "推理显存（厂商口径）",
+     "value": "约 6 GB（HF 模型卡原文）",
+     "verification": "vendor",
+     "source": "IndexTTS-2.5 HF 模型卡",
+     "date": "2026-09-16"
+    },
+    {
+     "field": "常驻显存风险",
+     "value": "issue #649：常驻可达 10 GB（含情绪模型）→ 产品需提供释放显存能力",
+     "verification": "verified",
+     "source": "IndexTTS issue #649（2026-02-06）",
+     "date": "2026-02-06"
+    },
+    {
+     "field": "中文可懂度",
+     "value": "2.0（1.5B）seed-tts-eval test-zh CER 1.03 / SIM 76.5；2.5 官方称 WER/SIM 与 2 相当",
+     "verification": "verified",
+     "source": "三方模型卡交叉引用（CosyVoice3 / LongCat / VoxCPM2）",
+     "date": "2026-09-16"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过——仅有 ASR 可懂度复核",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "发音控制",
+     "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
+     "verification": "verified",
+     "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
+     "date": "2026-09-18",
+     "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
+    },
+    {
+     "field": "语速参数",
+     "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
+     "verification": "verified",
+     "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
+     "date": "2026-09-18",
+     "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
+    },
+    {
+     "field": "情感控制与采样参数",
+     "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500；do_sample 经真实合成验证为 no-op（上游 inference_speech 硬编码 do_sample=True）",
+     "verification": "verified",
+     "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
+     "date": "2026-09-21",
+     "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
+    }
+   ],
+   "performance": [
+    {
+     "env": "RTX 4090（官方 README Inference Speed 表，2.5 bf16, kv_cache=True）",
+     "rtf": 0.2065,
+     "peak_vram_bytes": null,
+     "verification": "verified",
+     "source": "IndexTTS-2.5 官方 README",
+     "date": "2026-09-16"
+    },
+    {
+     "env": "RTX 4080（vLLM 加速，zeeklog 搜索摘要）",
+     "rtf": 0.15,
+     "peak_vram_bytes": null,
+     "verification": "unverified",
+     "source": "zeeklog（仅搜索摘要，未核实）",
+     "date": "2026-09-16"
+    },
+    {
+     "env": "RTX 3090 24GB（本机 ALAN-PC）",
+     "rtf": null,
+     "peak_vram_bytes": null,
+     "verification": "unknown",
+     "source": "issue #16：待用回归集 + sample_peak_vram 实测后回填",
+     "date": "2026-09-18"
+    }
+   ],
+   "notes": "3090 实测是本工单的硬验收项：跑 POST /regression/run 后把回归会话里的 rtf / peak_vram_bytes 回填到这里并升级验证等级。"
+  },
+  {
+   "engine_id": "qwen3-tts-vc-cloud",
+   "display_name": "Qwen3-TTS 复刻（阿里百炼 · 云端）",
+   "kind": "cloud",
+   "role": "BYOK 云端复刻档（ADR-0003：永远 BYOK，不内嵌平台 Key）；兼任真实云端转写提供方（issue #33，qwen3-asr-flash，同密钥）。",
+   "evidence": [
+    {
+     "field": "参数缺口核对（issue #38）",
+     "value": "合成请求仅 text/voice/language_type 三个旋钮：language 已暴露（11 取值=10 语种+Auto，与厂商枚举一致）；情感为文本内嵌标签而非 API 参数，已数据化披露（exposed=False, no-op）。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+     "verification": "verified",
+     "source": "Qwen-TTS API 请求 schema（docs/research/cloud-api/2026-09-16_中国大陆云端API.md）；engines/qwen_tts_cloud.py param_specs",
+     "date": "2026-09-21"
+    },
+    {
+     "field": "计费",
+     "value": "0.8 元/万输入字符（1 汉字=2 字符），输出不计费；1 万字符免费额度（90 天）",
+     "verification": "verified",
+     "source": "阿里百炼定价页；engines/qwen_tts_cloud.py billing_note",
+     "date": "2026-09-17"
+    },
+    {
+     "field": "数据用途",
+     "value": "输入输出不用于训练；参考音频上传留存于账号（可删除）；禁止转售",
+     "verification": "verified",
+     "source": "阿里云隐私声明 + 服务条款（BYOK 下用户为阿里云直接客户）",
+     "date": "2026-09-17"
+    },
+    {
+     "field": "中文可懂度",
+     "value": "官方中文第一梯队（国内厂商 Elo 全球第 4 的同厂模型）",
+     "verification": "vendor",
+     "source": "docs/research/cloud-api/2026-09-16_中国大陆云端API.md",
+     "date": "2026-09-16"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "语种参数",
+     "value": "language_type 10 值，auto=不发送；暴露为 canonical language",
+     "verification": "verified",
+     "source": "阿里百炼 Qwen-TTS 文档；voiceclone_sidecar/engines/qwen_tts_cloud.py",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "云端转写",
+     "value": "提供方即本引擎：DashScope Qwen-ASR qwen3-asr-flash（Data-URL 音频 ≤10MB，WAV/MP3/M4A/FLAC）。复用同一阿里百炼 BYOK 密钥，不新增供应商与第二把密钥（issue #33，plan 决策 #15）；失败一律显式报错，不回退其他提供方",
+     "verification": "verified",
+     "source": "阿里百炼 Qwen-ASR 文档（help.aliyun.com qwen-asr-api-reference）；voiceclone_sidecar/engines/qwen_tts_cloud.py transcribe()",
+     "date": "2026-09-20"
+    }
+   ],
+   "performance": [
+    {
+     "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+     "rtf": null,
+     "peak_vram_bytes": null,
+     "verification": "unknown",
+     "source": "云端引擎不适用本地显存口径",
+     "date": "2026-09-18"
+    }
+   ],
+   "notes": "回归集覆盖它对归一化后文本的处理；云端不做盲听 LUFS 归一化之外的本地测量。 云端转写限制：音频 ≤10MB、仅 WAV/MP3/M4A/FLAC；未配置 Key 或格式不支持时直接报错。"
+  },
+  {
+   "engine_id": "qwen3-tts-vd-cloud",
+   "display_name": "Qwen3-TTS 音色设计（阿里百炼 · 云端）",
+   "kind": "cloud",
+   "role": "BYOK 云端音色设计档（文字描述造音色，无需参考音频）。",
+   "evidence": [
+    {
+     "field": "参数缺口核对（issue #38）",
+     "value": "与 vc 同构（text/voice/language_type）：language_type 未实测，按 ADR-0018 数据化（exposed=False, unverified），真实 Key 验证后翻 exposed。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+     "verification": "verified",
+     "source": "Qwen-TTS API 请求 schema；engines/qwen_tts_vd_cloud.py param_specs",
+     "date": "2026-09-21"
+    },
+    {
+     "field": "音色设计",
+     "value": "支持（描述 → 音色，preview sample 即参考样本，ADR-0010）",
+     "verification": "verified",
+     "source": "百炼 API 文档；engines/qwen_tts_vd_cloud.py",
+     "date": "2026-09-17"
+    },
+    {
+     "field": "计费",
+     "value": "音色设计模型的按字价格未公开 → 记录 cost=null，不估算",
+     "verification": "verified",
+     "source": "engines/qwen_tts_vd_cloud.py",
+     "date": "2026-09-17"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-18"
+    }
+   ],
+   "performance": [
+    {
+     "env": "云端",
+     "rtf": null,
+     "peak_vram_bytes": null,
+     "verification": "unknown",
+     "source": "云端引擎不适用本地显存口径",
+     "date": "2026-09-18"
+    }
+   ],
+   "notes": "设计引擎也跑回归集（用设计出的 preview 音色），验证文字描述音色对难例的读法。"
+  },
+  {
+   "engine_id": "indextts-25-mps",
+   "display_name": "IndexTTS-2.5（本地 · MPS）",
+   "kind": "local",
+   "role": "Apple Silicon 本地复刻引擎，Mac 档补充（2026-09-19 新增）。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "与 CUDA 版同一权重：bilibili Model Use License（MAU<1亿 且上年营收<10亿人民币可商用）；辅助模型含 CC-BY-NC 的 MaskGCT 依赖",
+     "verification": "verified",
+     "source": "同 indextts-25-cuda 条目；NOTICE.md",
+     "date": "2026-09-19"
+    },
+    {
+     "field": "MPS 可行性（实测）",
+     "value": "torch 2.8.0 + M5 Pro 24GB 端到端真实克隆合成成功，输出峰值 0.542/0.569 无削顶无静音——推翻 plan.md 原「MPS 对 TTS 基本不可用」中涉及 IndexTTS 的结论",
+     "verification": "measured",
+     "source": "docs/installation/macos-indextts-2.5-mps.md；docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
+     "date": "2026-09-19"
+    },
+    {
+     "field": "精度路径",
+     "value": "fp32（use_bf16=False, device='mps'）——Apple Silicon 上唯一经真实生成验证的精度；bf16 autocast on MPS 未验证",
+     "verification": "measured",
+     "source": "ComfyUI T8 节点 2026-09-16 验证 + 本引擎 2026-09-19 复验",
+     "date": "2026-09-19"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-19"
+    },
+    {
+     "field": "发音控制",
+     "value": "支持：<汉字|PINYIN> 尖括号标注，声调数字大写（如 <行|XING2>）",
+     "verification": "verified",
+     "source": "上游 apply_pronunciation_annotations() 源码；docs/plan.md §1 参数调研（2026-09-18）",
+     "date": "2026-09-18",
+     "note": "issue #23：canonical 发音标注入口 + 适配器改写 <汉字|PINYIN>"
+    },
+    {
+     "field": "语速参数",
+     "value": "原生 duration_factor 0.5–2.0（>1 变慢），与常规语速方向相反",
+     "verification": "verified",
+     "source": "docs/research/_archive/2026-09-16_第一批报告_C_索引TTS-CosyVoice-GPTSoVITS.md；docs/research/local-models/2026-09-16_Windows重型引擎选型.md",
+     "date": "2026-09-18",
+     "note": "issue #23：canonical speed 适配器按 duration_factor=1/speed 换算"
+    },
+    {
+     "field": "情感控制与采样参数",
+     "value": "官方 webui 四种情感模式（与参考音频相同 / 情感参考音频 / 情感向量 / 情感描述文本）+ 情感权重 0–1 默认 0.65 + 8 维情感向量（顺序 [高兴,愤怒,悲伤,恐惧,厌恶,低落,惊喜,平静]）+ 情感文本随机采样（实验，需 QwenEmotion）；采样参数 temperature 0.8（0.1–2.0）、top_p 0.8、top_k 30、num_beams 3、repetition_penalty 10.0、length_penalty 0.0、max_mel_tokens 1500；do_sample 经真实合成验证为 no-op（上游 inference_speech 硬编码 do_sample=True）",
+     "verification": "verified",
+     "source": "上游 indextts/infer_v2_5.py infer() 签名与 generation_kwargs 默认值（本机锁定版本逐项核对）；issue #37",
+     "date": "2026-09-21",
+     "note": "issue #37：全部以 ParamSpec 声明暴露；情感参数按模式 ignored_when 联动，采样参数在引擎专属折叠层"
+    }
+   ],
+   "performance": [
+    {
+     "env": "Apple M5 Pro 24GB（本机，torch 2.8.0 MPS fp32，热）",
+     "rtf": 5.02,
+     "peak_vram_bytes": null,
+     "verification": "measured",
+     "source": "docs/evaluation/2026-09-18_能力矩阵与听感记录.md §2b",
+     "date": "2026-09-19"
+    },
+    {
+     "env": "Apple M5 Pro 24GB（首条，含预热）",
+     "rtf": 6.29,
+     "peak_vram_bytes": null,
+     "verification": "measured",
+     "source": "同上",
+     "date": "2026-09-19"
+    }
+   ]
+  },
+  {
+   "engine_id": "minimax-speech-cloud",
+   "display_name": "MiniMax speech-2.8 复刻/设计（MiniMax · 云端）",
+   "kind": "cloud",
+   "role": "BYOK 云端复刻/设计档（ADR-0003：永远 BYOK，不内嵌平台 Key）；国际 .io 与大陆 .cn 两区两套账号额度，区域为引擎级 base URL 配置。",
+   "evidence": [
+    {
+     "field": "参数缺口核对（issue #38）",
+     "value": "t2a_v2/async 请求面全量声明：vol/pitch/latex_read 本次补齐暴露；channel（ADR-0018 决策 4）与 pronunciation_dict（wire 形态未验证）经 code review 回退为 not_exposed 数据；stream/format/bitrate=breaks-pipeline、sample_rate/output_format=server-injected、force_cbr/subtitle=no-op、timbre_weights/voice_modify/text_normalization=unverified。清单：docs/audit/issue-38-cloud-param-gap-audit.md",
+     "verification": "verified",
+     "source": "t2a_v2 请求 schema（docs/research/2026-09-minimax-api-and-local-tts.md）；engines/minimax_cloud.py param_specs",
+     "date": "2026-09-21"
+    },
+    {
+     "field": "计费",
+     "value": "speech-2.8-hd $100/百万字符、speech-2.8-turbo $60/百万字符；复刻 $1.5/音色（首次真实合成时收取，本应用复刻后立即合成激活语，费用在创建音色时产生）；音色设计 $3/音色",
+     "verification": "verified",
+     "source": "MiniMax pricing-paygo 官方页；docs/research/2026-09-minimax-api-and-local-tts.md；engines/minimax_cloud.py billing_note",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "数据用途",
+     "value": "ToS 保留将信息用于「改进算法或增强服务」的权利且不构成违反保密义务；是否可关闭未在公开文档说明（upload_used_for_training=true + data_usage_note 披露）",
+     "verification": "verified",
+     "source": "MiniMax Terms of Service 原文（Nanonoble Pte. Ltd.）",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "7 天失效与激活陷阱",
+     "value": "克隆音色 inactive，7 天未正式调用即删；voice_clone 内预览不算激活（官方 FAQ 原文）——适配器在复刻成功后立即静默合成一句激活语并记 activated_at，激活失败绑定标 unactivated 并在生成页提示",
+     "verification": "verified",
+     "source": "voice-cloning-clone + FAQ about-apis 官方原文；engines/minimax_cloud.py bind_reference",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "健康检查",
+     "value": "get_voice 为 POST 且克隆音色仅首次成功合成后可查——check_voice 实现为探测性合成，非列表查询",
+     "verification": "verified",
+     "source": "voice-management-get 官方文档；engines/minimax_cloud.py check_voice",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "限流",
+     "value": "国际 T2A 60 RPM 单档；大陆 T2A 免费 10 / 充值 20 RPM（账号级）。长文本走异步（单请求上限 100 万字符）绕开大陆 20 RPM；错误码 1002/1039 带限流标记进入既有指数退避",
+     "verification": "verified",
+     "source": "两区 rate-limits 官方页；engines/minimax_cloud.py _error / _synthesize_async",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "异步 payload",
+     "value": "t2a_async_v2 键名与同步不同（audio_sample_rate / english_normalization；无 output_format/stream/force_cbr）——独立构造，不复用同步 builder",
+     "verification": "verified",
+     "source": "T2A Async create 官方 OpenAPI；engines/minimax_cloud.py _async_payload",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "复刻门槛",
+     "value": "需账号实名/付费档（错误码 2038）；音色设计拒绝模仿真实人物——错误码已翻译为用户可读提示",
+     "verification": "verified",
+     "source": "voice-cloning-clone 错误码表；engines/minimax_cloud.py _error",
+     "date": "2026-09-18"
+    },
+    {
+     "field": "真实账号端到端",
+     "value": "复刻 → 激活 → 合成端到端尚未用真实 Key 实测；7 天后失效识别与自动重建待实测",
+     "verification": "unverified",
+     "source": "issue #27 验收项，待人工执行（ready-for-human）",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过",
+     "verification": "unknown",
+     "source": "issue #16 现状缺口",
+     "date": "2026-09-20"
+    }
+   ],
+   "performance": [
+    {
+     "env": "云端（RTF 由厂商侧决定，本产品只记录端到端墙钟）",
+     "rtf": null,
+     "peak_vram_bytes": null,
+     "verification": "unknown",
+     "source": "云端引擎不适用本地显存口径",
+     "date": "2026-09-20"
+    }
+   ],
+   "notes": "输出强制 WAV（默认 mp3 会破坏峰值自检）；短文本同步 t2a_v2（output_format=url），长文本异步；深度合成的公开标识义务在应用侧，已在生成记录/导出物标注（aigc_watermark 不满足该义务）。"
+  },
+  {
+   "engine_id": "fireredtts3-mps",
+   "display_name": "FireRedTTS3-Base（本地 · MPS · 实验性）",
+   "kind": "local",
+   "role": "Apple Silicon 本地复刻引擎（仅 Base 复刻模式）。issue #26 PoC 过闸后由 ADR-0019 采纳，issue #25 接入；bf16 路线未验证前标记实验性。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "Apache-2.0（代码 + 权重，HF 卡片标注与仓库 LICENSE 一致）；但上游 README 另有「零样本复刻仅限学术研究用途」声明（不在 LICENSE 内）——评审结论随 ADR-0019 记录：Apache-2.0 §2 权利不被 README 声明收窄，声明随接入记录为已知合规残留",
+     "verification": "verified",
+     "source": "HF 模型卡 + 上游 README；docs/adr/0019-adopt-fireredtts3-base-on-mps.md 决策 4；NOTICE.md §3",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "MPS 可行性（实测）",
+     "value": "PoC 20/20 全过（3 样音 + 17 项中文回归集），四类补丁（设备选择/SDPA/autocast 守卫/seed 守卫）后在 M5 Pro 真机完成零样本复刻",
+     "verification": "measured",
+     "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md；docs/evaluation/fireredtts3_poc/",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "精度路径",
+     "value": "fp32（autocast 由补丁在无 CUDA 时禁用）——bf16 on MPS 未实测（社区 M4 Max bf16 RTF 0.73–0.76 为外部口径）；不达标前引擎标实验性（ADR-0019 决策 1）",
+     "verification": "measured",
+     "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "参考文本要求",
+     "value": "必需：复刻路径为 prompt_audio + prompt_text 成对输入，缺转写无法复刻（requires_reference_text=True，sidecar 自动转写填充）",
+     "verification": "measured",
+     "source": "PoC run_poc.py 真实调用 + 上游 generate() 签名",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "语种与方言",
+     "value": "官方支持列表（已核实）：24 种多语种语言（Arabic, Cantonese, Chinese, Czech, Dutch, English, Finnish, French, German, Greek, Hindi, Indonesian, Italian, Japanese, Korean, Polish, Portuguese, Romanian, Russian, Spanish, Thai, Turkish, Ukrainian, Vietnamese）+ 21 种中文方言标签（ZH_*，未暴露——另一轴，本仓库零验证）。验证分级：Chinese = measured（PoC 17 项中文回归集真机实测）；其余 23 语种 = vendor（官方 README 口径，本仓库未逐一实测）。issue #68：worker 硬编码 language=\"Chinese\" 已改为 canonical select 驱动（枚举=上述官方列表逐字 wire tag，默认 Chinese，Auto=不发送=上游 fasttext 自动检测）；TN 边界已在 spec help 披露（wetext 归一化仅覆盖中/英，其他语种数字日期读法可能不完整）。",
+     "verification": "unverified",
+     "source": "上游 README「Supported languages and dialects」（本机 patched checkout 实读，install-time source of truth）；上游 core.py _WETEXT_LANGS/L165 language=None 自动检测路径",
+     "date": "2026-09-23",
+     "note": "issue #68：language canonical select；tests/test_local_param_surface.py 锁定官方列表与 Auto 映射"
+    },
+    {
+     "field": "发音控制",
+     "value": "无拼音/音素标注入口（pronunciation_control=False）",
+     "verification": "measured",
+     "source": "上游 generate() 签名与 PoC 调用面",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "生成参数",
+     "value": "inference_cfg（CFG 引导强度，默认 2.0）、n_timesteps（扩散步数，默认 10）、cross_fade_ms（句间淡入淡出，默认 50）、seed 为真实生效参数，已暴露为引擎层 ParamSpec（默认值不发送，口径同 #38；上游默认与 UI 默认一致兜底）。stop_threshold 为 early-stop 判据：真机 0.1/0.5/0.9 三档输出逐字节相同（stop score 单步跳变越过阈值，取值不敏感），结论=披露不暴露。切句四参数（token_max_n/token_min_n/merge_len/do_split）与 do_clean 明确不声明；do_tn/use_wetext 维持 breaks-pipeline 不暴露（ADR-0018 决策 4）。",
+     "verification": "measured",
+     "source": "上游 generate() 签名（本机 patched checkout core.py L238）+ 真机验证脚本 debug/fw51_verify.py / fw51_verify_r2.py（debug/fw51_out/）",
+     "date": "2026-09-22",
+     "note": "真机验证（2026-09-22，M5 Pro MPS fp32）：V5 inference_cfg=1.0/3.0 与 n_timesteps=4/16 相对基线输出波形差 maxabs 0.92–1.45（明显可听差异），长文本 ASR 显示各档发音/韵律真实不同且均可懂；cross_fade_ms 在两句拼接文本上 0/50/200 ms 输出样点数 545280/544080/540480，与上游 fade_len 公式逐样本吻合（1200/4800 @24 kHz）；V6 stop_threshold 0.1/0.5/0.9 输出逐字节相同（maxabs=0.0）。已知残留：长文本存在上游缺字问题（issue 之外的 fw1 loop 在跟进），与本轮参数无关。"
+    },
+    {
+     "field": "Instruct / 文生音色",
+     "value": "上游宣传强于 Qwen3-TTS-VD 的文生音色，但 PoC 明确只验 Base 复刻；Instruct 权重未安装、未验证，参数以 wrong-mode 声明不暴露",
+     "verification": "unverified",
+     "source": "issue #26 范围决定（docs/adr/0019 决策 4 之外）",
+     "date": "2026-09-20"
+    }
+   ],
+   "performance": [
+    {
+     "env": "Apple M5 Pro 24GB（torch 2.8.0 MPS fp32，PoC，17 项回归）",
+     "rtf": 2.22,
+     "rtf_range": null,
+     "peak_vram_bytes": 12564758272,
+     "peak_kind": "unified_memory",
+     "verification": "measured",
+     "source": "docs/evaluation/2026-09-20_FireRedTTS3_PoC.md（RTF 中位 2.22，MPS 峰值 11.7 GB）",
+     "date": "2026-09-20"
+    },
+    {
+     "env": "Apple M5 Pro 24GB（端到端口径，17 项回归，每请求独立 worker 含模型加载）",
+     "rtf": 0.176,
+     "rtf_range": [
+      0.111,
+      0.234
+     ],
+     "peak_vram_bytes": null,
+     "verification": "measured",
+     "source": "POST /regression/run 会话 63d3f882…：17/17 成功（RTF=音频秒/端到端墙钟，口径与引擎级 PoC 2.22 不同）",
+     "date": "2026-09-20"
+    }
+   ],
+   "notes": "补丁面（scripts/fireredtts3_poc/patch_fireredtts3.py ↔ voiceclone_sidecar/engines/fireredtts3_patch.py 同源）锚定上游原文，上游漂移即报错（ADR-0019 决策 2）；Windows CUDA 因 flash_attn 零 win_amd64 wheel 不在采纳范围（决策 3）。fasttext 不装；TN 用 wetext（pynini-free）。"
+  },
+  {
+   "engine_id": "voxcpm2-mps",
+   "display_name": "VoxCPM2（本地 · MPS）",
+   "kind": "local",
+   "role": "Apple Silicon 本地复刻引擎候选（issue #25）：2.29B，48kHz 输出，官方支持 MPS。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "Apache-2.0（代码 + 权重，pyproject 与 HF 卡片均标注 Apache-2.0）",
+     "verification": "verified",
+     "source": "github.com/OpenBMB/VoxCPM LICENSE/pyproject；huggingface.co/openbmb/VoxCPM2 模型卡",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "MPS 官方支持",
+     "value": "device 参数官方接受 auto/mps（auto 优先级 CUDA→MPS→CPU）；上游存在 MPS 已知问题：#232（输出通道>65536 报错，已关闭）与 #301（2.0.2 MPS 噪声输出，修复落点未核实）",
+     "verification": "verified",
+     "source": "src/voxcpm/core.py 文档串；github.com/OpenBMB/VoxCPM/issues/232, /issues/301",
+     "date": "2026-09-20",
+     "note": "本机 MPS 真机验证已完成：装机 + 17/17 中文回归集（2026-09-20，回归索引会话 f394f712…）"
+    },
+    {
+     "field": "复刻模式（三种）",
+     "value": "① reference_wav_path 单独（纯音色，无需转写，VoxCPM2 独有）；② prompt_wav_path + prompt_text（Hi-Fi 续写，转写必需，代码强制成对）；③ 两者同给（最高相似度）。参考文本为可选",
+     "verification": "verified",
+     "source": "src/voxcpm/core.py generate() 签名 + 官方 usage guide（voxcpm.readthedocs.io）",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "发音控制",
+     "value": "支持音素输入语法：中文 {ni3}{hao3}（拼音+声调数字）/ 英文 CMUDict {HH AH0 L OW1}，需 normalize=False",
+     "verification": "verified",
+     "source": "官方 usage guide「Regular text vs. phoneme input」",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "语种与方言",
+     "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
+     "verification": "vendor",
+     "source": "上游 README；官方 usage guide；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 真机抽查）",
+     "date": "2026-09-22"
+    },
+    {
+     "field": "文本归一化",
+     "value": "依赖 wetext（pynini-free ONNX 归一器，非本仓库拒绝的 pynini 族）+ inflect；normalize 默认 False，仅 zh/en 生效",
+     "verification": "verified",
+     "source": "pyproject.toml + src/voxcpm/utils/text_normalize.py",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "生成参数",
+     "value": "cfg_value（默认 2.0）、inference_timesteps（默认 10）、min_len（默认 2）/max_len（默认 4096，token 上限）、retry_badcase/max_times/ratio_threshold（core 层生效默认 True/3/6.0，经 core 直传 model 层）均为真实生效参数；seed 不是上游 generate() 参数（2.0.3 _generate 无 seed 形参也无 **kwargs，直传 TypeError，真机复现）——可复现性由 worker 侧 torch.manual_seed 实现（issue #49 修复）；denoise 在本引擎离线安装形态（load_denoiser=False）下被静默忽略，开/关输出逐字节相同，按 no-op 数据声明（issue #50）",
+     "verification": "verified",
+     "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 真机验证脚本（issues #49/#50）",
+     "date": "2026-09-22",
+     "note": "真机验证（2026-09-22，VoxCPM 2.0.3 钉扎版本；Mac MPS + Windows RTX 3090 双机）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上模型加载后首次生成会偏离同 seed 复现，预热后含首次请求均逐字节一致；MPS 无预热亦一致）；V2 min_len/max_len/retry_badcase* 直传被接受且 core 层默认 True/3/6.0 经 core 直传生效；V7 denoise=True 与不开输出逐字节相同（denoiser 未装载，静默 no-op）。issue #59 复验（MPS sidecar 全链路）：seed=42 同参数 4 次输出 PCM 逐字节一致"
+    },
+    {
+     "field": "主观听感 (MOS)",
+     "value": "尚未做过——本机实测与听感判定随 issue #25 回归运行补齐",
+     "verification": "unknown",
+     "source": "issue #25 待办",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "控制指令（control_instruction）",
+     "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；真机验证（MPS sidecar 全链路 + CUDA worker 等价路径，2026-09-22）：带指令合成成功（指令含数字 `30-year-old` 原样保留、正文日期归一化正常）、无指令基线与旧路径一致",
+     "verification": "measured",
+     "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2）",
+     "date": "2026-09-22",
+     "note": "指令符合度（听感）待人工复核；产物在 /tmp/voxcpm2-verify/"
+    },
+    {
+     "field": "CMUDict/发音标注（英文）",
+     "value": "canonical 发音标注入口（world=W ER1 L D）经 pronunciation.rewrite → voxcpm 路由改写为 {W ER1 L D} 花括号音素、在归一化之后由适配层拼接（issue #56 路由）；真机验证（MPS sidecar，2026-09-22）：标注合成成功、无崩坏例。反例核实：把花括号语法直接写进正文会被中心归一化层破坏（ER1→ER一升），证明标注必须走 canonical 参数入口——与设计一致",
+     "verification": "measured",
+     "source": "voiceclone_sidecar/pronunciation.py _voxcpm_phoneme_tag；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V3 正例+反例）",
+     "date": "2026-09-22",
+     "note": "读音是否受控（听感）待人工复核"
+    },
+    {
+     "field": "非语言标签透传",
+     "value": "正文含 [laughing]、[sigh] 原样透传（中心归一化层前后不变，模型自动跟随）；真机验证（MPS+CUDA，2026-09-22）：合成成功、无崩坏例",
+     "verification": "measured",
+     "source": "docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V4）",
+     "date": "2026-09-22",
+     "note": "非语言声音是否可闻（听感）待人工复核"
+    },
+    {
+     "field": "voice_design（原生音色设计）",
+     "value": "issue #57 原生 Voice Design 端到端真机验证（MPS sidecar 全链路，2026-09-22）：POST /voices/design 无参考生成（`(描述)试听文本`）→ 返回 origin=designed 音色（预览样本即参考，sha256 da87f625…）→ 绑定 voxcpm2-mps → 用设计音色再合成成功；CUDA worker 等价路径（无参考 generate）同日跑通",
+     "verification": "measured",
+     "source": "engines/voxcpm2_base.py design_voice；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V5）",
+     "date": "2026-09-22"
+    }
+   ],
+   "performance": [
+    {
+     "env": "Apple M5 Pro 24GB（本机 MPS fp32，端到端口径，17 项回归）",
+     "rtf": 0.75,
+     "rtf_range": [
+      0.699,
+      0.758
+     ],
+     "peak_vram_bytes": null,
+     "verification": "measured",
+     "source": "POST /regression/run 会话 f394f712…：17/17 成功；docs/evaluation/2026-09-20_issue25_接入验证记录.md",
+     "date": "2026-09-20"
+    }
+   ],
+   "notes": "权重 openbmb/VoxCPM2（model.safetensors 4.27GiB + audiovae.pth 0.35GiB + tokenizer），ModelScope 镜像 OpenBMB/VoxCPM2 已核实。加载传 optimize=False（跳过 torch.compile 预热）、load_denoiser=False（不拉 ZipEnhancer）。"
+  },
+  {
+   "engine_id": "voxcpm2-cuda",
+   "display_name": "VoxCPM2（本地 · CUDA）",
+   "kind": "local",
+   "role": "Windows CUDA 本地复刻引擎候选（issue #25），与 MPS 变体同一模型。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "同 voxcpm2-mps：Apache-2.0（代码 + 权重）",
+     "verification": "verified",
+     "source": "github.com/OpenBMB/VoxCPM LICENSE/pyproject",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "Windows 兼容",
+     "value": "无硬性阻碍（无 flash-attn / pynini / 编译型 wheel），但社区有分散报告：#184（Win11 多种报错）、#258（RTX 5090 不稳定）；官方 Windows 安装器仍为社区 PR #349 未合并",
+     "verification": "measured",
+     "source": "github.com/OpenBMB/VoxCPM/issues/184, /issues/258, PR #349；RTX 3090 实机首装全链路（torch 2.8.0+cu128 + voxcpm 2.0.3 + 权重）V1–V7 全部执行成功：docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md",
+     "date": "2026-09-22",
+     "note": "2026-09-22 RTX 3090 实测完成，由 verified 升级 measured：首装 + worker 等价脚本 15/15 项成功，无静音/削波"
+    },
+    {
+     "field": "能力面",
+     "value": "与 voxcpm2-mps 完全同一模型与依赖面：三种复刻模式、{拼音} 音素输入、30 语种（vendor）、wetext 归一化——见 voxcpm2-mps 条目逐格证据；语种声明扩为官方 30 语种全量清单（HF 模型卡口径）——声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（RTX 3090 实机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
+     "verification": "verified",
+     "source": "同 voxcpm2-mps 条目（同一 pyproject / core.py / usage guide）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 CUDA）",
+     "date": "2026-09-22"
+    },
+    {
+     "field": "生成参数",
+     "value": "同 voxcpm2-mps 条目（同一基类、同一 ParamSpec 面）：cfg_value/inference_timesteps/min_len/max_len/retry_badcase/max_times/ratio_threshold 均真实生效；seed 不是上游 generate() 参数——可复现性由 worker 侧 torch.manual_seed 实现（issue #49）；denoise 在离线安装形态（load_denoiser=False）下为 no-op（issue #50）",
+     "verification": "verified",
+     "source": "src/voxcpm/core.py _generate 签名（钉扎 2.0.3，本机 venv 直接核对）+ 3090 真机验证脚本（issues #49/#50）；参数面与 voxcpm2-mps 共享基类（测试 test_cuda_and_mps_share_the_base 锁定）",
+     "date": "2026-09-22",
+     "note": "真机验证（2026-09-22，Windows RTX 3090）：V1 seed 直传 TypeError 复现；修复=worker 侧 torch.manual_seed + 加载预热（CUDA 上首次请求已逐字节一致）；V2 min_len/max_len/retry_badcase* 直传生效；V7 denoise 静默 no-op。issue #52 证据终态核对时补齐此前缺失的本条。issue #59 复验（RTX 3090）：seed=42 同参数 3 次输出逐字节一致（含首次请求）；性能已实测见 performance 条目"
+    },
+    {
+     "field": "控制指令（control_instruction）",
+     "value": "引擎层参数 control_instruction（issue #56）：多行文本，默认空，空值不下发；官方语法 `(指令)正文`，在文本归一化之后、引擎适配层拼接进待合成文本开头（永不经归一化层，含数字的英文指令原样到达引擎，拼接时序由测试锁定）。拼接机制按官方 usage guide 核实；RTX 3090 实机验证（2026-09-22，worker 等价路径）：带指令（含数字 `30-year-old`）合成成功、无指令基线一致",
+     "verification": "measured",
+     "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2 CUDA）",
+     "date": "2026-09-22",
+     "note": "指令符合度（听感）待人工复核；CMUDict/非语言标签/voice_design 在 3090 上同日跑通（V3/V4/V5），逐格证据同 MPS 对应条目"
+    }
+   ],
+   "performance": [
+    {
+     "env": "RTX 3090 24GB（fp32，optimize=False，单段纯 generate 口径，timesteps=10 缺省）",
+     "rtf": 1.74,
+     "rtf_range": [
+      1.72,
+      1.76
+     ],
+     "peak_vram_bytes": 5970935808,
+     "verification": "measured",
+     "source": "issue #59 真机验证（2026-09-22，worker 等价脚本，torch 2.8.0+cu128）：14 段 RTF 1.72–1.76；timesteps=20 时 RTF 3.09–3.11；torch.cuda.max_memory_allocated 全流程峰值 5695 MiB。与 MPS 实测 0.75 口径不同（MPS 为 17 项回归端到端口径），如实记录",
+     "date": "2026-09-22"
+    }
+   ],
+   "notes": "与 MPS 变体共享引擎基类与权重下载链（torch 走 ADR-0002 CUDA wheel 精确 URL 轴）。"
+  },
+  {
+   "engine_id": "dots-tts-cuda",
+   "display_name": "dots.tts（本地 · CUDA）",
+   "kind": "local",
+   "role": "Windows 效果档候选（issue #25）：2B 全连续 AR + DiT flow-matching，48kHz，RTF 低（vendor 口径 0.20）。",
+   "evidence": [
+    {
+     "field": "权重许可",
+     "value": "Apache-2.0（代码 + 全部 7 个 checkpoint 权重）",
+     "verification": "verified",
+     "source": "github.com/studio-dots-ai/dots.tts LICENSE；HF dots-studio/dots.tts-soar 模型卡",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "文本归一化依赖（核实结论）",
+     "value": "官方依赖含硬依赖 WeTextProcessing（无版本钉扎），src/dots_tts/utils/text.py 模块顶层 import tn.*，不装则 import dots_tts 即失败——plan §5 的 pynini 疑云核实为真（一手证据）",
+     "verification": "verified",
+     "source": "pyproject.toml + utils/text.py 原文；docs/research/CORRECTIONS.md C-003",
+     "date": "2026-09-20",
+     "note": "接入对策：沿用 FireRed 补丁先例，锚点校验补丁把 tn.* 导入改惰性可选，不装 pynini；引擎内 TN 与 ADR-0008 自建归一化层职责重复，normalize_text 以 breaks-pipeline 声明不暴露"
+    },
+    {
+     "field": "Windows 可装性",
+     "value": "官方 OS 声明仅 Linux + macOS（pyproject classifiers 无 Windows）；pynini 无官方 win_amd64 wheel 是社区公认装机痛点（WeTextProcessing#287），社区走第三方 wheel（billwuhao/pynini-windows-wheels）绕行——本仓库不采用第三方 wheel，走上述补丁路径",
+     "verification": "verified",
+     "source": "pyproject classifiers；wenet-e2e/WeTextProcessing#287",
+     "date": "2026-09-20",
+     "note": "Windows 真机端到端装机验证未完成（issue #25 遗留待办）"
+    },
+    {
+     "field": "复刻模式",
+     "value": "① prompt_audio_path + prompt_text（续写复刻，转写必须与音频逐字一致，官方推荐、SIM 最佳）；② 仅 prompt_audio（CAM++ x-vector 纯音色）；③ 无 prompt 随机音色（仅微调单说话人 ckpt 有意义）",
+     "verification": "verified",
+     "source": "README + src/dots_tts/runtime.py generate() 签名",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "发音控制",
+     "value": "支持且仅支持声调符号法：把多音字替换为带调拼音（我生平不hào此道）；只认 hǎo/hào 等带符形式，不认 hao4 数字声调",
+     "verification": "verified",
+     "source": "官方 README tip + plan.md §1 参数调研",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "不存在的参数（防伪声明）",
+     "value": "temperature/top_p/top_k 不存在（全连续 latent flow-matching，无 token 采样器）；无语速参数（速率控制仅经 dots.tts.edit 模型）——不得声明为参数",
+     "verification": "verified",
+     "source": "README SGLang 节 + runtime.py generate() 签名",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "语种",
+     "value": "24 语种基准（最佳 zh/en；低资源语种 WER 高）；BPE 继承 Qwen2.5 覆盖。厂商口径，本仓库未实测",
+     "verification": "vendor",
+     "source": "README 效率/评测节（MiniMax multilingual 基准）",
+     "date": "2026-09-20"
+    },
+    {
+     "field": "macOS/MPS",
+     "value": "runtime 设备自动选择 cuda→cpu，无 MPS 路径——本引擎仅注册于 Windows",
+     "verification": "verified",
+     "source": "src/dots_tts/runtime.py _check_torch_env",
+     "date": "2026-09-20"
+    }
+   ],
+   "performance": [
+    {
+     "env": "RTX 3090（待实测，issue #25）",
+     "rtf": null,
+     "peak_vram_bytes": null,
+     "verification": "unverified",
+     "source": "H800 bf16 实测 RTF p50 0.20（复刻）/峰值 ~7.86 GB（vendor 口径）；3090 未跑不得标已核实",
+     "date": "2026-09-20"
+    }
+   ],
+   "notes": "权重 dots-studio/dots.tts-soar（model.safetensors 4.1GiB + vocoder 0.67GiB + speaker_encoder 28MiB + tokenizer/latent_stats/config，共 ~5.2GiB bf16），ModelScope 镜像 dots-studio/dots.tts-soar 已核实。max_generate_length 500 patch ≈ 单请求 80s 上限（vendor 口径）。"
+  }
+ ]
 }

@@ -84,16 +84,16 @@ VOXCPM2_LANGUAGES: tuple[str, ...] = (
 # 保持 measured，其余为 vendor。MPS 与 CUDA 两个变体共用：capabilities()
 # 与测试都从这一元组派生，声明与证据不会漂移。
 VOXCPM2_NONVERBAL_TAGS = (
-    NonverbalTag("[laughing]", "笑叹", "笑（实测）", "measured"),
-    NonverbalTag("[sigh]", "笑叹", "叹气（实测）", "measured"),
-    NonverbalTag("[breath]", "呼吸停顿", "呼吸", "vendor"),
-    NonverbalTag("[Uhm]", "呼吸停顿", "迟疑嗯", "vendor"),
-    NonverbalTag("[Shh]", "呼吸停顿", "嘘声", "vendor"),
-    NonverbalTag("[Question-ah]", "疑问确认", "疑问「啊」", "vendor"),
-    NonverbalTag("[Question-ei]", "疑问确认", "疑问「诶」", "vendor"),
-    NonverbalTag("[Question-en]", "疑问确认", "疑问「嗯？」", "vendor"),
-    NonverbalTag("[Question-oh]", "疑问确认", "疑问「哦？」", "vendor"),
-    NonverbalTag("[Confirmation-en]", "疑问确认", "应答「嗯」", "vendor"),
+    NonverbalTag("[laughing]", category="笑叹", label="笑（实测）", verification="measured", common=True),
+    NonverbalTag("[sigh]", category="笑叹", label="叹气（实测）", verification="measured", common=True),
+    NonverbalTag("[breath]", category="呼吸停顿", label="呼吸", verification="vendor", common=True),
+    NonverbalTag("[Uhm]", category="呼吸停顿", label="迟疑嗯", verification="vendor"),
+    NonverbalTag("[Shh]", category="呼吸停顿", label="嘘声", verification="vendor"),
+    NonverbalTag("[Question-ah]", category="疑问确认", label="疑问「啊」", verification="vendor"),
+    NonverbalTag("[Question-ei]", category="疑问确认", label="疑问「诶」", verification="vendor"),
+    NonverbalTag("[Question-en]", category="疑问确认", label="疑问「嗯？」", verification="vendor"),
+    NonverbalTag("[Question-oh]", category="疑问确认", label="疑问「哦？」", verification="vendor"),
+    NonverbalTag("[Confirmation-en]", category="疑问确认", label="应答「嗯」", verification="vendor"),
 )
 
 

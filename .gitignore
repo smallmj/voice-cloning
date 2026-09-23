@@ -18,3 +18,7 @@ app/dist-electron/
 # Packaging artifacts (issue #29)
 app/release/
 app/build/
+
+# Debug evidence binaries stay out of the repo; summaries live in
+# capability_matrix.json (review fix, spec #68).
+debug/**/*.wav

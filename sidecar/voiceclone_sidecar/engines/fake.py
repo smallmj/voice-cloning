@@ -25,9 +25,9 @@ BASE_FREQ = 220.0
 # every other fake/local engine leaves the default empty tuple, covering the
 # "engine without tags returns none and the UI hides the control" path.
 FAKE_NONVERBAL_TAGS = (
-    NonverbalTag("[laughing]", "笑叹", "笑", "vendor"),
-    NonverbalTag("[sigh]", "笑叹", "叹气", "vendor"),
-    NonverbalTag("[breath]", "呼吸停顿", "呼吸", "vendor"),
+    NonverbalTag("[laughing]", category="笑叹", label="笑", verification="vendor", common=True),
+    NonverbalTag("[sigh]", category="笑叹", label="叹气", verification="vendor"),
+    NonverbalTag("[breath]", category="呼吸停顿", label="呼吸", verification="vendor"),
 )
 
 

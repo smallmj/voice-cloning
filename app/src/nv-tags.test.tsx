@@ -9,9 +9,9 @@ import { insertAtCursor } from "./ui";
 import type { NonverbalTagInfo } from "./api";
 
 const VOX_TAGS: NonverbalTagInfo[] = [
-  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured" },
-  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured" },
-  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor" },
+  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured", common: true },
+  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured", common: true },
+  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor", common: true },
   { text: "[Uhm]", category: "呼吸停顿", label: "迟疑嗯", verification: "vendor" },
 ];
 const MINIMAX_TAGS: NonverbalTagInfo[] = [

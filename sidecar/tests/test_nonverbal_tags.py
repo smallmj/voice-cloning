@@ -82,9 +82,11 @@ def test_voxcpm2_declares_full_cookbook_tag_set(client):
         assert [t["verification"] for t in tags if t["text"] not in ("[laughing]", "[sigh]")] == [
             "vendor"
         ] * 8
+        # The engine's own quick-insert favorites (ADR-0018, data-driven).
+        assert [t["text"] for t in tags if t["common"]] == ["[laughing]", "[sigh]", "[breath]"]
         # Every tag is complete declaration data (spec #68 shape).
         for t in tags:
-            assert set(t) == {"text", "category", "label", "verification"}
+            assert set(t) == {"text", "category", "label", "verification", "common"}
             assert t["category"] in ("笑叹", "呼吸停顿", "疑问确认")
 
 
@@ -94,6 +96,8 @@ def test_minimax_declares_verbal_tags_and_pause_inserter(client):
     assert [t["text"] for t in tags][:19] == MINIMAX_TAG_TEXTS[:19]
     assert tags[-1]["text"] == "<#1#>"
     assert tags[-1]["category"] == "停顿"
+    # 前三个常用词是引擎自声明的快捷插入项（ADR-0018）。
+    assert [t["text"] for t in tags if t["common"]] == ["(laughs)", "(chuckle)", "(sighs)"]
     # 情绪不进标签集：MiniMax 情绪走既有 emotion 参数（两套机制不打架）。
     assert not any("开心" in t["label"] or "情绪" in t["label"] or "悲伤" in t["label"] for t in tags)
 
@@ -113,6 +117,8 @@ def test_engines_without_tag_support_return_empty_set(client):
 def test_fake_engine_declares_a_tag_set_for_contract_coverage(client):
     tags = _caps(client, "fake")["nonverbal_tags"]
     assert [t["text"] for t in tags] == ["[laughing]", "[sigh]", "[breath]"]
+    # fake declares exactly ONE common favorite (data-driven quickTags).
+    assert [t["text"] for t in tags if t["common"]] == ["[laughing]"]
 
 
 def test_every_engine_has_nonverbal_tags_key(client):

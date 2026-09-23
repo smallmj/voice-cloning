@@ -13,6 +13,9 @@ export interface NonverbalTagInfo {
   category: string;
   label: string;
   verification: string;
+  // ADR-0018: the engine's own quick-insert favorites, declared as data
+  // (replaces the UI's old hardcoded English-trio list).
+  common?: boolean;
 }
 
 export interface Capabilities {

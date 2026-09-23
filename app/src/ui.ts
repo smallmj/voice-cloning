@@ -353,14 +353,12 @@ export function engineDetailParagraphs(
 
 import type { NonverbalTagInfo } from "./api";
 
-/** Quick-insert row: prefer the three measured/common English tags when the
- * engine declares them, otherwise the engine's first three tags (e.g. the
- * MiniMax Chinese-common set). */
+/** Quick-insert row: the engine's own declared `common` favorites (ADR-0018:
+ * the engine declares them as data, the UI hardcodes nothing); an engine
+ * that declares no common tags falls back to its first three. */
 export function quickTags(tags: NonverbalTagInfo[] | undefined | null): NonverbalTagInfo[] {
   const all = tags ?? [];
-  const common = ["[laughing]", "[sigh]", "[breath]"]
-    .map((text) => all.find((t) => t.text === text))
-    .filter((t): t is NonverbalTagInfo => !!t);
+  const common = all.filter((t) => t.common);
   return (common.length > 0 ? common : all.slice(0, 3)).slice(0, 3);
 }
 

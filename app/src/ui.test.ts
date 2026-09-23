@@ -443,24 +443,37 @@ import {
 import type { NonverbalTagInfo } from "./api";
 
 const VOX_TAGS: NonverbalTagInfo[] = [
-  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured" },
-  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured" },
-  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor" },
+  { text: "[laughing]", category: "笑叹", label: "笑", verification: "measured", common: true },
+  { text: "[sigh]", category: "笑叹", label: "叹气", verification: "measured", common: true },
+  { text: "[breath]", category: "呼吸停顿", label: "呼吸", verification: "vendor", common: true },
   { text: "[Uhm]", category: "呼吸停顿", label: "迟疑嗯", verification: "vendor" },
   { text: "[Question-ah]", category: "疑问确认", label: "疑问「啊」", verification: "vendor" },
 ];
+// Mirrors the engine's declared data: the first three verbal sounds are the
+// MiniMax quick-insert favorites (ADR-0018).
 const MINIMAX_TAGS: NonverbalTagInfo[] = [
-  { text: "(laughs)", category: "笑叹", label: "笑声", verification: "vendor" },
+  { text: "(laughs)", category: "笑叹", label: "笑声", verification: "vendor", common: true },
+  { text: "(chuckle)", category: "笑叹", label: "轻笑", verification: "vendor", common: true },
+  { text: "(sighs)", category: "笑叹", label: "叹气", verification: "vendor", common: true },
   { text: "(breath)", category: "呼吸", label: "正常换气", verification: "vendor" },
   { text: "(emm)", category: "生理", label: "嗯", verification: "vendor" },
 ];
 
 describe("non-verbal tag data helpers (issue #68)", () => {
-  it("quickTags prefers the common English trio when declared, else first 3", () => {
+  it("quickTags uses the engine-declared common tags, else the first 3 (ADR-0018)", () => {
     expect(quickTags(VOX_TAGS).map((t) => t.text)).toEqual(["[laughing]", "[sigh]", "[breath]"]);
-    expect(quickTags(MINIMAX_TAGS).map((t) => t.text)).toEqual(["(laughs)", "(breath)", "(emm)"]);
+    expect(quickTags(MINIMAX_TAGS).map((t) => t.text)).toEqual(["(laughs)", "(chuckle)", "(sighs)"]);
     expect(quickTags(undefined)).toEqual([]);
-    expect(quickTags([{ text: "x", category: "c", label: "l", verification: "vendor" }])).toHaveLength(1);
+    // No common declaration -> first-3 fallback, never a UI-side hardcode.
+    expect(
+      quickTags([
+        { text: "x", category: "c", label: "l", verification: "vendor" },
+        { text: "y", category: "c", label: "l", verification: "vendor" },
+      ]),
+    ).toEqual([
+      { text: "x", category: "c", label: "l", verification: "vendor" },
+      { text: "y", category: "c", label: "l", verification: "vendor" },
+    ]);
   });
 
   it("groupTags keeps first-appearance category order", () => {

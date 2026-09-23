@@ -199,13 +199,16 @@ class NonverbalTag:
     ``text`` is inserted verbatim into the body text (each engine speaks its
     OWN syntax — no unified semantic layer); ``category`` groups the dropdown;
     ``label`` is the user-facing name; ``verification`` uses the capability-
-    matrix vocabulary (measured/verified/vendor/unverified).
+    matrix vocabulary (measured/verified/vendor/unverified). ``common``
+    marks the engine's own quick-insert favorites (ADR-0018: declared by the
+    engine as data, never hardcoded in the UI).
     """
 
     text: str
     category: str
     label: str
     verification: str = "vendor"
+    common: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -213,6 +216,7 @@ class NonverbalTag:
             "category": self.category,
             "label": self.label,
             "verification": self.verification,
+            "common": self.common,
         }
 
 

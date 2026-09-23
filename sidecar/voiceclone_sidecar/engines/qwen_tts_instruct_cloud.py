@@ -5,9 +5,13 @@ a cloned voice it exposes the vendor's natural-language ``instructions``
 parameter (语气/语速/方言 as free text, verified 2026-09 against
 help.aliyun.com/zh/model-studio/qwen3-tts-instruct-flash and the DashScope
 非实时语音合成 docs). Same vendor, same BYOK key, same multimodal-generation
-endpoint and response envelope as the VC engine, so the whole cloud plumbing
-(key access, injectable client, vendor errors, audio download, billing) is
-reused from the vendor-neutral base and DashScopeEngine (ADR-0015).
+endpoint and response envelope as the VC engine.
+
+ADR-0015 decision 4 (review fix): the whole cloud plumbing — enrollment,
+voice health check, synthesis/download/billing flow — lives ONCE on
+``DashScopeEngine``; this subclass declares only its differences as data
+(target model, enrollment prefix, price) plus the ``instructions`` knob and
+the language adapter wiring in ``_synthesis_body``.
 
 Vendor facts baked in here (厂商口径, see data/capability_matrix.json):
 - model ``qwen3-tts-instruct-flash`` (snapshot equivalent
@@ -17,44 +21,41 @@ Vendor facts baked in here (厂商口径, see data/capability_matrix.json):
   ``input`` when non-empty; absent means "do not send";
 - ``language_type``: same 10-value enum as the rest of the Qwen-TTS family;
 - billing 0.8 元/万输入字符 (1 CJK char = 2 chars), output not billed.
+
+NOTE: the matrix records that cloning-voice availability for the instruct
+model is NOT verified (the engine still routes a reference through the
+shared enrollment flow when a voice record is bound; the vendor error
+surfaces verbatim if the vendor rejects it for this model).
 """
 
 from __future__ import annotations
 
-import time
-import uuid
-from pathlib import Path
-
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
-from ..registry import Engine, GenerationRequest, GenerationResult
-from .cloud_base import (
-    CloudEngineError,
-    billed_chars,
-    billing_cost,
-    voice_missing_error,
-)
+from ..registry import Engine, GenerationRequest
+from .cloud_base import CloudEngineError
 from .qwen_tts_cloud import (
-    BASE_URL,
-    DashScopeEngine,
     LANGUAGE_CHOICES,
     PRICE_PER_10K_CHARS,
-    SYNTH_PATH,
+    DashScopeEngine,
 )
 
 TARGET_MODEL = "qwen3-tts-instruct-flash"
 
-__all__ = ["BASE_URL", "CloudEngineError", "Qwen3TtsInstructCloudEngine", "TARGET_MODEL"]
+__all__ = ["Qwen3TtsInstructCloudEngine", "TARGET_MODEL"]
 
 # The vendor documents a natural-language instruction, not a hard char cap;
 # keep a generous guard so a runaway paste fails here instead of at the API.
 MAX_INSTRUCTION_CHARS = 2000
 
-ENROLL_PATH = "/services/audio/tts/customization"
-
 
 class Qwen3TtsInstructCloudEngine(DashScopeEngine, Engine):
     engine_id = "qwen3-tts-instruct-cloud"
     display_name = "Qwen3-TTS 指令控制（阿里百炼 · 云端）"
+
+    # Differences from the shared DashScope flow (ADR-0015 decision 4):
+    target_model = TARGET_MODEL
+    enroll_prefix = "ins"  # preferred_name prefix for the enrollment call
+    price_per_10k_chars = PRICE_PER_10K_CHARS
 
     billing_note = (
         "qwen3-tts-instruct-flash：0.8 元 / 万输入字符（1 个汉字计 2 个字符），输出不计费。"
@@ -145,127 +146,23 @@ class Qwen3TtsInstructCloudEngine(DashScopeEngine, Engine):
             ),
         ]
 
-    # -- binding: enrollment (same 口径 as the VC engine) ----------------------
+    # -- synthesis (shared flow; only the wire knobs differ) ---------------------
 
-    def bind_reference(self, ref_path, ref_text: str | None, log) -> dict:
-        """Enroll the reference against the instruct target model.
-
-        Mirrors the VC engine's enrollment 1:1 (same endpoint, same data-URL
-        payload) with ``target_model`` pinned to this engine's model, so the
-        binding/health-check 口径 stays identical across the Qwen cloud
-        engines. If the vendor rejects enrollment for the instruct model the
-        vendor error surfaces verbatim (no silent fallback).
-        """
-        from .qwen_tts_cloud import DATA_URL_MIME, MAX_REF_BYTES
-
-        ref = Path(ref_path)
-        mime = DATA_URL_MIME.get(ref.suffix.lower())
-        if mime is None:
-            raise CloudEngineError(
-                f"阿里百炼仅接受 WAV / MP3 / M4A 参考音频，当前为 {ref.suffix[1:].upper()}"
-            )
-        data = ref.read_bytes()
-        if len(data) > MAX_REF_BYTES:
-            raise CloudEngineError("参考音频超过阿里百炼 10MB 上限")
-        log(f"cloud: 正在上传参考音频到阿里百炼（{len(data) / 1024:.0f} KB）…")
-
-        import base64
-
-        payload = {
-            "model": "qwen-voice-enrollment",
-            "input": {
-                "action": "create",
-                "target_model": TARGET_MODEL,
-                "preferred_name": "ins" + uuid.uuid4().hex[:8],
-                "audio": {"data": f"data:{mime};base64,{base64.b64encode(data).decode()}"},
-            },
-        }
-        if ref_text:
-            payload["input"]["text"] = ref_text
-
-        resp = self._http().post(
-            f"{BASE_URL}{ENROLL_PATH}", headers=self._headers(), json=payload
-        )
-        if resp.status_code != 200:
-            raise CloudEngineError(f"创建云端音色失败：{self._vendor_error(resp)}")
-        voice = (resp.json().get("output") or {}).get("voice")
-        if not voice:
-            raise CloudEngineError(f"创建云端音色失败：响应中缺少 voice 字段：{resp.text[:200]}")
-        log(f"cloud: 云端音色已创建（{voice}）")
-        return {"voice_id": voice, "target_model": TARGET_MODEL}
-
-    # -- voice health (issue #12, same probe as the VC engine) -----------------
-
-    def check_voice(self, voice_id: str, log) -> bool:
-        log(f"cloud: 健康检查云端音色 {voice_id} …")
-        resp = self._http().post(
-            f"{BASE_URL}{SYNTH_PATH}",
-            headers=self._headers(),
-            json={"model": TARGET_MODEL, "input": {"text": "好", "voice": voice_id}},
-        )
-        if resp.status_code == 200:
-            return True
-        if voice_missing_error(resp):
-            log(f"cloud: 云端音色 {voice_id} 已被厂商删除或失效")
-            return False
-        raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")
-
-    # -- synthesis -------------------------------------------------------------
-
-    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
-        started = time.monotonic()
+    def _synthesis_body(self, request: GenerationRequest) -> dict:
         params = request.params
-        voice_id = params.get("voice_id")
-        if not voice_id:
-            raise CloudEngineError(
-                "该音色还没有云端绑定；请先对所选音色执行一次绑定（生成时会自动注册云端音色）"
-            )
-
         instructions = (params.get("instructions") or "").strip()
         if len(instructions) > MAX_INSTRUCTION_CHARS:
             raise CloudEngineError(
                 f"合成指令过长（{len(instructions)} 字符，上限 {MAX_INSTRUCTION_CHARS}）"
             )
 
-        body: dict = {"text": request.text, "voice": voice_id}
+        body: dict = {"text": request.text, "voice": params["voice_id"]}
         if instructions:
             body["instructions"] = instructions
-        # Canonical `language` (ADR-0018) with the legacy wire key as
-        # fallback for reruns of old records; "auto"/empty sends nothing.
-        language = params.get("language", params.get("language_type"))
-        if language and language in LANGUAGE_CHOICES:
-            body["language_type"] = language
-
-        log(f"cloud: 调用 {TARGET_MODEL} 合成 {billed_chars(request.text)} 计费字符…")
-        resp = self._http().post(
-            f"{BASE_URL}{SYNTH_PATH}", headers=self._headers(),
-            json={"model": TARGET_MODEL, "input": body},
-        )
-        if resp.status_code != 200:
-            raise CloudEngineError(f"云端合成失败：{self._vendor_error(resp)}")
-        audio_url = ((resp.json().get("output") or {}).get("audio") or {}).get("url")
-        if not audio_url:
-            raise CloudEngineError(f"云端合成失败：响应中缺少音频 URL：{resp.text[:200]}")
-
-        log("cloud: 下载合成音频…")
-        dl = self._http().get(audio_url)
-        if dl.status_code != 200:
-            raise CloudEngineError(f"下载合成音频失败：HTTP {dl.status_code}")
-
-        out_dir = self.output_dir or Path.cwd() / "data" / "audio"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav"
-        out_path.write_bytes(dl.content)
-        sample_rate = self._probe_sample_rate(out_path, 24000)
-
-        cost = billing_cost(request.text, PRICE_PER_10K_CHARS)
-        log(
-            f"cloud: 完成（{out_path.name}，{sample_rate} Hz，"
-            f"估算成本 ¥{cost:.4f}，耗时 {time.monotonic() - started:.2f}s）"
-        )
-        return GenerationResult(
-            audio_path=str(out_path),
-            sample_rate=sample_rate,
-            model_version=TARGET_MODEL,
-            cost=cost,
-        )
+        # Canonical `language` (ADR-0018) mapped through THIS engine's own
+        # declared to_wire adapter (legacy `language_type` key stays as a
+        # rerun fallback for old records); "auto"/empty sends nothing.
+        language_wire = self._language_wire(params)
+        if language_wire:
+            body["language_type"] = language_wire
+        return body

@@ -20,9 +20,8 @@ import httpx
 import pytest
 
 from voiceclone_sidecar.engines.cloud_base import CloudEngineError
+from voiceclone_sidecar.engines.qwen_tts_cloud import BASE_URL, SYNTH_PATH
 from voiceclone_sidecar.engines.qwen_tts_instruct_cloud import (
-    BASE_URL,
-    SYNTH_PATH,
     TARGET_MODEL,
     Qwen3TtsInstructCloudEngine,
 )

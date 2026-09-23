@@ -27,13 +27,12 @@ where the sidecar controls the pipeline end to end.
 from __future__ import annotations
 
 import base64
-import time
 import uuid
 from pathlib import Path
 
 from ..capabilities import AppliesTo, Capabilities, ParamSpec
-from ..registry import Engine, GenerationRequest, GenerationResult
-from .cloud_base import CloudEngineError, voice_missing_error
+from ..registry import Engine
+from .cloud_base import CloudEngineError
 from .qwen_tts_cloud import BASE_URL, DashScopeEngine
 
 ENROLL_PATH = "/services/audio/tts/customization"
@@ -51,6 +50,12 @@ __all__ = ["BASE_URL", "CloudEngineError", "Qwen3TtsVdCloudEngine"]
 class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
     engine_id = "qwen3-tts-vd-cloud"
     display_name = "Qwen3-TTS 音色设计（阿里百炼 · 云端）"
+
+    # Differences from the shared DashScope flow (ADR-0015 decision 4):
+    target_model = TARGET_MODEL
+    log_prefix = "cloud-design"
+    price_per_10k_chars = None  # the vd model's per-char price is not published
+    missing_voice_hint = "该音色还没有云端绑定；请先对所选设计音色执行一次设计（创建时会自动绑定）"
 
     billing_note = (
         "qwen-voice-design：按次计费（以百炼控制台价格为准）；"
@@ -167,28 +172,7 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
             "transcript": preview_text or None,
         }
 
-    # -- voice health (issue #12) ------------------------------------------------
-
-    def check_voice(self, voice_id: str, log) -> bool:
-        """Probe whether the designed cloud voice still exists on 百炼.
-
-        Same minimal-synthesis probe as the cloning engine (issue #12). A
-        designed voice can never be rebuilt from a reference — the rebuild
-        path fails with the explicit design-again reason, and the sidecar
-        marks the binding unavailable instead of failing mid-run.
-        """
-        log(f"cloud-design: 健康检查云端音色 {voice_id} …")
-        resp = self._http().post(
-            f"{BASE_URL}{SYNTH_PATH}",
-            headers=self._headers(),
-            json={"model": TARGET_MODEL, "input": {"text": "好", "voice": voice_id}},
-        )
-        if resp.status_code == 200:
-            return True
-        if voice_missing_error(resp):
-            log(f"cloud-design: 云端音色 {voice_id} 已被厂商删除或失效")
-            return False
-        raise CloudEngineError(f"云端音色健康检查失败：{self._vendor_error(resp)}")
+    # -- voice health + synthesis: shared DashScope flow (ADR-0015 decision 4).
 
     # -- binding ---------------------------------------------------------------
 
@@ -197,53 +181,9 @@ class Qwen3TtsVdCloudEngine(DashScopeEngine, Engine):
 
         The vendor's designed voice exists only as a design call. If the
         binding was lost, the user must run the design again — surfaced as
-        a user-facing cloud error, never as a raw 500.
+        a user-facing cloud error, never as a raw 500. (The shared health
+        check still runs so a stale binding is detected before a run.)
         """
         raise CloudEngineError(
             "设计音色无法通过参考音频重建绑定；请删除后用文字描述重新设计该音色"
-        )
-
-    # -- synthesis -------------------------------------------------------------
-
-    def synthesize(self, request: GenerationRequest, log) -> GenerationResult:
-        started = time.monotonic()
-        params = request.params
-        voice_id = params.get("voice_id")
-        if not voice_id:
-            raise CloudEngineError(
-                "该音色还没有云端绑定；请先对所选设计音色执行一次设计（创建时会自动绑定）"
-            )
-
-        log(f"cloud-design: 调用 {TARGET_MODEL} 合成…")
-        resp = self._http().post(
-            f"{BASE_URL}{SYNTH_PATH}",
-            headers=self._headers(),
-            json={"model": TARGET_MODEL, "input": {"text": request.text, "voice": voice_id}},
-        )
-        if resp.status_code != 200:
-            raise CloudEngineError(f"云端合成失败：{self._vendor_error(resp)}")
-        audio_url = ((resp.json().get("output") or {}).get("audio") or {}).get("url")
-        if not audio_url:
-            raise CloudEngineError(f"云端合成失败：响应中缺少音频 URL：{resp.text[:200]}")
-
-        log("cloud-design: 下载合成音频…")
-        dl = self._http().get(audio_url)
-        if dl.status_code != 200:
-            raise CloudEngineError(f"下载合成音频失败：HTTP {dl.status_code}")
-
-        out_dir = self.output_dir or Path.cwd() / "data" / "audio"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{request.generation_id or uuid.uuid4().hex}.wav"
-        out_path.write_bytes(dl.content)
-        sample_rate = self._probe_sample_rate(out_path, 24000)
-
-        log(
-            f"cloud-design: 完成（{out_path.name}，{sample_rate} Hz，"
-            f"耗时 {time.monotonic() - started:.2f}s）"
-        )
-        return GenerationResult(
-            audio_path=str(out_path),
-            sample_rate=sample_rate,
-            model_version=TARGET_MODEL,
-            cost=None,  # the vd model's per-char price is not published; no estimate
         )

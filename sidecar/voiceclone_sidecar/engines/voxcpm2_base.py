@@ -132,6 +132,26 @@ def adapt_synthesis_text(text: str, params: dict | None, log=None) -> str:
     return control_prefix(str(params.get("control_instruction") or ""), text)
 
 
+def control_instruction_active(params: dict | None) -> bool:
+    """True when the user filled a (non-blank) ``control_instruction``.
+
+    Shared by the synthesis path (mode demotion, issue #68) so the
+    "blank = absent" rule matches :func:`control_prefix` exactly.
+    """
+    return bool(str((params or {}).get("control_instruction") or "").strip())
+
+
+# Issue #68: the disclosed reason when a reference transcript is skipped.
+# Upstream CLI forbids --control together with --prompt-text, and a real
+# machine run (2026-09-23) showed the instruction spoken verbatim in the
+# Hi-Fi prompt mode (12.2s vs 4.2s baseline, ASR leaks every instruction
+# word) — while the reference-only mode applies the instruction correctly.
+CONTROL_PROMPT_DEMOTE_NOTE = (
+    "control_instruction active: Hi-Fi prompt pairing disabled "
+    "(upstream forbids control+prompt_text; see issue #68)"
+)
+
+
 def param_specs_for(engine_id: str) -> list[ParamSpec]:
     """Declared parameters, verified against upstream generate() at 2.0.3.
 
@@ -238,7 +258,7 @@ def param_specs_for(engine_id: str) -> list[ParamSpec]:
             kind="textarea",
             default="",
             layer="engine",
-            help="控制指令（VoxCPM 官方语法）：写在待合成文本开头的自然语言声音描述，用于音色设计与克隆风格控制；以英文圆括号前缀拼接（如 (warm female voice)），建议英文描述。在文本归一化之后拼接进正文开头，指令本身永不被归一化改写；归一化预览会显示拼接后的完整待合成文本。",
+            help="控制指令（VoxCPM 官方语法）：写在待合成文本开头的自然语言声音描述，用于音色设计与克隆风格控制；以英文圆括号前缀拼接（如 (warm female voice)），建议英文描述。在文本归一化之后拼接进正文开头，指令本身永不被归一化改写；归一化预览会显示拼接后的完整待合成文本。方言：把文本改写成方言词汇（粤语/四川话等）后合成，或叠加极简英文指令如 Cantonese；不支持与音色转写同时使用——填了指令会自动切换为参考音频-only 模式（Hi-Fi 音色转写配对停用）。",
             applies_to=AppliesTo(engine=engine_id, model=REPO, mode="cloning"),
         ),
         ParamSpec(
@@ -518,7 +538,15 @@ class VoxCPM2EngineBase(InstallableEngine):
             "output": str(out_path),
             **wire,
         }
-        if ref_text:
+        if ref_text and control_instruction_active(params):
+            # Issue #68: with a control instruction the Hi-Fi prompt pair is
+            # FORBIDDEN (upstream rejects --control + --prompt-text, and a
+            # real-machine run showed the instruction spoken verbatim in
+            # that mode). Degrade to mode ① reference-only — the instruction
+            # prefix is already in the text and works there (measured).
+            log(f"voxcpm2: {CONTROL_PROMPT_DEMOTE_NOTE}")
+            log("voxcpm2: 复刻模式 = 纯音色（reference-only；已跳过参考转写以启用控制指令）")
+        elif ref_text:
             # Mode ③: Hi-Fi continuation (prompt pair) + reference tokens —
             # the vendor's max-similarity combination. Upstream enforces the
             # prompt_wav/prompt_text pairing, so the transcript is passed

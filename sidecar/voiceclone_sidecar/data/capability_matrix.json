@@ -669,10 +669,10 @@
         },
         {
           "field": "语种与方言",
-          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证",
+          "value": "官方 30 语种全量声明（zh/en/ar/my/da/nl/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi，HF 模型卡 language 字段口径，2026-09-22 核对）+ 9 种中文方言（粤/川/吴等，方言按方言词汇书写）。声明性支持（官方口径）：真机抽查已完成中/英/粤语/四川话 4 语种（MPS+CUDA 双机，2026-09-22，docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md，生成成功无崩坏例；口音听感待人工复核），其余 26 语种未逐语种验证。无语种参数：模型跟随文本自动识别语种，无 language 形参（vendor 口径）；方言走文本改写（方言词汇书写）或控制指令（如 Cantonese），填了指令自动切 reference-only 模式（见「控制指令 × 复刻模式互斥」条目）",
           "verification": "vendor",
           "source": "上游 README；官方 usage guide；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V6 真机抽查）",
-          "date": "2026-09-22"
+          "date": "2026-09-23"
         },
         {
           "field": "文本归一化",
@@ -734,6 +734,13 @@
           "verification": "measured",
           "source": "engines/voxcpm2_base.py design_voice；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V5）",
           "date": "2026-09-22"
+        },
+        {
+          "field": "控制指令 × 复刻模式互斥（wrong-mode 降级）",
+          "value": "控制指令（`(指令)正文` 前缀）不支持与 Hi-Fi prompt 配对（prompt_wav+prompt_text）同时使用：上游 CLI 明确禁止 --control 与 --prompt-text 组合（vendor/源码口径）；真机实测（2026-09-23，MPS sidecar 全链路 + ASR 核验）该组合下指令被完整念出（12.2s vs 基线 4.2s，ASR 泄漏全部指令词），reference-only（仅 reference_wav）模式下指令正确生效。适配层降级策略：用户填写 control_instruction 且音色有转写时，合成自动降级为 reference-only 模式（跳过 prompt pair），被跳过的转写在生成日志中注明（issue #68）",
+          "verification": "measured",
+          "source": "上游 CLI --control/--prompt-text 互斥校验（github.com/OpenBMB/VoxCPM，tag 2.0.3）；debug/voxcpm2-control 真机实测（12.2s/4.2s + ASR 泄漏）；voxcpm2_base.synthesize 降级实现",
+          "date": "2026-09-23"
         }
       ],
       "performance": [
@@ -795,6 +802,13 @@
           "source": "官方 usage guide「Voice Design / Style Control」括号前缀语法 + engine 适配层实现（voxcpm2_base.prepare_synthesis）；docs/evaluation/2026-09-22_issue59_双平台真机验证记录.md（V1/V2 CUDA）",
           "date": "2026-09-22",
           "note": "指令符合度（听感）待人工复核；CMUDict/非语言标签/voice_design 在 3090 上同日跑通（V3/V4/V5），逐格证据同 MPS 对应条目"
+        },
+        {
+          "field": "控制指令 × 复刻模式互斥（wrong-mode 降级）",
+          "value": "控制指令（`(指令)正文` 前缀）不支持与 Hi-Fi prompt 配对（prompt_wav+prompt_text）同时使用：上游 CLI 明确禁止 --control 与 --prompt-text 组合（vendor/源码口径）；真机实测（2026-09-23，MPS sidecar 全链路 + ASR 核验）该组合下指令被完整念出（12.2s vs 基线 4.2s，ASR 泄漏全部指令词），reference-only（仅 reference_wav）模式下指令正确生效。适配层降级策略：用户填写 control_instruction 且音色有转写时，合成自动降级为 reference-only 模式（跳过 prompt pair），被跳过的转写在生成日志中注明（issue #68）",
+          "verification": "measured",
+          "source": "上游 CLI --control/--prompt-text 互斥校验（github.com/OpenBMB/VoxCPM，tag 2.0.3）；debug/voxcpm2-control 真机实测（12.2s/4.2s + ASR 泄漏）；voxcpm2_base.synthesize 降级实现",
+          "date": "2026-09-23"
         }
       ],
       "performance": [

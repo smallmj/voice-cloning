@@ -317,6 +317,27 @@ export function voiceDesignEngines(engines: EngineInfo[]): EngineInfo[] {
   return engines.filter((e) => e.capabilities.voice_design);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #68: design-only engines never enter the GENERATION engine selector.
+// ---------------------------------------------------------------------------
+//
+// Pure voice-design engines (capabilities declare voice_design WITHOUT
+// voice_cloning — e.g. qwen3-tts-vd-cloud) cannot generate from a voice at
+// all: selecting them in the generation area dead-ends. The data-driven
+// predicate uses the EXISTING capability fields (no new declaration when
+// existing ones already decide), and the 音色库 design block
+// (voiceDesignEngines) and the engines-page cards are unaffected.
+
+/** True when an engine is design-only and must be excluded from generation. */
+export function designOnlyEngine(engine: EngineInfo): boolean {
+  return engine.capabilities.voice_design && !engine.capabilities.voice_cloning;
+}
+
+/** Engines eligible for the generation engine selector. */
+export function generationEngines(engines: EngineInfo[]): EngineInfo[] {
+  return engines.filter((e) => !designOnlyEngine(e));
+}
+
 /**
  * 「详情」 copy for one engine card (issue #40): capability declarations plus
  * the curated capability-matrix entry, in stable paragraph order. Missing

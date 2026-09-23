@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { GenerationRecord, LogEvent } from "./api";
 import {
   appendLog,
+  designOnlyEngine,
   engineDetailParagraphs,
+  generationEngines,
   voiceDesignEngines,
   buildRerunState,
   GENERATE_TAB_IDS,
@@ -530,5 +532,52 @@ describe("non-verbal tag quick-insert (issue #57)", () => {
   it("clamps out-of-range caret positions instead of throwing", () => {
     expect(insertAtCursor("ab", "[sigh]", 99, 99)).toEqual({ text: "ab[sigh]", cursor: 8 });
     expect(insertAtCursor("ab", "[sigh]", -5, -1).text).toBe("[sigh]ab");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #68: design-only engines are excluded from the generation selector.
+// ---------------------------------------------------------------------------
+
+describe("generationEngines / designOnlyEngine (issue #68)", () => {
+  function genEngine(id: string, voiceDesign: boolean, voiceCloning: boolean) {
+    return {
+      id,
+      display_name: id,
+      capabilities: {
+        languages: ["zh"],
+        voice_cloning: voiceCloning,
+        voice_design: voiceDesign,
+        pronunciation_control: false,
+        emotion: false,
+        commercial_license: false,
+        cross_device_use: false,
+        upload_used_for_training: false,
+        api_closed_loop: true,
+      },
+    };
+  }
+
+  it("excludes engines that declare voice_design without voice_cloning", () => {
+    // qwen3-tts-vd-cloud is the real-world case: design-only, never generating.
+    const engines = [
+      genEngine("vc", true, true),
+      genEngine("vd", true, false),
+      genEngine("plain", false, true),
+    ];
+    expect(generationEngines(engines).map((e) => e.id)).toEqual(["vc", "plain"]);
+    expect(designOnlyEngine(engines[1])).toBe(true);
+    expect(designOnlyEngine(engines[0])).toBe(false);
+    expect(designOnlyEngine(engines[2])).toBe(false);
+  });
+
+  it("keeps the 音色设计 dropdown unaffected (voiceDesignEngines still lists the design-only engine)", () => {
+    const engines = [genEngine("vc", true, true), genEngine("vd", true, false)];
+    expect(voiceDesignEngines(engines).map((e) => e.id)).toEqual(["vc", "vd"]);
+  });
+
+  it("returns every engine when none is design-only", () => {
+    const engines = [genEngine("a", false, true), genEngine("b", true, true)];
+    expect(generationEngines(engines)).toEqual(engines);
   });
 });

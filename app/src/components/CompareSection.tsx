@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { CompareSession, EngineInfo, PreferenceProfile, Voice } from "../api";
 import { apiJson } from "../client";
-import { commonNonverbalTags, insertAtCursor } from "../ui";
+import { commonNonverbalTags, generationEngines, insertAtCursor } from "../ui";
 import { NonverbalTagPicker } from "./bits";
 
 const COMPARE_TEXT_TYPES = [
@@ -168,7 +168,7 @@ export function CompareSection({
         </label>
       </div>
       <div className="param-row">
-        {engines.map((e) => (
+        {generationEngines(engines).map((e) => (
           <label key={e.id} className="compare-engine-toggle">
             <input
               type="checkbox"

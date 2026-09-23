@@ -54,27 +54,35 @@
         },
         {
           "field": "语种参数（lang_code）",
-          "value": "上游 mlx-audio qwen3 Model.generate 不消费语言参数：worker 曾传 language=（落 **kwargs 静默丢弃，audit §1.1），改传正确键 lang_code（小写匹配权重 codec_language_id）后真机验证仍为 no-op——中文文本 + lang_code=japanese 输出仍为中文；模型自动跟随文本语言，10 语种逐一合成均正确（zh/en/de/it/ja/ko/pt/ru/es 经本机 whisper-small ASR 复核，法语转写存疑系 ASR 弱项）。源码核对：0.5.4 与上游 main 的 Model.generate 均未读取 lang_code。",
+          "value": "已重新暴露（issue #68，no-op 结论撤销）。勘误链：此前 no-op 结论系读错模块（VyvoTTS qwen3/qwen3.py）；实读已装 mlx-audio 0.5.4 的 mlx_audio/tts/models/qwen3_tts/qwen3_tts.py，确认 lang_code 真实消费——generate L1297 把 language=lang_code 传入 _prepare_generation_inputs，经 config.codec_language_id 映射为 codec 前缀 language token（L393-406 / L739-741），权重 config 声明 {chinese:2055, english:2050, …} 10 语种键。MPS 真机复验（2026-09-23，同文本 auto/chinese/english 三次合成）：音频时长 4.88s / 5.68s / 20.08s，波形 maxabs 差异 14550–19532；whisper-small ASR 显示 auto 与 chinese 读完双语句子、强制 english 只读出英文句（中文句被抑制）——language token 确实改变生成。已知边界：混语种文本强制单一语种会抑制其他语种内容，UI 默认 Auto。wire 保持 lang_code 小写 + Auto=不发送（issue #47 修复不变）。",
           "verification": "measured",
-          "source": "docs/audit/local-engine-param-gap-audit.md §1.1；debug/qwen3-verify/（results.json + asr.json + 13 个 wav）；mlx-audio 0.5.4 及 main 源码（mlx_audio/tts/models/qwen3/qwen3.py）",
-          "date": "2026-09-22",
-          "note": "issue #47：wire 修复落地（lang_code + 小写 + 10 语种 choices + auto=不传），但按 audit 决策 3『验证未通过转 not_exposed』，language 以 exposed=False / no-op 固化；to_wire 映射保留，上游一旦消费 lang_code 即可一行翻回"
+          "source": "mlx-audio 0.5.4 qwen3_tts.py L393-406/739-741/1297（engine venv 实读）；debug/qwen3_langcode_reverify.py + debug/qwen3-verify-issue68/（results.json + asr.json + 3 个 wav）",
+          "date": "2026-09-23",
+          "note": "issue #68：canonical language 重新 exposed（沿用 #47 语种枚举与 to_wire 适配）；tests/test_qwen3_params.py 断言已更新"
         },
         {
           "field": "采样参数（temperature/top_p/top_k/repetition_penalty）",
-          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送——mlx-audio 硬编码的静默默认（0.6/0.8/-1/1.3）与官方 config 不一致，『默认不发送』会让引擎行为偏离 UI 展示；源码核实四参数确实被 make_sampler/make_logits_processors 消费",
+          "value": "暴露为引擎专属折叠区四个 number spec，默认取官方 generation_config.json（0.9/1.0/50/1.05）且恒发送；源码核实四参数确实被 make_sampler/make_logits_processors 消费。勘误（issue #68）：此前\"mlx-audio 硬编码静默默认 0.6/0.8/-1/1.3 与官方 config 不一致\"系读错模块（VyvoTTS qwen3/qwen3.py）——已装 mlx-audio 0.5.4 的 generate 默认即 0.9/1.0/50/1.05，与官方 config 一致；恒发送做法保留（#48 已验证契约，防上游默认漂移）。",
           "verification": "verified",
           "source": "voiceclone_sidecar/engines/qwen3_tts.py SAMPLING_SPECS；weights/generation_config.json；mlx-audio 0.5.4 qwen3.py L318-322",
-          "date": "2026-09-22",
+          "date": "2026-09-23",
           "note": "issue #48；tests/test_qwen3_params.py 锁定传参与默认恒发送口径"
         },
         {
-          "field": "max_tokens（上游默认 1200/段）",
-          "value": "不暴露、不声明 spec 行：产品管线 500 字/请求上限下该内部安全帽不构成用户参数。V4 真机实测 780 字（测试文本实际长度，文件名 v4-long-500 指其覆盖 500 字上限场景）长文本单段合成：前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化",
-          "verification": "measured",
-          "source": "debug/qwen3-verify/v4-long-500.wav（780 字实测样本，文件名沿用 500 字上限场景命名）+ asr 转写；results.json v4 条目",
-          "date": "2026-09-22",
-          "note": "issue #48 V4 验收：结论为『披露』——按 fireredtts3 切句参数先例不加 not_exposed 行，以本条证据披露；500 字/请求上限（max_chars_per_request=500）即现有护栏"
+          "field": "max_tokens",
+          "value": "上游 generate() 形参 max_tokens: int = 4096（mlx-audio 0.5.4 qwen3_tts.py 签名实读——此前记录的\"上游默认 1200/段\"亦源自错误模块勘误，随 #68 一并更正）。已暴露为引擎层 spec：int，默认 4096，min 256 / max 8192，step 256；#38 口径（默认不发送，缺省=上游默认 4096=UI 展示值）。V4 真机长文本证据保留：780 字单段合成前半正确、后半重复退化（同句循环 ~10 次），提高 max_tokens 无法解决退化，问题本质是长文本一次性合成的重复退化，500 字/请求上限（max_chars_per_request=500）仍是主要护栏。",
+          "verification": "verified",
+          "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs；debug/qwen3-verify/v4-long-500.wav（长文本退化实测，2026-09-22）",
+          "date": "2026-09-23",
+          "note": "issue #68：新增 spec 行；tests/test_qwen3_params.py + test_local_param_surface.py 锁定"
+        },
+        {
+          "field": "split_pattern（分段分隔符）",
+          "value": "上游 generate() 形参 split_pattern: str = \"\\n\"（mlx-audio 0.5.4 签名实读）：文本中出现的分隔符把待合成文本切成多段、逐段生成拼接。已暴露为引擎层 spec（text，默认 \"\\n\"，显式控制分段）；#38 口径（默认不发送，缺省=上游默认换行分段）。",
+          "verification": "verified",
+          "source": "mlx-audio 0.5.4 generate() 签名（engine venv 实读）；voiceclone_sidecar/engines/qwen3_tts.py param_specs",
+          "date": "2026-09-23",
+          "note": "issue #68：新增 spec 行"
         }
       ],
       "performance": [
@@ -569,10 +577,11 @@
         },
         {
           "field": "语种与方言",
-          "value": "本机实测仅中文（17 项回归集全为中文）；上游宣传英文与 21 种中文方言——本仓库未验证",
+          "value": "官方支持列表（已核实）：24 种多语种语言（Arabic, Cantonese, Chinese, Czech, Dutch, English, Finnish, French, German, Greek, Hindi, Indonesian, Italian, Japanese, Korean, Polish, Portuguese, Romanian, Russian, Spanish, Thai, Turkish, Ukrainian, Vietnamese）+ 21 种中文方言标签（ZH_*，未暴露——另一轴，本仓库零验证）。验证分级：Chinese = measured（PoC 17 项中文回归集真机实测）；其余 23 语种 = vendor（官方 README 口径，本仓库未逐一实测）。issue #68：worker 硬编码 language=\"Chinese\" 已改为 canonical select 驱动（枚举=上述官方列表逐字 wire tag，默认 Chinese，Auto=不发送=上游 fasttext 自动检测）；TN 边界已在 spec help 披露（wetext 归一化仅覆盖中/英，其他语种数字日期读法可能不完整）。",
           "verification": "unverified",
-          "source": "上游 README（vendor 口径）；本仓库 PoC 仅覆盖 zh",
-          "date": "2026-09-20"
+          "source": "上游 README「Supported languages and dialects」（本机 patched checkout 实读，install-time source of truth）；上游 core.py _WETEXT_LANGS/L165 language=None 自动检测路径",
+          "date": "2026-09-23",
+          "note": "issue #68：language canonical select；tests/test_local_param_surface.py 锁定官方列表与 Auto 映射"
         },
         {
           "field": "发音控制",

@@ -158,6 +158,44 @@ describe("parseManifestSha512", () => {
   it("returns null when absent", () => {
     expect(parseManifestSha512("version: 0.2.0\npath: x.exe\n")).toBeNull();
   });
+
+  // Regression: the real v1.2.0 latest-mac.yml lists the mac.zip as the
+  // primary file (top-level path/sha512 AND the first files: entry), while the
+  // app downloads the *.dmg asset. Picking the FIRST sha512 in the manifest
+  // compared the dmg bytes against the zip's hash — every macOS update failed
+  // with 文件校验失败（sha512 不匹配）. The hash must be resolved per installer.
+  const MAC_MANIFEST_YML = [
+    "version: 1.2.0",
+    "files:",
+    "  - url: VoiceClone-1.2.0-arm64-mac.zip",
+    `    sha512: ${"b".repeat(128)}`,
+    "    size: 121002296",
+    "path: VoiceClone-1.2.0-arm64-mac.zip",
+    `sha512: ${"b".repeat(128)}`,
+    "releaseDate: '2026-09-23T09:18:01.000Z'",
+    "",
+  ].join("\n");
+  const MAC_MANIFEST_WITH_DMG = MAC_MANIFEST_YML.replace(
+    "path: VoiceClone-1.2.0-arm64-mac.zip",
+    ["path: VoiceClone-1.2.0-arm64.dmg", `sha512: ${"c".repeat(128)}`].join("\n"),
+  );
+
+  it("resolves the sha512 of the files: entry matching the installer name", () => {
+    expect(parseManifestSha512(MAC_MANIFEST_YML, "VoiceClone-1.2.0-arm64.dmg")).toBeNull();
+  });
+
+  it("resolves the dmg entry when the manifest lists it", () => {
+    expect(parseManifestSha512(MAC_MANIFEST_WITH_DMG, "VoiceClone-1.2.0-arm64.dmg")).toBe("c".repeat(128));
+    expect(parseManifestSha512(MAC_MANIFEST_WITH_DMG, "VoiceClone-1.2.0-arm64-mac.zip")).toBe("b".repeat(128));
+  });
+
+  it("still matches the top-level path/sha512 for the primary installer", () => {
+    expect(parseManifestSha512(MANIFEST_YML, "VoiceClone.Setup.0.2.0.exe")).toBe(SHA);
+  });
+
+  it("without an installer name keeps the first-sha512 behavior", () => {
+    expect(parseManifestSha512(MAC_MANIFEST_YML)).toBe("b".repeat(128));
+  });
 });
 
 describe("checkForUpdate", () => {
@@ -282,7 +320,9 @@ describe("checkForUpdate", () => {
   it("macOS detection works end-to-end on darwin", async () => {
     const fetch = fakeFetch({
       [API]: { json: releaseJson({ assets: [MAC_INSTALLER, MAC_MANIFEST] }) },
-      [MAC_MANIFEST.browser_download_url]: { text: `version: 0.2.0\nsha512: ${SHA}\n` },
+      [MAC_MANIFEST.browser_download_url]: {
+        text: `version: 0.2.0\npath: VoiceClone-0.2.0.dmg\nsha512: ${SHA}\n`,
+      },
     });
     const r = await checkForUpdate({ ...base, fetch, platform: "darwin", channelMode: "official" });
     expect(r.status).toBe("available");

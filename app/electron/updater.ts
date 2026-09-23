@@ -116,10 +116,42 @@ export function verifySha512Hex(digestHex: string, expectedSha512: string | null
  * Extract the sha512 field from an electron-builder latest.yml /
  * latest-mac.yml manifest text. Parsed with a targeted regex instead of a YAML
  * dependency; returns null when absent (missing-manifest path).
+ *
+ * When installerName is given, the hash is resolved PER INSTALLER: a mac
+ * manifest may list both the zip (as the top-level path/primary files: entry)
+ * and the dmg, and taking the FIRST sha512 in the file compares dmg bytes
+ * against the zip's hash — every macOS update then fails sha512 verification.
+ * Returns null when no entry matches the installer name (treated upstream as
+ * manifest-missing: warning, not failure).
  */
-export function parseManifestSha512(manifestText: string): string | null {
-  const match = manifestText.match(/^\s*sha512:\s*(\S+)\s*$/m);
-  return match ? match[1] : null;
+export function parseManifestSha512(manifestText: string, installerName?: string): string | null {
+  if (installerName === undefined || installerName === "") {
+    // Legacy behavior: first sha512 line anywhere in the manifest.
+    const match = manifestText.match(/^\s*sha512:\s*(\S+)\s*$/m);
+    return match ? match[1] : null;
+  }
+  const basename = (name: string): string => name.split(/[\\/]/).pop() ?? name;
+  const target = basename(installerName).toLowerCase();
+  // files: entries — "- url: <name>" followed (whitespace/lines apart) by
+  // "sha512: <hash>" within the same indented block.
+  const entryRe = /^\s*-\s*url:\s*(\S+)\s*$/gm;
+  for (const match of manifestText.matchAll(entryRe)) {
+    const url = match[1];
+    if (basename(url).toLowerCase() !== target) continue;
+    const rest = manifestText.slice(match.index ?? 0);
+    const hash = rest.match(/^\s*sha512:\s*(\S+)\s*$/m);
+    return hash ? hash[1] : null;
+  }
+  // Top-level path/sha512 pair (electron-builder's primary-file form).
+  const pathMatch = manifestText.match(/^\s*path:\s*(\S+)\s*$/m);
+  if (pathMatch && basename(pathMatch[1]).toLowerCase() === target) {
+    // The top-level sha512 line follows the files: block; pick the LAST
+    // sha512 line only when it is not inside a files: entry — simplest
+    // correct rule: the top-level sha512 is the one at column 0.
+    const topLevel = manifestText.match(/^sha512:\s*(\S+)\s*$/m);
+    return topLevel ? topLevel[1] : null;
+  }
+  return null;
 }
 
 /** Platform key used for asset matching (process.platform style). */
@@ -377,7 +409,7 @@ export async function checkForUpdate(input: CheckForUpdateInput): Promise<Update
     // ready for the download stage (#65). A missing/unfetchable manifest is a
     // warning, not a failure (spec: 无清单则警告但允许继续).
     const manifestText = matched.manifest ? await fetchText(input.fetch, `${entry.urlPrefix}${matched.manifest.browser_download_url}`, timeoutMs) : null;
-    const manifestSha512 = manifestText === null ? null : parseManifestSha512(manifestText);
+    const manifestSha512 = manifestText === null ? null : parseManifestSha512(manifestText, matched.installer.name);
     const warning: "manifest-missing" | undefined = manifestText === null || manifestSha512 === null ? "manifest-missing" : undefined;
     return {
       status: "available",

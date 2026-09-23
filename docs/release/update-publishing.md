@@ -48,3 +48,10 @@ electron-builder 已在 `app/electron-builder.json5` 配置（`productName: "Voi
 3. **核对产物**：`app/release/` 下确认 `.exe`、`.dmg`、`latest.yml`、`latest-mac.yml` 均存在，且 `latest*.yml` 中的版本号/文件名与本次 tag 一致。
 4. **上传**：创建 GitHub Release（tag = 版本号，如 `v1.0.1`），上传上述全部产物，保持原始文件名。
 5. **发布**：确认无误后把 Release 发布为正式版（勾掉 prerelease），更新提醒即对该版本生效。
+
+## 上传后严禁替换安装包（v1.2.0 事故教训）
+
+v1.2.0 发布时，安装包在 `latest*.yml` 生成**之后**被重新上传，导致清单里的 sha512 与线上安装包字节不匹配，所有用户的更新在校验环节报「文件校验失败（sha512 不匹配）」。因此：
+
+- **发布前**最终确定安装包；一旦 `latest*.yml` 已生成/已上传，**不得**再替换 exe/dmg 的内容。若必须替换，必须同时重新生成并覆盖对应的 `latest*.yml`（sha512 与 size 都要重算）。
+- macOS 注意：electron-builder 的 `latest-mac.yml` 以 `*-mac.zip` 为主条目（顶层 `path`/`sha512` 与首个 `files:` 条目都是 zip），dmg 若在 `files:` 里则有独立条目。更新器（v1.2.0 修复后）按**所选安装包文件名**在清单中解析对应条目；清单未覆盖所选安装包时按「清单缺失」警告放行，不再误用 zip 的哈希去校验 dmg。

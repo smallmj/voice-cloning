@@ -1,0 +1,22 @@
+{
+ "hifi-control": {
+  "asr": "Slow Gentle Warm Female Voice, Soft tone, If you see that, you don't have to tell him to know.當交通者然後看著Legend的國酒怪代後,登天下午我們在會議室討論了新產品的發佈計畫。",
+  "instruction_leak": [
+   "female",
+   "gentle",
+   "slow",
+   "soft",
+   "tone",
+   "voice",
+   "warm"
+  ]
+ },
+ "timbre-control": {
+  "asr": "今天下午,我们在会议室讨论了新产品的发布计划。",
+  "instruction_leak": []
+ },
+ "hifi-baseline": {
+  "asr": "今天下午我们在会议室讨论了新产品的发布计划",
+  "instruction_leak": []
+ }
+}

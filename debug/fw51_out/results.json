@@ -1,0 +1,17 @@
+{
+  "cfg1.0_vs_base_maxabs": 1.17041015625,
+  "cfg3.0_vs_base_maxabs": 1.45233154296875,
+  "steps4_vs_base_maxabs": 1.21124267578125,
+  "steps16_vs_base_maxabs": 0.922454833984375,
+  "crossfade_samples": {
+    "base": 176640,
+    "fade0": 176640,
+    "fade150": 176640
+  },
+  "stop0.1_samples": 80640,
+  "stop0.1_vs_base_maxabs": 0.0,
+  "stop0.5_samples": 80640,
+  "stop0.5_vs_base_maxabs": 0.0,
+  "stop0.9_samples": 80640,
+  "stop0.9_vs_base_maxabs": 0.0
+}

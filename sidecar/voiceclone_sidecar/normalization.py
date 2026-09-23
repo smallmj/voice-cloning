@@ -133,6 +133,44 @@ _RE_CJK_UNIT = re.compile(r"(\d+)\s*(个|条|本|只|层|次|遍|位|名|款|件
 # standalone "95分" is a score and must stay plain.
 _RE_MINUTE = re.compile(r"(\d+)\s*分(?=\s*\d+\s*秒)")
 
+# --- normalization exemptions (spec #68, user stories 8/9) ------------------
+# Engine marker syntaxes that CONTAIN digits must survive normalization
+# byte-for-byte:
+#   - MiniMax pause marker  `<#x#>`  (x seconds, 0.01–99.99, two decimals)
+#   - IndexTTS-2.5 pinyin annotation  `<汉字|PINYIN2>`  (tone digits)
+# They are stripped before the rule pass and restored after (placeholder
+# bytes carry no digits, so no rule can touch them); every OTHER number in
+# the text is still rewritten as usual.
+_RE_PAUSE_MARKER = re.compile(r"<#\d+(?:\.\d+)?#>")
+_RE_PINYIN_ANNO = re.compile(r"<[^<>#\n]{1,16}\|[^\s<>]{1,32}>")
+# Placeholder: PUA chars only — never a digit (a digit index would itself be
+# rewritten by the number rules) and never matched by any rule below.
+_PLACEHOLDER = "\ue000{}\ue001"
+
+
+def _placeholder(index: int) -> str:
+    return _PLACEHOLDER.format(chr(0xE100 + index))
+
+
+def _protect_markers(text: str) -> tuple[str, list[str]]:
+    """Strip protected marker spans, returning placeholder text + the spans
+    in order of appearance."""
+    spans: list[str] = []
+
+    def keep(m: re.Match) -> str:
+        spans.append(m.group(0))
+        return _placeholder(len(spans) - 1)
+
+    text = _RE_PAUSE_MARKER.sub(keep, text)
+    text = _RE_PINYIN_ANNO.sub(keep, text)
+    return text, spans
+
+
+def _restore_markers(text: str, spans: list[str]) -> str:
+    for i, span in enumerate(spans):
+        text = text.replace(_placeholder(i), span)
+    return text
+
 
 def _apply_date_full(text: str) -> str:
     def sub(m: re.Match) -> str:
@@ -241,9 +279,14 @@ def _apply_remaining_numbers(text: str) -> str:
 
 def normalize_text(text: str) -> str:
     """Normalize mixed Chinese text for TTS engines. Idempotent, side-effect
-    free on canonical input."""
+    free on canonical input.
+
+    Spec #68: marker syntaxes that carry digits (`<#2.5#>` MiniMax pauses,
+    `<汉字|XING2>` IndexTTS pinyin annotations) are exempt — they pass
+    through byte-identical while every other number is still rewritten."""
+    text, protected = _protect_markers(text)
     if not any(ch.isdigit() for ch in text):
-        return text  # canonical / no-op fast path
+        return text if not protected else _restore_markers(text, protected)
 
     text = _RE_COMMA_NUM.sub("", text)  # 1,234 -> 1234
     text = _apply_temperature(text)  # before units: ℃/°C special-cased
@@ -257,7 +300,7 @@ def normalize_text(text: str) -> str:
     text = _RE_MINUTE.sub(lambda m: _int_chinese(int(m.group(1))) + "分钟", text)
     text = _apply_cjk_units(text)
     text = _apply_remaining_numbers(text)
-    return text
+    return _restore_markers(text, protected)
 
 
 def normalize_with_flag(text: str) -> dict:

@@ -11,6 +11,8 @@ export const CAP_LABELS: Record<keyof Capabilities, string> = {
   upload_used_for_training: "上传用于训练",
   api_closed_loop: "API 闭环",
   requires_reference_text: "需参考文本",
+  // Rendered as its own control (issue #68), never as a capability badge.
+  nonverbal_tags: "非语言标签",
   // Never rendered as a badge — the settings matrix lists its keys explicitly.
   max_chars_per_request: "单次字符上限",
 };

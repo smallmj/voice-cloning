@@ -345,17 +345,76 @@ export function engineDetailParagraphs(
 
 
 // ---------------------------------------------------------------------------
-// Issue #57: non-verbal tag quick-insert (pure helpers + tag list).
+// Issue #68: engine-declared non-verbal tags (pure helpers). The tag DATA
+// comes from the sidecar per engine (`capabilities.nonverbal_tags`) — the
+// frontend hard-codes nothing; an engine without tags simply hides the
+// control (see CONTEXT.md 「非语言标签」).
 // ---------------------------------------------------------------------------
 
-/** Cookbook-canonical non-verbal tags, inserted verbatim (English brackets). */
-export const NONVERBAL_TAGS: readonly string[] = [
-  "[laughing]",
-  "[sigh]",
-  "[Uhm]",
-  "[Shh]",
-  "[breath]",
-];
+import type { NonverbalTagInfo } from "./api";
+
+/** Quick-insert row: prefer the three measured/common English tags when the
+ * engine declares them, otherwise the engine's first three tags (e.g. the
+ * MiniMax Chinese-common set). */
+export function quickTags(tags: NonverbalTagInfo[] | undefined | null): NonverbalTagInfo[] {
+  const all = tags ?? [];
+  const common = ["[laughing]", "[sigh]", "[breath]"]
+    .map((text) => all.find((t) => t.text === text))
+    .filter((t): t is NonverbalTagInfo => !!t);
+  return (common.length > 0 ? common : all.slice(0, 3)).slice(0, 3);
+}
+
+export interface TagGroup {
+  category: string;
+  tags: NonverbalTagInfo[];
+}
+
+/** Group tags by their declared category, preserving first-appearance order. */
+export function groupTags(tags: NonverbalTagInfo[] | undefined | null): TagGroup[] {
+  const groups: TagGroup[] = [];
+  for (const tag of tags ?? []) {
+    let g = groups.find((x) => x.category === tag.category);
+    if (!g) {
+      g = { category: tag.category, tags: [] };
+      groups.push(g);
+    }
+    g.tags.push(tag);
+  }
+  return groups;
+}
+
+/** Case-insensitive substring search over text / label / category; empty
+ * query returns everything. */
+export function filterTagGroups(groups: TagGroup[], query: string): TagGroup[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return groups;
+  return groups
+    .map((g) => ({
+      category: g.category,
+      tags: g.tags.filter(
+        (t) =>
+          t.text.toLowerCase().includes(q) ||
+          t.label.toLowerCase().includes(q) ||
+          g.category.toLowerCase().includes(q),
+      ),
+    }))
+    .filter((g) => g.tags.length > 0);
+}
+
+/** Blind-compare helper: tags usable by EVERY picked engine — the
+ * intersection by marker text. If any picked engine declares no tags (or
+ * nothing is picked) the result is empty and the control must be hidden:
+ * inserting a tag an engine would misread is worse than offering none. */
+export function commonNonverbalTags(
+  engines: { capabilities?: { nonverbal_tags?: NonverbalTagInfo[] } }[],
+): NonverbalTagInfo[] {
+  if (engines.length === 0) return [];
+  const [first, ...rest] = engines;
+  const base = first.capabilities?.nonverbal_tags ?? [];
+  return base.filter((t) =>
+    rest.every((e) => (e.capabilities?.nonverbal_tags ?? []).some((x) => x.text === t.text)),
+  );
+}
 
 /**
  * Insert `tag` at the cursor position of a text field (issue #57). The

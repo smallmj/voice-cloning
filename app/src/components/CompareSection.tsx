@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CompareSession, EngineInfo, PreferenceProfile, Voice } from "../api";
 import { apiJson } from "../client";
+import { commonNonverbalTags, insertAtCursor } from "../ui";
+import { NonverbalTagPicker } from "./bits";
 
 const COMPARE_TEXT_TYPES = [
   { value: "general", label: "通用" },
@@ -57,8 +59,15 @@ export function CompareSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<PreferenceProfile | null>(null);
+  // Issue #68: caret-accurate tag insertion into the compare textarea.
+  const compareTextRef = useRef<HTMLTextAreaElement | null>(null);
 
   const pickedIds = engines.filter((e) => picked[e.id]).map((e) => e.id);
+  // Issue #68 (US6): the compare textarea offers the same tag control, but
+  // only markers EVERY picked engine natively understands (intersection);
+  // with no/mixed-tag picks it stays hidden rather than lie.
+  const pickedEngines = engines.filter((e) => picked[e.id]);
+  const commonTags = commonNonverbalTags(pickedEngines);
 
   async function runCompare() {
     setBusy(true);
@@ -172,7 +181,24 @@ export function CompareSection({
           </label>
         ))}
       </div>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} />
+      {commonTags.length > 0 && (
+        <NonverbalTagPicker
+          tags={commonTags}
+          onInsert={(tag) => {
+            const el = compareTextRef.current;
+            const result = insertAtCursor(text, tag, el?.selectionStart, el?.selectionEnd);
+            setText(result.text);
+            requestAnimationFrame(() => {
+              const node = compareTextRef.current;
+              if (node) {
+                node.focus();
+                node.setSelectionRange(result.cursor, result.cursor);
+              }
+            });
+          }}
+        />
+      )}
+      <textarea ref={compareTextRef} value={text} onChange={(e) => setText(e.target.value)} rows={3} />
       <button
         className="primary"
         onClick={runCompare}

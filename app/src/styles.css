@@ -127,7 +127,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
    外壳：左侧导航 + 内容区（ADR-0013 §2）
    ========================================================================== */
 
-.shell { display: flex; min-height: 100vh; }
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.shell { display: flex; flex: 1; min-height: 0; }
 
 .side-nav {
   width: 200px;
@@ -186,13 +187,43 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 0 var(--sp-2);
 }
 
-.side-nav-footer {
-  margin-top: auto;
-  display: grid;
-  gap: var(--sp-2);
-  font-size: var(--fs-sm);
+.current-engine { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
+
+/* --- 顶栏（ADR-0013 §2）：承载全局状态，右侧放共享侧边栏开关 --- */
+.topbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
-.current-engine { color: var(--text-muted); padding: 0 var(--sp-2); }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
+}
+.sidebar-toggle .sidebar-toggle-icon { font-size: var(--fs-base); line-height: 1; }
+.sidebar-toggle.active {
+  background: var(--tint-accent-bg);
+  color: var(--tint-accent-fg);
+  border-color: var(--tint-accent-fg);
+}
 
 .content {
   flex: 1;
@@ -299,7 +330,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .log-line-info .log-level-tag { background: var(--tint-accent-bg); color: var(--tint-accent-fg); }
 .log-line-warn .log-level-tag { background: var(--tint-warning-bg); color: var(--tint-warning-fg); }
-.log-line-error .log-level-tag { background: var(--tint-danger-bg, #fdd); color: var(--tint-danger-fg, #a00); }
+.log-line-error .log-level-tag { background: var(--tint-danger-bg); color: var(--tint-danger-fg); }
 .log-line-error { color: var(--text); }
 
 .panel-empty { color: var(--text-muted); }
@@ -728,8 +759,8 @@ code {
   .side-nav { width: 100%; height: auto; position: static; flex-direction: row; flex-wrap: wrap; align-items: center; }
   .side-nav ul { display: flex; flex-wrap: wrap; }
   .side-nav-title { border-bottom: none; }
-  .side-nav-footer { margin-top: 0; }
   .content { padding: var(--sp-4); }
+  .topbar { position: static; flex-wrap: wrap; justify-content: space-between; }
   /* Issue #36: on narrow screens the shared sidebar flows below the content
      at full width; resizing is meaningless there. */
   .shell { flex-direction: column; }
@@ -742,10 +773,10 @@ code {
 /* Issue #23 / ADR-0018: engine-specific parameter layer — fixed position,
  * collapsed by default, visually secondary to the canonical layer. */
 details.engine-params {
-  margin: 0.5rem 0;
-  border: 1px solid var(--border, #ccc);
-  border-radius: 6px;
-  padding: 0.4rem 0.75rem;
+  margin: var(--sp-2) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
 }
 details.engine-params > summary {
   cursor: pointer;
@@ -788,9 +819,9 @@ details.engine-params > summary {
 }
 .generate-tab:hover { color: var(--text); }
 .generate-tab.active {
-  background: var(--accent-bg, var(--panel-raised));
-  color: var(--text);
-  border-color: var(--accent, var(--border));
+  background: var(--tint-accent-bg);
+  color: var(--tint-accent-fg);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -850,9 +881,9 @@ details.matrix-group > summary:hover strong { opacity: 0.85; }
   min-width: 260px;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--bg-elevated, var(--bg, inherit));
-  border: 1px solid var(--border, currentColor);
-  border-radius: var(--radius, 6px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);

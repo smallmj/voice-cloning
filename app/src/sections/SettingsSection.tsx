@@ -1,8 +1,9 @@
 import type { TranscriptionEngineInfo } from "../api";
 import { useEffect, useState } from "react";
 import { apiJson, authHeaders, downloadPostWithAuth, downloadWithAuth } from "../client";
-import type { ThemePref, UiPrefs } from "../hooks";
+import type { UiPrefs } from "../hooks";
 import { JumpLink } from "../components/bits";
+import { ThemeSelect } from "../components/ThemeSelect";
 import { AboutUpdateCard } from "../components/AboutUpdateCard";
 import { DownloadSourcesSection } from "../components/DownloadSourcesSection";
 import {
@@ -14,12 +15,6 @@ import {
   UI_SCALE_MIN,
   type SectionId,
 } from "../ui";
-
-const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
-  { value: "system", label: "跟随系统" },
-  { value: "dark", label: "深色" },
-  { value: "light", label: "浅色" },
-];
 
 export function SettingsSection({
   baseUrl,
@@ -153,19 +148,10 @@ export function SettingsSection({
           <strong>外观</strong>
         </div>
         <div className="voice-picker">
-          <label>
-            主题：
-            <select
-              value={prefs.theme}
-              onChange={(e) => updatePrefs({ theme: e.target.value as ThemePref })}
-            >
-              {THEME_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ThemeSelect
+            value={prefs.theme}
+            onChange={(theme) => updatePrefs({ theme })}
+          />
           {/* Issue #44: UI scale (0.85–1.5) — takes effect immediately. */}
           <label>
             界面缩放：
